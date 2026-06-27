@@ -1,0 +1,35 @@
+# Local validation only — mirrors the Container Apps topology on one machine.
+# Not used in Azure. Internal services are not published except for convenience.
+services:
+  payment-service:
+    build: ./src/payment-service
+    environment:
+      SERVICE_NAME: payment-service
+      PORT: "8080"
+      ENABLE_SLOW_LEAK: "false"
+      LEAK_INTERVAL_MS: "5000"
+      LEAK_CHUNK_KB: "256"
+    ports:
+      - "8082:8080"
+
+  checkout-api:
+    build: ./src/checkout-api
+    environment:
+      SERVICE_NAME: checkout-api
+      PORT: "8080"
+      PAYMENT_SERVICE_URL: http://payment-service:8080
+    ports:
+      - "8081:8080"
+    depends_on:
+      - payment-service
+
+  frontend:
+    build: ./src/frontend
+    environment:
+      SERVICE_NAME: frontend
+      PORT: "8080"
+      CHECKOUT_API_URL: http://checkout-api:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - checkout-api

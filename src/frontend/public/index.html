@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ContosoPay — Checkout</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header>
+        <h1>ContosoPay</h1>
+        <p class="tagline">Secure checkout demo</p>
+      </header>
+
+      <section class="order">
+        <div class="row">
+          <span>Premium Widget</span>
+          <span>€49.99</span>
+        </div>
+        <div class="row total">
+          <span>Total</span>
+          <span id="total">€49.99</span>
+        </div>
+      </section>
+
+      <button id="pay" type="button">Place order</button>
+
+      <label class="auto">
+        <input id="auto" type="checkbox" />
+        Generate steady traffic (auto-order every 2s)
+      </label>
+
+      <pre id="result" class="result" aria-live="polite"></pre>
+      <footer>
+        <span id="status-dot" class="dot"></span>
+        <span id="status-text">Ready</span>
+      </footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
