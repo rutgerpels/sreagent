@@ -1,11 +1,15 @@
-# Azure SRE Agent — GitOps remediation config
+# Azure SRE Agent — GitOps remediation config (Scenario B)
 
 These are the **committable artifacts** that turn the demo's SRE Agent into a
 GitOps-only operator: it investigates and **proposes a fix as a GitHub Pull
 Request**, but is **structurally unable to modify the live Azure resources**.
 
+> These artifacts are used **only in Scenario B (Full GitOps)**. Scenario A
+> (on-the-spot, direct remediation) does **not** use them — see
+> [`../docs/scenario-a-direct.md`](../docs/scenario-a-direct.md).
+
 Apply them once, after the agent is created and connected (see
-[`../docs/sre-agent-setup.md`](../docs/sre-agent-setup.md) §9).
+[`../docs/scenario-b-gitops.md`](../docs/scenario-b-gitops.md) §B2–§B5).
 
 | File | What it is | Where it goes |
 | --- | --- | --- |
@@ -27,5 +31,6 @@ incident -> agent diagnoses -> opens PR setting enable_slow_leak=false
         -> human reviews + merges -> apply-infra.yml terraform apply -> fixed
 ```
 
-See [`../docs/sre-agent-setup.md`](../docs/sre-agent-setup.md) §9 for the
-click-by-click apply steps and the supported `accessLevel` / run-mode settings.
+See [`../docs/scenario-b-gitops.md`](../docs/scenario-b-gitops.md) §B1–§B6 for
+the click-by-click apply steps and the supported `accessLevel` / run-mode
+settings.

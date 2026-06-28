@@ -6,8 +6,9 @@ Application Insights telemetry, Azure Monitor alerting, and Azure Managed Grafan
 
 The app (**ContosoPay**) is three tiny Node.js/TypeScript microservices. `payment-service`
 contains a **feature-flagged, recoverable memory leak** so the SRE Agent has a real incident to
-detect, correlate to a GitHub change, explain, and remediate — **the GitOps way, by opening a Pull
-Request** rather than touching the live Azure resources, deployed only after a human merges.
+detect, correlate to a GitHub change, explain, and remediate. The demo ships in **two scenarios** —
+a fast "agent fixes it on the spot" version and a realistic "agent fixes it via a Pull Request"
+GitOps version (see [Demo scenarios](#demo-scenarios)).
 
 > Built per [`.github/copilot-instructions.md`](.github/copilot-instructions.md). Terraform-only
 > IaC, no secrets in source, managed identity + Key Vault + OIDC throughout.
@@ -62,24 +63,47 @@ Azure SRE Agent.
 ./scripts/teardown.sh      # terraform destroy -auto-approve
 ```
 
-## Triggering the demo incident (GitOps)
+## Demo scenarios
+
+The same environment runs **two interchangeable demo experiences**. Pick one per run —
+they only differ in how the incident is triggered and how the agent remediates.
+
+| | **Scenario A — On-the-spot** | **Scenario B — Full GitOps** |
+|---|---|---|
+| **Trigger** | Script pokes the live app | **Pull Request + CI** deploys the change |
+| **Command** | `scripts/trigger-incident-direct.*` | `scripts/trigger-incident-gitops.*` |
+| **Agent Azure access** | **Privileged** (read/write) | **Reader** (read-only) |
+| **Remediation** | Agent **fixes Azure directly** after you approve | Agent **opens a remediation PR**; a human merges it |
+| **Best for** | A fast, self-contained "watch it fix" moment | The realistic DevOps / change-management story |
+| **Run-of-show + setup** | [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) | [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) |
+
+Common, scenario-independent agent setup is in
+[`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) §1–§5;
+[`docs/run-of-show.md`](docs/run-of-show.md) is the one-page chooser.
+
+### Scenario A — trigger on the spot
 
 ```bash
-./scripts/trigger-incident.sh   # opens a PR setting enable_slow_leak=true in infra/leak.auto.tfvars
-# or: pwsh ./scripts/trigger-incident.ps1
+./scripts/trigger-incident-direct.sh        # az containerapp update — flips ENABLE_SLOW_LEAK on the live app
+# or: pwsh ./scripts/trigger-incident-direct.ps1
+```
+
+Memory in `payment-service` climbs over ~30–40 minutes, the Azure Monitor alert fires, and the
+SRE Agent (granted **Privileged** access) proposes a direct mitigation you approve in the agent UI.
+
+### Scenario B — trigger via a Pull Request (GitOps)
+
+```bash
+./scripts/trigger-incident-gitops.sh        # opens a PR setting enable_slow_leak=true in infra/leak.auto.tfvars
+# or: pwsh ./scripts/trigger-incident-gitops.ps1
 ```
 
 The script opens a **Pull Request** flipping the planted-fault flag. **Merging it** runs the
 `apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
-deploys the leak — no one edits the live app by hand. Memory in `payment-service` then climbs over
-~30–40 minutes, the Azure Monitor alert fires, and the SRE Agent correlates the trend back to the
-triggering PR.
-
-**Remediation is GitOps too:** the agent is configured **read-only on Azure** (Reader RBAC + a
-global Tool Access Policy that denies Azure CLI writes), so it fixes the incident by **opening a PR**
-that sets `enable_slow_leak=false`. A human merges it, CI redeploys, memory recovers. See
-[`agent/`](agent/) for the committable agent config and
-[`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) §6.
+deploys the leak — no one edits the live app by hand. **Remediation is GitOps too:** the agent is
+**read-only on Azure** (Reader RBAC + a global Tool Access Policy that denies Azure CLI writes), so
+it fixes the incident by **opening a PR** that sets `enable_slow_leak=false`. A human merges it, CI
+redeploys, memory recovers. See [`agent/`](agent/) for the committable agent config.
 
 ## Repository layout
 
@@ -90,10 +114,12 @@ that sets `enable_slow_leak=false`. A human merges it, CI redeploys, memory reco
 | `src/frontend` | Public SPA + Node server |
 | `src/checkout-api` | Internal API (orders) |
 | `src/payment-service` | Internal API with the planted, flag-gated memory leak |
-| `scripts/` | `deploy`, `teardown`, `trigger-incident` (opens a PR) |
-| `agent/` | Committable SRE Agent GitOps config (tool-access policy, custom agent, runbook) |
-| `docs/run-of-show.md` | Live demo talk track + SRE Agent wiring steps |
-| `docs/sre-agent-setup.md` | Step-by-step Azure SRE Agent configuration manual |
+| `scripts/` | `deploy`, `teardown`, `trigger-incident-direct` (Scenario A), `trigger-incident-gitops` (Scenario B) |
+| `agent/` | Committable SRE Agent **Scenario B** GitOps config (tool-access policy, custom agent, runbook) |
+| `docs/run-of-show.md` | One-page scenario chooser |
+| `docs/scenario-a-direct.md` | Scenario A — on-the-spot setup + run of show |
+| `docs/scenario-b-gitops.md` | Scenario B — full GitOps setup + run of show |
+| `docs/sre-agent-setup.md` | Common Azure SRE Agent setup manual (§1–§5) |
 | `docs/aks-variant.md` | Optional AKS deployment notes |
 | `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
 | `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes) |
@@ -108,8 +134,8 @@ that sets `enable_slow_leak=false`. A human merges it, CI redeploys, memory reco
 ## Connecting the Azure SRE Agent
 
 The SRE Agent is a **managed service provisioned separately** at <https://sre.azure.com> — it is not
-part of this Terraform. See [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) for the full
-step-by-step configuration manual (prerequisites, region/model choice, RBAC, GitHub Code Access +
-Connector, incident platform, and the **GitOps enforcement** in §6), or
-[`docs/run-of-show.md`](docs/run-of-show.md) for the condensed live-demo version. The committable
+part of this Terraform. Do the common setup in [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md)
+(§1–§5: prerequisites, region/model, RBAC, GitHub Code Access, incident platform), then follow your
+chosen scenario doc — [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) (on-the-spot) or
+[`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) (full GitOps). The committable Scenario B
 agent config (deny-Azure-writes policy, GitOps custom agent, runbook) lives in [`agent/`](agent/).

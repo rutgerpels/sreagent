@@ -58,7 +58,8 @@ Then, per service:
 ## Demonstrating the same incident
 
 The application code is identical, so the planted leak, the `ENABLE_SLOW_LEAK` flag,
-and `scripts/trigger-incident.sh` behave the same. The two mitigations map to:
+and both trigger scripts (`scripts/trigger-incident-direct.sh` for Scenario A,
+`scripts/trigger-incident-gitops.sh` for Scenario B) behave the same. The two mitigations map to:
 
 - **Restart**: `kubectl rollout restart deployment/payment-service` (or delete the pod).
 - **Scale**: raise the HPA `maxReplicas` / KEDA trigger.

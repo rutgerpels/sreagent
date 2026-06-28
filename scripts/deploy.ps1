@@ -226,11 +226,12 @@ Write-Host "  TFSTATE_SA        : $($backend.StorageAccount)"
 Write-Host "  TFSTATE_CONTAINER : $($backend.Container)"
 Write-Host "  TFSTATE_KEY       : $($backend.Key)"
 Write-Host ''
-Write-Host ' Next steps — connect the Azure SRE Agent (see docs/sre-agent-setup.md):' -ForegroundColor Yellow
-Write-Host '  1. Go to https://sre.azure.com and create an SRE Agent (Reader permission level).'
-Write-Host "  2. Point it at resource group '$resourceGroup'."
-Write-Host '  3. Connect this GitHub repo (Code Access + GitHub Connector with PR write scope).'
-Write-Host '  4. Connect Azure Monitor as the incident platform; create a Review-mode response plan.'
-Write-Host '  5. Apply the GitOps Tool Access Policy (deny Azure CLI writes) — see the setup manual.'
-Write-Host '  6. Open a PR with scripts/trigger-incident.ps1, merge it, and let the agent remediate via PR.'
+Write-Host ' Next steps — connect the Azure SRE Agent (see docs/sre-agent-setup.md §1-5):' -ForegroundColor Yellow
+Write-Host "  1. Go to https://sre.azure.com, create an SRE Agent, and point it at '$resourceGroup'."
+Write-Host '  2. Connect this GitHub repo (Code Access) and Azure Monitor as the incident platform.'
+Write-Host '  3. Then pick a demo scenario and finish the wiring:'
+Write-Host '       Scenario A (on-the-spot): docs/scenario-a-direct.md  — grant Privileged access,'
+Write-Host '                                 then: scripts/trigger-incident-direct.ps1'
+Write-Host '       Scenario B (full GitOps): docs/scenario-b-gitops.md  — grant Reader + deny policy,'
+Write-Host '                                 then: scripts/trigger-incident-gitops.ps1 (opens a PR)'
 Write-Host ''

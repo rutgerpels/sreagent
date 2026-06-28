@@ -32,11 +32,11 @@
     Push the branch but skip `gh pr create` (open the PR manually).
 
 .EXAMPLE
-    pwsh ./scripts/trigger-incident.ps1
+    pwsh ./scripts/trigger-incident-gitops.ps1
     # Opens a PR arming the leak. Review + merge it to start the incident.
 
 .EXAMPLE
-    pwsh ./scripts/trigger-incident.ps1 -Reset
+    pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
 
 .OUTPUTS
     None. Writes status and the created PR URL to the host.

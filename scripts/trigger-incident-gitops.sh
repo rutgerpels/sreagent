@@ -14,11 +14,11 @@
 # Requires the GitHub CLI (`gh`) authenticated against this repository.
 #
 # Usage:
-#   ./scripts/trigger-incident.sh                 # open a PR arming the leak
-#   ./scripts/trigger-incident.sh --reset         # open a PR turning it off
-#   ./scripts/trigger-incident.sh --base main     # override base branch
-#   ./scripts/trigger-incident.sh --branch NAME   # override branch name
-#   ./scripts/trigger-incident.sh --no-pr         # push branch, skip gh pr create
+#   ./scripts/trigger-incident-gitops.sh                 # open a PR arming the leak
+#   ./scripts/trigger-incident-gitops.sh --reset         # open a PR turning it off
+#   ./scripts/trigger-incident-gitops.sh --base main     # override base branch
+#   ./scripts/trigger-incident-gitops.sh --branch NAME   # override branch name
+#   ./scripts/trigger-incident-gitops.sh --no-pr         # push branch, skip gh pr create
 # ============================================================================
 
 set -euo pipefail
