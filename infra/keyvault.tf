@@ -14,6 +14,16 @@ resource "azurerm_key_vault" "this" {
   soft_delete_retention_days    = 7
   public_network_access_enabled = true
   tags                          = local.tags
+
+  # The deployer (Terraform/CI) writes secrets over the public data plane from a
+  # rotating NAT egress IP, so an IP allowlist is impractical. Access is still
+  # gated by Azure RBAC (no access policies). Declaring this block explicitly
+  # ensures any out-of-band drift to "Disabled" is detected and corrected on the
+  # next apply, fixing the 403 ForbiddenByConnection race on the first secret write.
+  network_acls {
+    default_action = "Allow"
+    bypass         = "AzureServices"
+  }
 }
 
 # The principal running Terraform needs data-plane rights to write the secret.

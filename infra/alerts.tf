@@ -9,9 +9,12 @@ resource "azurerm_monitor_action_group" "this" {
   short_name          = "sreagent"
   tags                = local.tags
 
-  # No receivers are wired in code. The Azure SRE Agent subscribes to this
-  # action group during its portal onboarding (see docs/run-of-show.md).
-  # Add an email_receiver here only if you want a human notification too.
+  # No receivers are wired in code. The Azure SRE Agent does NOT subscribe to
+  # this action group — it ingests alerts by polling the Azure Monitor Alerts
+  # API (~1-min scanner) for the resource groups its managed identity can read,
+  # once Azure Monitor is connected as its incident platform (see
+  # docs/sre-agent-setup.md). Add an email_receiver here only for human
+  # notification; it is not required for the agent.
 }
 
 # Working-set memory alert on payment-service. Only created once the apps exist.
