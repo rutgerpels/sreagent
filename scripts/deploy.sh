@@ -19,6 +19,9 @@ set -euo pipefail
 SUBSCRIPTION=""
 IMAGE_TAG="$(date -u +%Y%m%d%H%M%S)"
 SKIP_BUILD="false"
+PREFIX="contosopay"
+ENVIRONMENT="demo"
+LOCATION="swedencentral"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -27,7 +30,7 @@ readonly SCRIPT_DIR REPO_ROOT INFRA_DIR
 SERVICES=("frontend" "checkout-api" "payment-service")
 
 usage() {
-    echo "Usage: $0 [-s SUBSCRIPTION] [-t IMAGE_TAG] [--skip-build]" >&2
+    echo "Usage: $0 [-s SUBSCRIPTION] [-t IMAGE_TAG] [--skip-build] [--prefix P] [--env E] [--location L]" >&2
     exit 1
 }
 
@@ -36,6 +39,9 @@ while [[ $# -gt 0 ]]; do
         -s|--subscription) SUBSCRIPTION="$2"; shift 2 ;;
         -t|--tag)          IMAGE_TAG="$2"; shift 2 ;;
         --skip-build)      SKIP_BUILD="true"; shift ;;
+        --prefix)          PREFIX="$2"; shift 2 ;;
+        --env)             ENVIRONMENT="$2"; shift 2 ;;
+        --location)        LOCATION="$2"; shift 2 ;;
         -h|--help)         usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
@@ -62,6 +68,7 @@ fi
 
 ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 export ARM_SUBSCRIPTION_ID
+export ARM_USE_AZUREAD="true"   # AAD data-plane auth for the state backend (no keys)
 echo "    Subscription: $(az account show --query name -o tsv) (${ARM_SUBSCRIPTION_ID})"
 
 if ! docker info >/dev/null 2>&1; then
@@ -69,11 +76,45 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "==> terraform init"
-terraform -chdir="${INFRA_DIR}" init -input=false
+# Deterministic, non-identifying remote-state names (must match apply-infra.yml).
+STATE_RG="rg-${PREFIX}-tfstate"
+STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${PREFIX}" | sha256sum | cut -c1-16)"
+STATE_SA="sttf${STATE_HASH}"
+STATE_CONTAINER="tfstate"
+STATE_KEY="${PREFIX}-${ENVIRONMENT}.tfstate"
+
+echo "==> Ensuring remote state storage (${STATE_SA})"
+az group create --name "${STATE_RG}" --location "${LOCATION}" \
+    --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
+if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
+    az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
+        --location "${LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+        --allow-blob-public-access false --https-only true \
+        --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
+fi
+SA_ID="$(az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" --query id -o tsv)"
+SIGNED_IN_ID="$(az ad signed-in-user show --query id -o tsv)"
+az role assignment create --assignee-object-id "${SIGNED_IN_ID}" --assignee-principal-type User \
+    --role "Storage Blob Data Contributor" --scope "${SA_ID}" --output none 2>/dev/null || true
+echo "    Waiting for role propagation..."
+created="false"
+for _ in $(seq 1 12); do
+    if az storage container create --name "${STATE_CONTAINER}" --account-name "${STATE_SA}" \
+        --auth-mode login --output none 2>/dev/null; then created="true"; break; fi
+    sleep 10
+done
+[[ "${created}" == "true" ]] || { echo "Could not create state container (role propagation timed out)." >&2; exit 1; }
+
+echo "==> terraform init (remote azurerm backend)"
+terraform -chdir="${INFRA_DIR}" init -input=false -migrate-state -force-copy \
+    -backend-config="resource_group_name=${STATE_RG}" \
+    -backend-config="storage_account_name=${STATE_SA}" \
+    -backend-config="container_name=${STATE_CONTAINER}" \
+    -backend-config="key=${STATE_KEY}"
 
 echo "==> terraform apply (phase 1: platform, no apps yet)"
-terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve -var 'deploy_apps=false'
+terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
+    -var 'deploy_apps=false' -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
 
 ACR_NAME="$(terraform -chdir="${INFRA_DIR}" output -raw acr_name)"
 ACR_LOGIN_SERVER="$(terraform -chdir="${INFRA_DIR}" output -raw acr_login_server)"
@@ -96,7 +137,8 @@ fi
 
 echo "==> terraform apply (phase 2: container apps + alert)"
 terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
-    -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}"
+    -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}" \
+    -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
 
 FRONTEND_URL="$(terraform -chdir="${INFRA_DIR}" output -raw frontend_url)"
 RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name)"
@@ -110,10 +152,17 @@ echo "  Frontend URL : ${FRONTEND_URL}"
 echo "  Resource grp : ${RESOURCE_GROUP}"
 [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "  Grafana      : ${GRAFANA}"
 echo ""
-echo " Next steps — connect the Azure SRE Agent:"
-echo "  1. Go to https://sre.azure.com and create an SRE Agent."
+echo " Remote Terraform state (set as GitHub Actions *variables* for apply-infra.yml):"
+echo "  TFSTATE_RG        : ${STATE_RG}"
+echo "  TFSTATE_SA        : ${STATE_SA}"
+echo "  TFSTATE_CONTAINER : ${STATE_CONTAINER}"
+echo "  TFSTATE_KEY       : ${STATE_KEY}"
+echo ""
+echo " Next steps — connect the Azure SRE Agent (see docs/sre-agent-setup.md):"
+echo "  1. Go to https://sre.azure.com and create an SRE Agent (Reader permission level)."
 echo "  2. Point it at resource group '${RESOURCE_GROUP}'."
-echo "  3. Connect this GitHub repository (for commit correlation)."
-echo "  4. Subscribe the agent to action group 'ag-sre-*' in the RG."
-echo "  5. Run scripts/trigger-incident.sh to start the demo incident."
+echo "  3. Connect this GitHub repo (Code Access + GitHub Connector with PR write scope)."
+echo "  4. Connect Azure Monitor as the incident platform; create a Review-mode response plan."
+echo "  5. Apply the GitOps Tool Access Policy (deny Azure CLI writes) — see the setup manual."
+echo "  6. Open a PR with scripts/trigger-incident.sh, merge it, and let the agent remediate via PR."
 echo ""

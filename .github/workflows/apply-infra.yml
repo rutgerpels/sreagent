@@ -1,0 +1,101 @@
+name: apply-infra
+
+# GitOps deploy of the ContosoPay infrastructure flag changes.
+#
+# When a PR that edits infra/leak.auto.tfvars (the planted memory-leak toggle)
+# is merged to main, this workflow runs `terraform apply` against the REMOTE
+# azurerm state, so the change is deployed the IaC way -- no one runs
+# `az containerapp update` by hand. This is what makes both the incident trigger
+# (PR sets enable_slow_leak = true) and the SRE Agent's remediation (PR sets it
+# back to false) real GitOps flows.
+#
+# Authentication is OIDC-only (no stored credentials). The operator configures
+# these GitHub Actions *variables* (Settings > Secrets and variables > Actions):
+#   AZURE_CLIENT_ID        - federated app/identity client id
+#   AZURE_TENANT_ID        - tenant id
+#   AZURE_SUBSCRIPTION_ID  - subscription id
+#   TFSTATE_RG             - remote state resource group   (deploy.* prints these)
+#   TFSTATE_SA             - remote state storage account
+#   TFSTATE_CONTAINER      - remote state container        (default: tfstate)
+#   TFSTATE_KEY            - remote state blob key          (default: contosopay-demo.tfstate)
+# Optional (default shown):
+#   TF_PREFIX (contosopay), TF_ENVIRONMENT (demo), TF_LOCATION (swedencentral)
+#
+# The federated identity needs, at minimum:
+#   * Contributor on the demo resource group (to apply container app changes)
+#   * Storage Blob Data Contributor on the TFSTATE_SA (to read/write state)
+# A federated credential must trust this repo on the main branch
+#   subject: repo:OWNER/REPO:ref:refs/heads/main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/leak.auto.tfvars"
+      - "infra/**.tf"
+      - ".github/workflows/apply-infra.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # required for OIDC
+  contents: read
+
+concurrency:
+  group: apply-infra
+  cancel-in-progress: false
+
+jobs:
+  terraform-apply:
+    runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_PREFIX: ${{ vars.TF_PREFIX || 'contosopay' }}
+      TF_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT || 'demo' }}
+      TF_LOCATION: ${{ vars.TF_LOCATION || 'swedencentral' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Terraform init (remote state)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TFSTATE_KEY }}"
+
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform apply -input=false -auto-approve \
+            -var 'deploy_apps=true' \
+            -var 'image_tag=latest' \
+            -var "prefix=${TF_PREFIX}" \
+            -var "environment=${TF_ENVIRONMENT}" \
+            -var "location=${TF_LOCATION}"
+
+      - name: Report leak state
+        working-directory: infra
+        run: |
+          echo "enable_slow_leak applied. Current payment-service revision will reflect the flag."
+          terraform output -raw payment_app_name || true

@@ -16,15 +16,16 @@ terraform {
     }
   }
 
-  # Local backend by default for single-command deploys. Uncomment and configure
-  # the azurerm backend below if your team wants remote state.
+  # Remote state on an azurerm backend so CI (apply-infra.yml) can apply the
+  # same state the operator deploys. This is a *partial* configuration: the
+  # storage account / resource group / key are supplied at init time via
+  # -backend-config flags. scripts/deploy.* bootstraps the LRS state storage
+  # account and passes those flags, so the single-command deploy still works.
   #
-  # backend "azurerm" {
-  #   resource_group_name  = "rg-tfstate"
-  #   storage_account_name = "sttfstateexample"   # must be globally unique, LRS
-  #   container_name       = "tfstate"
-  #   key                  = "sre-agent-demo.tfstate"
-  # }
+  # To deploy with purely local state instead (no CI), comment this block out.
+  backend "azurerm" {
+    use_azuread_auth = true # auth via the signed-in identity / OIDC, no keys
+  }
 }
 
 provider "azurerm" {
