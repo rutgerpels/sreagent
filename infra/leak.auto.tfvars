@@ -6,7 +6,7 @@
 # payment-service ENABLE_SLOW_LEAK flag.
 #
 # DEMO FLOW:
-#   * scripts/trigger-incident.* opens a PULL REQUEST that flips this to `true`.
+#   * scripts/trigger-incident-gitops.* opens a PULL REQUEST that flips this to `true`.
 #   * Merging that PR runs .github/workflows/apply-infra.yml, which performs a
 #     `terraform apply` against the remote state -> the leak is deployed.
 #   * The Azure SRE Agent remediates by opening another PR that sets this back to

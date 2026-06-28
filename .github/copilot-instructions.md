@@ -131,9 +131,13 @@ Generate the repo in this shape:
 │   ├── deploy.sh                       # single-command deploy (bash)
 │   ├── deploy.ps1                      # single-command deploy (PowerShell)
 │   ├── teardown.sh
-│   └── trigger-incident.sh            # flips feature flag to start the leak
+│   ├── trigger-incident-direct.sh     # Scenario A: flips the flag on the live app (az)
+│   └── trigger-incident-gitops.sh     # Scenario B: opens a PR; merge -> CI deploys the flag
 ├── docs/
-│   ├── run-of-show.md                  # the live demo script / talk track
+│   ├── run-of-show.md                  # one-page scenario chooser
+│   ├── scenario-a-direct.md            # Scenario A setup + talk track (on-the-spot fix)
+│   ├── scenario-b-gitops.md            # Scenario B setup + talk track (PR-based fix)
+│   ├── sre-agent-setup.md              # common SRE Agent setup (steps 1-5)
 │   └── aks-variant.md                  # optional AKS deployment notes
 ├── .gitignore                          # ignore *.tfstate, *.tfvars, .env, etc.
 ├── terraform.tfvars.example            # placeholders only, NO real values
@@ -159,9 +163,13 @@ In `payment-service`, implement a memory leak that is:
   over ~30–40 minutes, matching the "trend started before the alert" narrative.
 - **Recoverable** — a revision restart clears it; raising the scale rule mitigates it. This gives the
   agent two legitimate mitigations to propose.
-- **Correlatable** — ship the flag flip as a real **git commit + GitHub Actions deployment** so the
-  SRE Agent can tie the incident back to a specific commit. `scripts/trigger-incident.sh` performs
-  the commit/flag flip on demand.
+- **Correlatable** — the demo ships in **two scenarios** for triggering/remediating the flip:
+  - **Scenario A (on-the-spot):** `scripts/trigger-incident-direct.sh` flips the flag directly on the
+    live Container App (`az containerapp update`); the agent (Privileged access) mitigates directly.
+  - **Scenario B (full GitOps):** `scripts/trigger-incident-gitops.sh` opens a **PR** editing
+    `infra/leak.auto.tfvars`; merging it runs `.github/workflows/apply-infra.yml`
+    (`terraform apply`), so the SRE Agent can tie the incident back to a specific PR/commit, and the
+    agent (Reader-only) remediates by opening another PR.
 
 Emit OpenTelemetry → Application Insights from all three services (request rate, latency, memory).
 
@@ -239,12 +247,18 @@ Provide `scripts/teardown.sh` → `terraform -chdir=infra destroy -auto-approve`
 
 ## 9. Demo flow the environment must support
 
-The infra/app must make these moments possible (see `docs/run-of-show.md` for the full talk track):
+The infra/app must make these moments possible. The demo ships in **two scenarios** (see
+`docs/run-of-show.md` for the chooser, and `docs/scenario-a-direct.md` /
+`docs/scenario-b-gitops.md` for the full talk tracks):
 
-1. **Incident** — `trigger-incident.sh` flips `ENABLE_SLOW_LEAK` via a committed change → deploy →
-   memory climbs → Azure Monitor alert fires.
-2. **Investigation** — SRE Agent correlates App Insights memory trend with the GitHub commit.
-3. **Mitigation w/ approval** — agent proposes *restart revision* + *raise scale rule*; human approves.
+1. **Incident** — flip `ENABLE_SLOW_LEAK`:
+   - *Scenario A:* `trigger-incident-direct.sh` sets it on the live app directly.
+   - *Scenario B:* `trigger-incident-gitops.sh` opens a PR; merging it runs `apply-infra.yml`
+     (`terraform apply`) → memory climbs → Azure Monitor alert fires.
+2. **Investigation** — SRE Agent correlates App Insights memory trend with the GitHub commit/PR.
+3. **Mitigation w/ approval** —
+   - *Scenario A:* agent proposes *restart revision* / *raise scale rule* and acts after approval.
+   - *Scenario B:* agent opens a remediation PR (no direct Azure writes); a human merges it.
 4. **Proactive** — a scheduled health-check task posts results to Teams/Slack.
 5. **Ask anything** — natural-language queries return grounded answers.
 6. **Memory** — re-trigger shows faster, pattern-aware resolution.
@@ -269,5 +283,6 @@ The infra/app must make these moments possible (see `docs/run-of-show.md` for th
 - Only `frontend_url` is publicly reachable; all else internal.
 - `gitleaks`/secret scan on the repo returns clean.
 - `terraform plan` is empty after a successful apply (idempotent).
-- `scripts/trigger-incident.sh` reliably produces the memory-leak incident and alert.
+- `scripts/trigger-incident-direct.sh` (Scenario A) and `scripts/trigger-incident-gitops.sh`
+  (Scenario B) each reliably produce the memory-leak incident and alert.
 - `scripts/teardown.sh` removes everything.
