@@ -110,6 +110,7 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 | Path | Purpose |
 |------|---------|
 | `infra/` | All Terraform (`azurerm`) — RG, identities, ACR, Key Vault, observability, ACA, alerts, Grafana |
+| `infra/agents.tf` | **Optional** two SRE Agents (`azapi`, A=High / B=Reader) — off unless `enable_sre_agents=true` |
 | `infra/leak.auto.tfvars` | **GitOps source of truth** for the planted-leak flag (committed, non-secret) |
 | `src/frontend` | Public SPA + Node server |
 | `src/checkout-api` | Internal API (orders) |

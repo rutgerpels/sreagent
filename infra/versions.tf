@@ -6,6 +6,13 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    azapi = {
+      # Used only for the optional Microsoft.App/agents (SRE Agent) resources,
+      # which the azurerm provider does not yet expose. Gated behind
+      # var.enable_sre_agents (default false), so it is a no-op otherwise.
+      source  = "azure/azapi"
+      version = "~> 2.0"
+    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
@@ -45,3 +52,5 @@ provider "azurerm" {
     }
   }
 }
+
+provider "azapi" {}

@@ -13,6 +13,11 @@ reviews and merges. No one touches the live Azure resources by hand.
 > Want the fast, direct version instead? See
 > [`scenario-a-direct.md`](scenario-a-direct.md).
 
+> **Provision in code:** setting `enable_sre_agents=true` deploys `agent-b` with
+> **Reader** access + Monitoring Contributor + Azure Monitor already wired. §B1–§B5
+> below (GitHub Connector, tool policy, custom agent, knowledge, response plan)
+> stay manual — they have no ARM property.
+
 The committable artifacts for this scenario live in [`../agent/`](../agent/).
 
 ---

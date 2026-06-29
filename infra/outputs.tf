@@ -61,3 +61,13 @@ output "grafana_endpoint" {
   description = "Azure Managed Grafana endpoint (if enabled)."
   value       = var.enable_grafana ? azurerm_dashboard_grafana.this[0].endpoint : null
 }
+
+output "sre_agent_names" {
+  description = "Provisioned SRE Agent names per scenario (empty unless enable_sre_agents)."
+  value       = { for k, a in azapi_resource.agent : k => a.name }
+}
+
+output "sre_agent_identity_principal_ids" {
+  description = "Each SRE Agent's user-assigned identity principal id (for portal/data-plane wiring)."
+  value       = { for k, i in azurerm_user_assigned_identity.agent : k => i.principal_id }
+}

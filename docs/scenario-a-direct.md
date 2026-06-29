@@ -13,6 +13,10 @@ flag back) after you approve in the agent UI.
 > Want the change-managed, PR-gated version instead? See
 > [`scenario-b-gitops.md`](scenario-b-gitops.md).
 
+> **Provision in code:** setting `enable_sre_agents=true` deploys `agent-a` with
+> **High** access + Contributor + Azure Monitor already wired, so §A1 below is the
+> only portal step left (route its response plan to the default agent).
+
 ---
 
 ## A1. Configure the response plan (direct mitigation)

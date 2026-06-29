@@ -108,3 +108,33 @@ variable "frontend_allowed_ips" {
   type        = list(string)
   default     = []
 }
+
+###############################################################################
+# Optional: provision the two Azure SRE Agents (Microsoft.App/agents) in code.
+# Off by default — the agent resource is preview, requires a sponsor group, and
+# the GitHub OAuth / tool-policy / response-plan steps remain manual (see docs).
+###############################################################################
+
+variable "enable_sre_agents" {
+  description = "Provision the two SRE Agents (Scenario A=High, B=Low) via azapi. Requires sre_agent_sponsor_group_id."
+  type        = bool
+  default     = false
+}
+
+variable "sre_agent_sponsor_group_id" {
+  description = "Entra group object ID that sponsors the agents' identities (required by Microsoft.App/agents). Not committed; supply via tfvars/env."
+  type        = string
+  default     = null
+}
+
+variable "sre_agent_model_provider" {
+  description = "Default model provider for the agents (e.g. MicrosoftFoundry in Sweden Central / EU; Anthropic elsewhere)."
+  type        = string
+  default     = "MicrosoftFoundry"
+}
+
+variable "sre_agent_model_name" {
+  description = "Default model name for the agents."
+  type        = string
+  default     = "gpt-5"
+}

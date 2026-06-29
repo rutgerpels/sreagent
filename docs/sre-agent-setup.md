@@ -82,6 +82,13 @@ assignments**, and the **SRE Agent** resource itself. Wait for status
 > and requires a direct Anthropic agreement. For this demo in Sweden Central,
 > leave the provider on **Azure OpenAI**.
 
+> **Provision in Terraform instead (optional).** Steps §2, §4 (access level + RBAC)
+> and §5 (Azure Monitor + monitored RG) can be created in code — set
+> `enable_sre_agents = true` and a sponsor group id in `terraform.tfvars` to
+> deploy **two agents** (`agent-a` = High, `agent-b` = Low). You still do the
+> GitHub OAuth (§3), the response plan (§5.4), and the Scenario B tool policy /
+> custom agent / knowledge in the portal — they have no ARM property.
+
 ---
 
 ## 3. Connect the GitHub repository (Code Access)
