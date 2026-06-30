@@ -40,6 +40,13 @@ provider "azurerm" {
   # (set by scripts/deploy.*) when var.subscription_id is null.
   subscription_id = var.subscription_id
 
+  # Skip the resource-provider listing/registration the provider does at startup.
+  # The demo's resource providers are already registered on the subscription, and
+  # that startup call intermittently fails in CI with "populating Resource
+  # Provider cache: ... unexpected end of JSON input". Skipping it is faster and
+  # removes that flaky failure mode.
+  resource_provider_registrations = "none"
+
   features {
     key_vault {
       # Purge protection is enabled on the vault, so it cannot be purged on
