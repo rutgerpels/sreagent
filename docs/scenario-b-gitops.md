@@ -88,17 +88,27 @@ three variables the workflows read. Replace `<your-org>/<your-repo>` and
 > *"is not recognized as a name of a cmdlet"*. In PowerShell you write
 > `$SUB = az ...` instead.
 
-> **Git Bash on Windows:** `az ... -o tsv` returns values with a trailing
-> carriage return (`\r`). If you do not strip it, scopes such as
-> `/subscriptions/$SUB` become invalid and Azure replies *"MissingSubscription"*.
-> The Bash block below appends `| tr -d '\r'` to every capture to prevent this; it
-> is harmless on macOS/Linux, so you can use the block as-is everywhere.
+> **Git Bash on Windows — two quirks to know.** Both are already handled in the
+> block below, and the workarounds are harmless on macOS/Linux, so you can use the
+> block as-is everywhere:
+>
+> 1. `az ... -o tsv` returns values with a trailing carriage return (`\r`). Left in
+>    place, scopes such as `/subscriptions/$SUB` become invalid and Azure replies
+>    *"MissingSubscription"*. Every capture below pipes through `| tr -d '\r'`.
+> 2. Git Bash rewrites any argument that **starts with `/`** into a Windows path
+>    before passing it to `az` (MSYS path conversion), which also corrupts
+>    `--scope "/subscriptions/..."` and yields *"MissingSubscription"*. Setting
+>    `export MSYS_NO_PATHCONV=1` once disables this for the session.
 
 ### Bash / macOS / Linux / WSL / Git Bash
 
 ```bash
 az login
 az account set --subscription "<your-subscription>"
+
+# Git Bash on Windows: stop MSYS rewriting /subscriptions/... into a Windows path.
+# Harmless on macOS/Linux.
+export MSYS_NO_PATHCONV=1
 
 REPO="<your-org>/<your-repo>"
 SUB=$(az account show --query id -o tsv | tr -d '\r')
