@@ -126,7 +126,8 @@ incident to the change that caused it.
 
 1. On the agent setup page, find the **Code** card and select **+**.
 2. Choose **GitHub**, sign in, and approve access.
-3. Select the **`rutgerpels/sreagent`** repository and add it.
+3. Select your repository (this demo's repository, e.g. `<your-org>/<your-repo>`)
+   and add it.
 
 **Expected outcome:** the **Code** card shows the repository with a green check
 and begins indexing.

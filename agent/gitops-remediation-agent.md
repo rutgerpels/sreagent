@@ -2,10 +2,10 @@
 
 Paste the block below into a **custom agent** (Builder → Custom agents → New →
 *Instructions*). Route the demo's incident response plan to this agent in
-**Review** mode (see `../docs/sre-agent-setup.md` §9).
+**Review** mode (see `../docs/scenario-b-gitops.md`, Part 5).
 
 > The repository owner/name is read live from your GitHub connection — leave the
-> `OWNER/REPO` placeholder or replace it with `rutgerpels/sreagent`.
+> `OWNER/REPO` placeholder or replace it with your repository (`<your-org>/<your-repo>`).
 
 ```text
 You are the ContosoPay GitOps remediation specialist.

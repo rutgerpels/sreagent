@@ -104,7 +104,7 @@ tell it where the Terraform state lives.
 
 1. Create or reuse an Entra application (or user-assigned managed identity) that
    GitHub Actions will sign in as, and add a **federated credential** that trusts
-   `repo:rutgerpels/sreagent:ref:refs/heads/main`. This lets the workflow
+   `repo:<your-org>/<your-repo>:ref:refs/heads/main`. This lets the workflow
    authenticate without any stored secret.
 
 2. Grant that identity:
@@ -161,8 +161,8 @@ environment.
 ### 4a. Connect your source code (read)
 
 1. On the agent setup page, find the **Code** card and select **+**.
-2. Choose **GitHub**, sign in, and select the **`rutgerpels/sreagent`**
-   repository.
+2. Choose **GitHub**, sign in, and select this demo's repository
+   (`<your-org>/<your-repo>`).
 
 **Expected outcome:** the **Code** card shows the repository and begins indexing.
 This lets the agent *read* the code and find the Pull Request behind an incident.
@@ -174,7 +174,7 @@ This is a separate connection from Code Access.
 
 1. Open **Builder → Connectors → Add connector → GitHub**.
 2. Sign in with an identity that has **Pull requests: Read/Write** and
-   **Issues: Read/Write** on `rutgerpels/sreagent`.
+   **Issues: Read/Write** on this demo's repository.
 
 **Expected outcome:** the agent can now create branches, issues, and Pull
 Requests.

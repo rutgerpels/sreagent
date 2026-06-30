@@ -72,8 +72,8 @@ subscription.
 
 Code Access lets the agent **read** the repository so it can connect an incident
 to the change that caused it. In the agent portal, open the **Code** card on the
-setup page, choose **GitHub**, sign in, and select the `rutgerpels/sreagent`
-repository. When the card shows the repository with a green check, the agent has
+setup page, choose **GitHub**, sign in, and select this demo's repository
+(`<your-org>/<your-repo>`). When the card shows the repository with a green check, the agent has
 begun indexing the code.
 
 Scenario B additionally uses a GitHub **Connector** (with write permission) so
@@ -125,7 +125,7 @@ GitHub sign-in and response plan in the portal.
 | "Insufficient privileges" when granting resource access | You need **Owner** or **User Access Administrator** on the subscription or resource group. Ask an administrator, or activate the role just-in-time with PIM. |
 | The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) **and** that the agent's identity has **Monitoring Contributor** on the demo resource group (§3). Reader alone is not enough for the alert scanner. |
 | There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
-| The repository is not listed during Code Access | The signed-in GitHub identity does not have access to `rutgerpels/sreagent`. Re-authenticate with an account that does. |
+| The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
 
 ---
 
