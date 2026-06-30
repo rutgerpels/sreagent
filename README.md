@@ -55,7 +55,11 @@ pwsh ./scripts/deploy.ps1  # PowerShell
 ```
 
 The script prints the public **frontend URL** and a "next steps" block for connecting the
-Azure SRE Agent.
+Azure SRE Agent. This local script is the path used by **Scenario A**.
+
+> **Prefer full CI/CD?** **Scenario B** deploys the same environment entirely through GitHub
+> Actions (the **deploy** workflow) with no local Terraform or Docker. See
+> [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md).
 
 ### Tear down
 
@@ -124,8 +128,9 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 | `docs/scenario-b-gitops.md` | Scenario B — complete A-to-Z GitOps guide |
 | `docs/sre-agent-setup.md` | Azure SRE Agent reference (prerequisites, regions, permissions, troubleshooting) |
 | `docs/aks-variant.md` | Optional AKS deployment notes |
+| `.github/workflows/deploy.yml` | **Full environment deploy via CI/CD** (`workflow_dispatch`) — state bootstrap, platform, build/push, apps |
 | `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
-| `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes) |
+| `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes); computes remote-state backend automatically |
 
 ## Security
 

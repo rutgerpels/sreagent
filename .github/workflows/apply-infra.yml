@@ -14,16 +14,16 @@ name: apply-infra
 #   AZURE_CLIENT_ID        - federated app/identity client id
 #   AZURE_TENANT_ID        - tenant id
 #   AZURE_SUBSCRIPTION_ID  - subscription id
-#   TFSTATE_RG             - remote state resource group   (deploy.* prints these)
-#   TFSTATE_SA             - remote state storage account
-#   TFSTATE_CONTAINER      - remote state container        (default: tfstate)
-#   TFSTATE_KEY            - remote state blob key          (default: contosopay-demo.tfstate)
 # Optional (default shown):
 #   TF_PREFIX (contosopay), TF_ENVIRONMENT (demo), TF_LOCATION (swedencentral)
 #
+# The remote-state backend names are computed deterministically from the
+# subscription id + prefix (the same formula as deploy.yml and scripts/deploy.*),
+# so there is nothing extra to copy between deploys.
+#
 # The federated identity needs, at minimum:
 #   * Contributor on the demo resource group (to apply container app changes)
-#   * Storage Blob Data Contributor on the TFSTATE_SA (to read/write state)
+#   * Storage Blob Data Contributor on the state storage account
 # A federated credential must trust this repo on the main branch
 #   subject: repo:OWNER/REPO:ref:refs/heads/main
 
@@ -73,15 +73,28 @@ jobs:
           terraform_version: "1.9.8"
           terraform_wrapper: false
 
+      - name: Compute backend config
+        id: backend
+        run: |
+          set -euo pipefail
+          # Deterministic, non-identifying remote-state names (match deploy.yml / scripts/deploy.*).
+          STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${TF_PREFIX}" | sha256sum | cut -c1-16)"
+          {
+            echo "state_rg=rg-${TF_PREFIX}-tfstate"
+            echo "state_sa=sttf${STATE_HASH}"
+            echo "state_container=tfstate"
+            echo "state_key=${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Terraform init (remote state)
         working-directory: infra
         run: |
           set -euo pipefail
           terraform init -input=false \
-            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
-            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
-            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
-            -backend-config="key=${{ vars.TFSTATE_KEY }}"
+            -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
+            -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
+            -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
+            -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
       - name: Terraform apply
         working-directory: infra

@@ -1,23 +1,26 @@
 # Scenario B — GitOps fix
 
-This guide takes you from an empty subscription to a working demo where the
-**Azure SRE Agent fixes an incident the GitOps way** — by opening a Pull Request
-that a person reviews and merges, never by touching the live Azure resources
-directly. Follow it from top to bottom; everything you need is here. For deeper
-background on any agent step, see the
-[Azure SRE Agent reference](sre-agent-setup.md).
+This guide takes you from an empty subscription to a working demo that is run
+**entirely through CI/CD**, the way a real DevOps organisation operates. The
+environment is deployed by a GitHub Actions pipeline, the fault is switched on by
+merging a Pull Request, and the **Azure SRE Agent remediates by opening its own
+Pull Request** — it never touches the live Azure resources directly. Every change
+to the system, including the fix, ships as reviewed code.
 
-**The story this scenario tells:** a change ships through a Pull Request and CI/CD
-pipeline — exactly like a real regression. Memory starts leaking, an alert fires,
-and the SRE Agent — which is **read-only** on Azure — investigates, finds the
-Pull Request that caused it, and remediates by **opening its own Pull Request**.
-A human reviews and merges that PR, and the pipeline deploys the fix. Every change
-to the system, including the fix, is reviewed code.
+Follow it from top to bottom; everything you need is here. For deeper background
+on any agent step, see the [Azure SRE Agent reference](sre-agent-setup.md).
+
+**The story this scenario tells:** infrastructure and application both ship
+through pipelines. A change enters as a Pull Request, CI deploys it, memory starts
+leaking, an alert fires, and the SRE Agent — which is **read-only** on Azure —
+investigates, finds the Pull Request that caused it, and remediates by **opening a
+Pull Request** of its own. A human reviews and merges that PR, and the pipeline
+deploys the fix.
 
 You will work through seven parts:
 
-1. [Deploy the ContosoPay application](#part-1--deploy-the-application)
-2. [Configure the CI/CD pipeline](#part-2--configure-the-cicd-pipeline)
+1. [Bootstrap the pipeline (one-time)](#part-1--bootstrap-the-pipeline-one-time)
+2. [Deploy the environment with CI/CD](#part-2--deploy-the-environment-with-cicd)
 3. [Create the SRE Agent](#part-3--create-the-sre-agent)
 4. [Connect the agent to your code and resources](#part-4--connect-the-agent)
 5. [Apply the GitOps guardrails and behaviour](#part-5--apply-the-gitops-guardrails)
@@ -26,111 +29,160 @@ You will work through seven parts:
 
 ---
 
-## Before you begin
+## What is automated, and what is not
 
-You will need:
+A useful part of this scenario is seeing exactly where the GitOps boundary sits —
+especially for the SRE Agent. Three categories:
 
-- An Azure subscription where you have **Contributor** plus **Owner** or
-  **User Access Administrator**.
-- The [Azure CLI](https://learn.microsoft.com/cli/azure/),
-  [Terraform](https://developer.hashicorp.com/terraform) 1.9 or later, and
-  [Docker](https://www.docker.com/) (with the daemon running).
-- A Bash shell or PowerShell 7+.
-- A clone of this repository, and permission to configure **GitHub Actions** and
-  to open and merge Pull Requests on it.
+| Category | What it covers | How it is done |
+| --- | --- | --- |
+| **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
+| **One-time bootstrap seed (cannot be GitOps)** | The identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: something has to exist before any pipeline can run. The remote Terraform state storage is *not* in this list — the first pipeline run creates it automatically. |
+| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub sign-in for Code Access and the Connector, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
+
+So for the SRE Agent specifically: **the agent resource, its permissions, and its
+connection to Azure Monitor can be Infrastructure as Code** (see
+[the reference, §6](sre-agent-setup.md#6-optional-provisioning-the-agent-with-terraform)),
+while **the GitHub OAuth, tool policy, custom-agent behaviour, and response plan
+are configured in the portal** because they are interactive, identity-bound steps.
 
 ---
 
-## Part 1 — Deploy the application
+## Before you begin
 
-**What you will do:** deploy ContosoPay and all its supporting Azure services with
-a single command.
+Because the heavy lifting happens in CI, you need very little installed locally:
 
-1. Sign in to Azure and select your subscription:
+- An Azure subscription where you have **Owner** (or **Contributor** plus
+  **User Access Administrator**), so you can create the deployment identity and
+  grant it roles in Part 1.
+- The [Azure CLI](https://learn.microsoft.com/cli/azure/) and the
+  [GitHub CLI](https://cli.github.com/) (`gh`), both signed in.
+- A Bash shell or PowerShell 7+.
+- A clone of this repository, and permission to run GitHub Actions and to open and
+  merge Pull Requests on it.
+
+You do **not** need Terraform or Docker locally — the pipeline runs those for you.
+
+Throughout this guide, replace `<your-org>/<your-repo>` with your repository.
+
+---
+
+## Part 1 — Bootstrap the pipeline (one-time)
+
+This is the one part that cannot itself be GitOps: before any pipeline can deploy
+Azure resources, it needs an identity to sign in as. You create that identity
+once, let GitHub Actions authenticate to it with OpenID Connect (so there are no
+stored secrets), and record three variables in the repository.
+
+**What you will do:** create a deployment identity, trust this repository, grant
+it access, and set the GitHub Actions variables.
+
+1. Sign in and capture your IDs:
 
    ```bash
    az login
    az account set --subscription "<your-subscription>"
+   SUB=$(az account show --query id -o tsv)
+   TENANT=$(az account show --query tenantId -o tsv)
+   REPO="<your-org>/<your-repo>"
    ```
 
-2. Create your variables file from the example (no secrets — placeholders only):
+2. Create an app registration and a service principal for it:
 
    ```bash
-   cp terraform.tfvars.example terraform.tfvars
+   APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv)
+   az ad sp create --id "$APP_ID"
    ```
 
-3. Run the deployment:
+3. Add federated credentials so GitHub Actions can sign in without a secret:
 
    ```bash
-   ./scripts/deploy.sh                 # Bash
-   # or
-   pwsh ./scripts/deploy.ps1           # PowerShell
+   az ad app federated-credential create --id "$APP_ID" --parameters '{
+     "name":"main",
+     "issuer":"https://token.actions.githubusercontent.com",
+     "subject":"repo:'"$REPO"':ref:refs/heads/main",
+     "audiences":["api://AzureADTokenExchange"]
+   }'
+   az ad app federated-credential create --id "$APP_ID" --parameters '{
+     "name":"pull-request",
+     "issuer":"https://token.actions.githubusercontent.com",
+     "subject":"repo:'"$REPO"':pull_request",
+     "audiences":["api://AzureADTokenExchange"]
+   }'
    ```
 
-**What is happening:** Terraform creates the resource group, container registry,
-Key Vault, Application Insights, Log Analytics, the Container Apps environment,
-the Azure Monitor memory alert, and Grafana, and the three services are built and
-deployed. The Terraform state is stored in an Azure storage account so that the
-CI/CD pipeline can apply changes later.
+4. Grant the identity the access the pipeline needs. For a demo, subscription
+   scope is simplest:
 
-**Expected outcome:** the script prints a summary. **Make a note of these values —
-you need them in Part 2:**
+   ```bash
+   az role assignment create --assignee "$APP_ID" --role "Contributor" \
+     --scope "/subscriptions/$SUB"
+   az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" \
+     --scope "/subscriptions/$SUB"
+   ```
 
-```
-ContosoPay demo deployed
-  Frontend URL : https://frontend.<region>.azurecontainerapps.io
-  Resource grp : rg-contosopay-demo-<suffix>
+   **Contributor** lets the pipeline create and manage the demo resources;
+   **Storage Blob Data Contributor** lets it read and write the Terraform state
+   that the first pipeline run will create.
 
-Remote Terraform state (set these as GitHub Actions variables for apply-infra.yml):
-  TFSTATE_RG        : rg-contosopay-tfstate
-  TFSTATE_SA        : sttf<hash>
-  TFSTATE_CONTAINER : tfstate
-  TFSTATE_KEY       : contosopay-demo.tfstate
-```
+5. Record the three variables the workflows read:
 
-4. Open the **Frontend URL**, place a test order, and tick **"Generate steady
-   traffic"** so Application Insights has a healthy baseline.
+   ```bash
+   gh variable set AZURE_CLIENT_ID --repo "$REPO" --body "$APP_ID"
+   gh variable set AZURE_TENANT_ID --repo "$REPO" --body "$TENANT"
+   gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
+   ```
+
+**Expected outcome:** the repository's **Settings → Secrets and variables →
+Actions → Variables** lists `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+`AZURE_SUBSCRIPTION_ID`. The pipeline can now authenticate to Azure with no stored
+credentials.
 
 ---
 
-## Part 2 — Configure the CI/CD pipeline
+## Part 2 — Deploy the environment with CI/CD
 
-In this scenario the fault is switched on by merging a Pull Request, and the fix
-ships the same way. For that to work, the `apply-infra` GitHub Actions workflow
-must be able to sign in to Azure and run Terraform. You configure this once.
+**What you will do:** stand up the entire ContosoPay environment by running a
+GitHub Actions workflow — no local Terraform or Docker.
 
-**What you will do:** give GitHub Actions passwordless (OIDC) access to Azure and
-tell it where the Terraform state lives.
+1. In GitHub, open the **Actions** tab, select the **deploy** workflow, and choose
+   **Run workflow** (you can keep the default prefix, environment, and region, or
+   override them).
 
-1. Create or reuse an Entra application (or user-assigned managed identity) that
-   GitHub Actions will sign in as, and add a **federated credential** that trusts
-   `repo:<your-org>/<your-repo>:ref:refs/heads/main`. This lets the workflow
-   authenticate without any stored secret.
+**What is happening:** the `deploy` workflow signs in with the identity from
+Part 1 and performs the same steps a DevOps team would automate — it creates the
+remote Terraform state storage, applies the platform, builds and pushes the three
+application images, then deploys the application. No one runs anything against the
+live environment by hand.
 
-2. Grant that identity:
-   - **Contributor** on `rg-contosopay-demo-<suffix>` (so it can apply changes).
-   - **Storage Blob Data Contributor** on the Terraform state storage account
-     (the `TFSTATE_SA` value from Part 1).
+**Expected outcome:** the workflow finishes green. Open its run summary to find
+the deployed environment's details:
 
-3. In the GitHub repository, open **Settings → Secrets and variables → Actions →
-   Variables** and add:
+| Output | Example |
+| --- | --- |
+| Frontend URL | `https://frontend.<region>.azurecontainerapps.io` |
+| Resource group | `rg-contosopay-demo-<suffix>` |
 
-   | Variable | Value |
-   | --- | --- |
-   | `AZURE_CLIENT_ID` | The federated identity's client ID. |
-   | `AZURE_TENANT_ID` | Your tenant ID. |
-   | `AZURE_SUBSCRIPTION_ID` | Your subscription ID. |
-   | `TFSTATE_RG` | `rg-contosopay-tfstate` |
-   | `TFSTATE_SA` | The `sttf…` value from Part 1. |
-   | `TFSTATE_CONTAINER` | `tfstate` |
-   | `TFSTATE_KEY` | `contosopay-demo.tfstate` |
+2. The run summary also lists a small set of variables for the **deploy-apps**
+   workflow (which ships future application-code changes). Set them once so that
+   pipeline is ready too:
 
-**What is happening:** the `apply-infra` workflow runs `terraform apply` whenever
-a relevant change is merged to `main`, using these values to find the state and to
-sign in to Azure securely.
+   ```bash
+   gh variable set AZURE_RESOURCE_GROUP --repo "$REPO" --body "<resource group from summary>"
+   gh variable set ACR_NAME --repo "$REPO" --body "<ACR_NAME from summary>"
+   gh variable set FRONTEND_APP --repo "$REPO" --body "<FRONTEND_APP from summary>"
+   gh variable set CHECKOUT_APP --repo "$REPO" --body "<CHECKOUT_APP from summary>"
+   gh variable set PAYMENT_APP --repo "$REPO" --body "<PAYMENT_APP from summary>"
+   ```
 
-**Expected outcome:** the configuration is in place. You will confirm it works in
-Part 6 when merging a Pull Request triggers a deployment.
+3. Open the **Frontend URL**, place a test order, and tick **"Generate steady
+   traffic"** so Application Insights has a healthy baseline to compare against.
+
+> From now on, infrastructure and flag changes deploy automatically when merged to
+> `main`: the **apply-infra** workflow runs `terraform apply`, and the
+> **deploy-apps** workflow rebuilds images when application code under `src/`
+> changes. The remote-state location is computed automatically, so there is
+> nothing else to copy between runs.
 
 ---
 
@@ -154,6 +206,11 @@ environment.
 
 **Expected outcome:** the agent's status becomes **Succeeded**.
 
+> Prefer to provision the agent as code? The agent resource, its access level, and
+> its Azure Monitor wiring can be created by Terraform instead — set
+> `enable_sre_agents = true` in `terraform.tfvars` and let the pipeline apply it.
+> The portal steps in Parts 4 and 5 still apply.
+
 ---
 
 ## Part 4 — Connect the agent
@@ -174,7 +231,7 @@ This is a separate connection from Code Access.
 
 1. Open **Builder → Connectors → Add connector → GitHub**.
 2. Sign in with an identity that has **Pull requests: Read/Write** and
-   **Issues: Read/Write** on this demo's repository.
+   **Issues: Read/Write** on your repository.
 
 **Expected outcome:** the agent can now create branches, issues, and Pull
 Requests.
@@ -324,10 +381,12 @@ pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
 
 Merge the resulting Pull Request to return the service to a healthy state.
 
-**Remove the ContosoPay environment** when finished:
+**Remove the ContosoPay environment** when finished. The quickest way is to delete
+the two resource groups the pipeline created:
 
 ```bash
-./scripts/teardown.sh -s "<your-subscription>"
+az group delete --name rg-contosopay-demo-<suffix> --yes --no-wait
+az group delete --name rg-contosopay-tfstate --yes --no-wait
 ```
 
 **Remove the SRE Agent** (it is separate from the demo's Terraform):

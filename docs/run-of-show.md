@@ -51,6 +51,7 @@ that guide from top to bottom.
 | | **Scenario A — On-the-spot fix** | **Scenario B — GitOps fix** |
 | --- | --- | --- |
 | **How the incident starts** | You run a small script that switches the fault on directly on the running service. | You open a **Pull Request** that switches the fault on; merging it deploys the change through CI/CD. |
+| **How it is deployed** | One command from your machine (`scripts/deploy.*`). | Entirely through **GitHub Actions** — no local Terraform or Docker. |
 | **What the agent may do** | The agent has **write access** to the demo resources and **fixes them directly** after you approve. | The agent is **read-only** on Azure and fixes the incident by **opening a Pull Request** that a person reviews and merges. |
 | **Best for** | A fast, self-contained "watch the agent fix it" story. | A realistic DevOps / change-management story where every change ships as reviewed code. |
 | **Follow this guide** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) |
