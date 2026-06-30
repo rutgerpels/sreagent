@@ -77,61 +77,115 @@ stored secrets), and record three variables in the repository.
 **What you will do:** create a deployment identity, trust this repository, grant
 it access, and set the GitHub Actions variables.
 
-1. Sign in and capture your IDs:
+Use **one** of the two blocks below depending on your shell. They do the same
+thing: sign in, create an app registration, add federated credentials for the
+`main` branch and for pull requests, grant the identity access, and record the
+three variables the workflows read. Replace `<your-org>/<your-repo>` and
+`<your-subscription>` first.
 
-   ```bash
-   az login
-   az account set --subscription "<your-subscription>"
-   SUB=$(az account show --query id -o tsv)
-   TENANT=$(az account show --query tenantId -o tsv)
-   REPO="<your-org>/<your-repo>"
-   ```
+> **Why two versions?** Bash and PowerShell assign variables differently —
+> `SUB=$(az ...)` is Bash syntax and will fail in PowerShell with
+> *"is not recognized as a name of a cmdlet"*. In PowerShell you write
+> `$SUB = az ...` instead.
 
-2. Create an app registration and a service principal for it:
+> **Git Bash on Windows:** `az ... -o tsv` returns values with a trailing
+> carriage return (`\r`). If you do not strip it, scopes such as
+> `/subscriptions/$SUB` become invalid and Azure replies *"MissingSubscription"*.
+> The Bash block below appends `| tr -d '\r'` to every capture to prevent this; it
+> is harmless on macOS/Linux, so you can use the block as-is everywhere.
 
-   ```bash
-   APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv)
-   az ad sp create --id "$APP_ID"
-   ```
+### Bash / macOS / Linux / WSL / Git Bash
 
-3. Add federated credentials so GitHub Actions can sign in without a secret:
+```bash
+az login
+az account set --subscription "<your-subscription>"
 
-   ```bash
-   az ad app federated-credential create --id "$APP_ID" --parameters '{
-     "name":"main",
-     "issuer":"https://token.actions.githubusercontent.com",
-     "subject":"repo:'"$REPO"':ref:refs/heads/main",
-     "audiences":["api://AzureADTokenExchange"]
-   }'
-   az ad app federated-credential create --id "$APP_ID" --parameters '{
-     "name":"pull-request",
-     "issuer":"https://token.actions.githubusercontent.com",
-     "subject":"repo:'"$REPO"':pull_request",
-     "audiences":["api://AzureADTokenExchange"]
-   }'
-   ```
+REPO="<your-org>/<your-repo>"
+SUB=$(az account show --query id -o tsv | tr -d '\r')
+TENANT=$(az account show --query tenantId -o tsv | tr -d '\r')
 
-4. Grant the identity the access the pipeline needs. For a demo, subscription
-   scope is simplest:
+# App registration + service principal
+APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv | tr -d '\r')
+az ad sp create --id "$APP_ID"
 
-   ```bash
-   az role assignment create --assignee "$APP_ID" --role "Contributor" \
-     --scope "/subscriptions/$SUB"
-   az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" \
-     --scope "/subscriptions/$SUB"
-   ```
+# Federated credentials: main branch (workflow_dispatch) and pull requests
+az ad app federated-credential create --id "$APP_ID" --parameters '{
+  "name":"main",
+  "issuer":"https://token.actions.githubusercontent.com",
+  "subject":"repo:'"$REPO"':ref:refs/heads/main",
+  "audiences":["api://AzureADTokenExchange"]
+}'
+az ad app federated-credential create --id "$APP_ID" --parameters '{
+  "name":"pull-request",
+  "issuer":"https://token.actions.githubusercontent.com",
+  "subject":"repo:'"$REPO"':pull_request",
+  "audiences":["api://AzureADTokenExchange"]
+}'
 
-   **Contributor** lets the pipeline create and manage the demo resources;
-   **Storage Blob Data Contributor** lets it read and write the Terraform state
-   that the first pipeline run will create.
+# Access (subscription scope keeps the demo simple)
+az role assignment create --assignee "$APP_ID" --role "Contributor" \
+  --scope "/subscriptions/$SUB"
+az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" \
+  --scope "/subscriptions/$SUB"
 
-5. Record the three variables the workflows read:
+# GitHub Actions variables the workflows read
+gh variable set AZURE_CLIENT_ID       --repo "$REPO" --body "$APP_ID"
+gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"
+gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
+```
 
-   ```bash
-   gh variable set AZURE_CLIENT_ID --repo "$REPO" --body "$APP_ID"
-   gh variable set AZURE_TENANT_ID --repo "$REPO" --body "$TENANT"
-   gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
-   ```
+### PowerShell (Windows)
+
+```powershell
+az login
+az account set --subscription "<your-subscription>"
+
+$REPO   = "<your-org>/<your-repo>"
+$SUB    = az account show --query id -o tsv
+$TENANT = az account show --query tenantId -o tsv
+
+# App registration + service principal
+$APP_ID = az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv
+az ad sp create --id $APP_ID
+
+# Federated credentials passed as files (avoids cross-shell JSON quoting issues).
+# The backtick before ':' stops PowerShell treating it as a scope/drive separator.
+@"
+{
+  "name": "main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:$REPO`:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+"@ | Set-Content fic-main.json
+az ad app federated-credential create --id $APP_ID --parameters '@fic-main.json'
+
+@"
+{
+  "name": "pull-request",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:$REPO`:pull_request",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+"@ | Set-Content fic-pr.json
+az ad app federated-credential create --id $APP_ID --parameters '@fic-pr.json'
+Remove-Item fic-main.json, fic-pr.json
+
+# Access (subscription scope keeps the demo simple)
+az role assignment create --assignee $APP_ID --role "Contributor" `
+  --scope "/subscriptions/$SUB"
+az role assignment create --assignee $APP_ID --role "Storage Blob Data Contributor" `
+  --scope "/subscriptions/$SUB"
+
+# GitHub Actions variables the workflows read
+gh variable set AZURE_CLIENT_ID       --repo $REPO --body $APP_ID
+gh variable set AZURE_TENANT_ID       --repo $REPO --body $TENANT
+gh variable set AZURE_SUBSCRIPTION_ID --repo $REPO --body $SUB
+```
+
+In both versions, **Contributor** lets the pipeline create and manage the demo
+resources, and **Storage Blob Data Contributor** lets it read and write the
+Terraform state that the first pipeline run creates.
 
 **Expected outcome:** the repository's **Settings → Secrets and variables →
 Actions → Variables** lists `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
