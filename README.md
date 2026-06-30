@@ -75,11 +75,13 @@ they only differ in how the incident is triggered and how the agent remediates.
 | **Agent Azure access** | **Privileged** (read/write) | **Reader** (read-only) |
 | **Remediation** | Agent **fixes Azure directly** after you approve | Agent **opens a remediation PR**; a human merges it |
 | **Best for** | A fast, self-contained "watch it fix" moment | The realistic DevOps / change-management story |
-| **Run-of-show + setup** | [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) | [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) |
+| **Full A-to-Z guide** | [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) | [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) |
 
-Common, scenario-independent agent setup is in
-[`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) §1–§5;
-[`docs/run-of-show.md`](docs/run-of-show.md) is the one-page chooser.
+New here? Start with [`docs/run-of-show.md`](docs/run-of-show.md) — it explains the
+demo and points you to the right scenario guide. Each scenario guide is a complete,
+self-contained walkthrough (deploy → create and connect the agent → run the
+incident → reset). [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the
+agent reference the guides link to for background and troubleshooting.
 
 ### Scenario A — trigger on the spot
 
@@ -117,10 +119,10 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 | `src/payment-service` | Internal API with the planted, flag-gated memory leak |
 | `scripts/` | `deploy`, `teardown`, `trigger-incident-direct` (Scenario A), `trigger-incident-gitops` (Scenario B) |
 | `agent/` | Committable SRE Agent **Scenario B** GitOps config (tool-access policy, custom agent, runbook) |
-| `docs/run-of-show.md` | One-page scenario chooser |
-| `docs/scenario-a-direct.md` | Scenario A — on-the-spot setup + run of show |
-| `docs/scenario-b-gitops.md` | Scenario B — full GitOps setup + run of show |
-| `docs/sre-agent-setup.md` | Common Azure SRE Agent setup manual (§1–§5) |
+| `docs/run-of-show.md` | Start here — what the demo is and which scenario guide to follow |
+| `docs/scenario-a-direct.md` | Scenario A — complete A-to-Z on-the-spot guide |
+| `docs/scenario-b-gitops.md` | Scenario B — complete A-to-Z GitOps guide |
+| `docs/sre-agent-setup.md` | Azure SRE Agent reference (prerequisites, regions, permissions, troubleshooting) |
 | `docs/aks-variant.md` | Optional AKS deployment notes |
 | `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
 | `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes) |
@@ -135,8 +137,10 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 ## Connecting the Azure SRE Agent
 
 The SRE Agent is a **managed service provisioned separately** at <https://sre.azure.com> — it is not
-part of this Terraform. Do the common setup in [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md)
-(§1–§5: prerequisites, region/model, RBAC, GitHub Code Access, incident platform), then follow your
-chosen scenario doc — [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) (on-the-spot) or
-[`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) (full GitOps). The committable Scenario B
-agent config (deny-Azure-writes policy, GitOps custom agent, runbook) lives in [`agent/`](agent/).
+part of this Terraform. Pick a scenario and follow its complete A-to-Z guide —
+[`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) (on-the-spot) or
+[`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) (full GitOps). Each guide covers deploying
+the app, creating and connecting the agent, running the incident, and resetting.
+[`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the agent reference (prerequisites,
+regions/models, permissions, troubleshooting). The committable Scenario B agent config
+(deny-Azure-writes policy, GitOps custom agent, runbook) lives in [`agent/`](agent/).

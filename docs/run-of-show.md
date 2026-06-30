@@ -1,23 +1,75 @@
-# Run of Show — ContosoPay / Azure SRE Agent demo
+# ContosoPay & Azure SRE Agent — Start Here
 
-This demo ships in **two scenarios**. Both use the same deployed environment and
-the same planted memory-leak fault; they differ in **how the incident is
-triggered** and **how the SRE Agent remediates it**. Pick the one that fits your
-audience.
+Welcome. This repository deploys a small, realistic cloud-native application
+(**ContosoPay**) and shows how the **Azure SRE Agent** detects a production
+incident, explains its root cause, and helps you remediate it.
 
-| | **Scenario A — On-the-spot** | **Scenario B — Full GitOps** |
+This page tells you **what the demo is** and **which guide to follow**. You only
+need to read one scenario guide end to end — each is a complete A‑to‑Z setup.
+
+---
+
+## What you are deploying
+
+ContosoPay is a checkout application made of three small services running on
+**Azure Container Apps**:
+
+- **frontend** — the public web page where a customer places an order. This is
+  the only service reachable from the internet.
+- **checkout-api** — receives the order from the frontend. Internal only.
+- **payment-service** — processes the payment. Internal only. This service
+  contains a **deliberately planted, switchable fault**: a slow memory leak that
+  is turned off by default and can be switched on for the demo.
+
+Supporting Azure services are deployed automatically: a container registry,
+Key Vault for secrets, Application Insights and Log Analytics for telemetry, an
+Azure Monitor alert that watches the payment service's memory, and (optionally)
+an Azure Managed Grafana dashboard.
+
+Everything is built with Terraform. No secrets are stored in the code; the
+application reads its secrets from Key Vault using a managed identity.
+
+---
+
+## What the demo shows
+
+When you switch the planted fault on, the payment service's memory slowly climbs
+over roughly 30–40 minutes until it crosses a threshold and an **Azure Monitor
+alert fires**. The Azure SRE Agent picks up that alert, investigates the
+telemetry, connects the memory growth to the change that caused it, and proposes
+a fix. You stay in control: the agent only acts after a human approves.
+
+---
+
+## Choose your scenario
+
+The demo runs in **two scenarios**. They use the same application and the same
+planted fault; they differ in **how the fault is switched on** and **how the
+agent is allowed to fix it**. Pick the one that fits your audience and follow
+that guide from top to bottom.
+
+| | **Scenario A — On-the-spot fix** | **Scenario B — GitOps fix** |
 | --- | --- | --- |
-| **Trigger** | A script pokes the live app (`trigger-incident-direct`) | A **Pull Request + CI** deploys the change (`trigger-incident-gitops`) |
-| **Agent Azure access** | **Privileged** (read/write) | **Reader** (read-only) |
-| **Remediation** | Agent **fixes Azure directly** after you approve | Agent **opens a remediation PR**; a human merges it |
-| **Best for** | A fast, self-contained "watch the agent fix it" moment | The realistic DevOps / change-management story |
-| **Full talk track + setup** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) |
+| **How the incident starts** | You run a small script that switches the fault on directly on the running service. | You open a **Pull Request** that switches the fault on; merging it deploys the change through CI/CD. |
+| **What the agent may do** | The agent has **write access** to the demo resources and **fixes them directly** after you approve. | The agent is **read-only** on Azure and fixes the incident by **opening a Pull Request** that a person reviews and merges. |
+| **Best for** | A fast, self-contained "watch the agent fix it" story. | A realistic DevOps / change-management story where every change ships as reviewed code. |
+| **Follow this guide** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) |
 
-Common, scenario-independent agent setup (create the agent, connect GitHub Code
-Access, connect Azure Monitor) is in
-[`sre-agent-setup.md`](sre-agent-setup.md) §1–§5. Each scenario doc above carries
-its own end-to-end run of show (set the scene → trigger → detect → root cause →
-remediate → reset).
+Both guides include everything you need: deploying the app, creating and
+connecting the SRE Agent, switching the fault on, watching the agent work, and
+resetting afterwards.
 
-> **Tip:** the leak climbs over ~30–40 minutes, so arm the incident *before* the
-> session and return to it after the walkthrough — in either scenario.
+> **Tip:** the memory leak builds gradually. Switch the fault on, then take a
+> short break or walk through the architecture while the alert builds. Come back
+> after the alert has fired to watch the agent investigate and remediate.
+
+---
+
+## Reference material
+
+- [`sre-agent-setup.md`](sre-agent-setup.md) — a deeper reference on the Azure
+  SRE Agent: prerequisites, regions and models, permissions, and troubleshooting.
+  The scenario guides link to it where relevant; you do not need to read it
+  separately first.
+- [`aks-variant.md`](aks-variant.md) — optional notes for running the same demo
+  on Azure Kubernetes Service instead of Azure Container Apps.

@@ -1,146 +1,281 @@
-# Scenario A — On-the-spot remediation (script-driven)
+# Scenario A — On-the-spot fix
 
-The **fastest, most self-contained** way to run the ContosoPay demo. You trigger
-the incident with a script that pokes the live app, and the SRE Agent — granted
-**Privileged** access — **fixes it directly** (restarts the revision / sets the
-flag back) after you approve in the agent UI.
+This guide takes you from an empty subscription to a working demo where the
+**Azure SRE Agent detects an incident and fixes it directly** after you approve.
+Follow it from top to bottom; everything you need is here. For deeper background
+on any agent step, see the [Azure SRE Agent reference](sre-agent-setup.md).
 
-> **Prerequisite:** finish the **common setup** in
-> [`sre-agent-setup.md`](sre-agent-setup.md) §1–§5 first. In §4, grant the agent
-> **Privileged (`accessLevel: "High"`) + Monitoring Contributor** on the demo
-> resource group.
->
-> Want the change-managed, PR-gated version instead? See
-> [`scenario-b-gitops.md`](scenario-b-gitops.md).
+**The story this scenario tells:** a risky change is made directly to a running
+service, memory starts leaking, an alert fires, and the SRE Agent — which has
+permission to act on your Azure resources — investigates, proposes a fix, and
+applies it the moment a human approves.
 
-> **Provision in code:** setting `enable_sre_agents=true` deploys `agent-a` with
-> **High** access + Contributor + Azure Monitor already wired, so §A1 below is the
-> only portal step left (route its response plan to the default agent).
+You will work through six parts:
 
----
-
-## A1. Configure the response plan (direct mitigation)
-
-In the response plan you created in common-setup §5:
-
-| Setting | Value |
-| --- | --- |
-| **Response custom agent** | **Default agent** (no custom agent needed). |
-| **Agent autonomy level** | **Review** — the agent diagnoses and **proposes** a mitigation (restart revision / scale), and acts only **after you approve**. This keeps the human-in-the-loop moment. |
-
-That's the only scenario-specific agent config. Because the agent has Privileged
-RBAC and no tool-access restrictions, its proposed fix is a direct Azure action
-such as `az containerapp update --set-env-vars ENABLE_SLOW_LEAK=false` or a
-revision restart.
-
-> Prefer hands-off? Set autonomy to **Autonomous** and the agent self-mitigates
-> without prompting. For a live audience, **Review** is the better story.
+1. [Deploy the ContosoPay application](#part-1--deploy-the-application)
+2. [Create the SRE Agent](#part-2--create-the-sre-agent)
+3. [Connect the agent to your code and resources](#part-3--connect-the-agent)
+4. [Set up the response plan](#part-4--set-up-the-response-plan)
+5. [Run the incident and watch the fix](#part-5--run-the-incident)
+6. [Reset and clean up](#part-6--reset-and-clean-up)
 
 ---
 
-## A2. Run of show
+## Before you begin
 
-> The leak climbs over ~30–40 minutes, so **arm the incident before the session**
-> (or early in it) and return to it after the walkthrough.
+You will need:
 
-### 0. Before the demo
+- An Azure subscription where you have **Contributor** plus **Owner** or
+  **User Access Administrator** (so the agent can be granted access later).
+- The [Azure CLI](https://learn.microsoft.com/cli/azure/),
+  [Terraform](https://developer.hashicorp.com/terraform) 1.9 or later, and
+  [Docker](https://www.docker.com/) (with the daemon running).
+- A Bash shell or PowerShell 7+.
+- A clone of this repository.
 
-1. Deploy the environment (if not already):
+---
+
+## Part 1 — Deploy the application
+
+**What you will do:** deploy ContosoPay and all its supporting Azure services
+with a single command.
+
+1. Sign in to Azure and select your subscription:
+
+   ```bash
+   az login
+   az account set --subscription "<your-subscription>"
+   ```
+
+2. Create your variables file from the example (no secrets — placeholders only):
 
    ```bash
    cp terraform.tfvars.example terraform.tfvars
-   ./scripts/deploy.sh -s "<your-subscription>"     # or pwsh ./scripts/deploy.ps1
    ```
 
-2. Complete [`sre-agent-setup.md`](sre-agent-setup.md) §1–§5 with **Privileged**
-   access, then §A1 above.
-3. Open the frontend and tick **"Generate steady traffic"** so baseline telemetry
-   flows into Application Insights.
+   The defaults deploy to **Sweden Central** and enable Grafana. You can edit the
+   region or prefix if you like.
 
-### 1. Set the scene (2 min)
+3. Run the deployment:
 
-- Open the **frontend URL** — ContosoPay checkout. Place an order; show the
-  confirmed response (frontend → checkout-api → payment-service).
-- Show the architecture: only the frontend is public; `checkout-api` and
-  `payment-service` are internal-only Container Apps with managed identity, ACR
-  pull without admin keys, and Key Vault-sourced secrets.
-- Open **Application Insights / Grafana** — healthy request rate, latency, and a
-  flat `process_memory_rss_bytes` for payment-service.
+   ```bash
+   ./scripts/deploy.sh                 # Bash
+   # or
+   pwsh ./scripts/deploy.ps1           # PowerShell
+   ```
 
-### 2. Trigger the incident (1 min)
+   The script provisions the platform, builds and pushes the three container
+   images, and then deploys the application.
 
-```bash
-./scripts/trigger-incident-direct.sh          # bash / Git Bash / WSL
-# or, on Windows PowerShell:
-pwsh ./scripts/trigger-incident-direct.ps1
+**What is happening:** Terraform creates the resource group, container registry,
+Key Vault, Application Insights, Log Analytics, the Container Apps environment,
+the Azure Monitor memory alert, and Grafana. The three services are then built
+and deployed. Secrets stay in Key Vault and are read by the apps through a
+managed identity.
+
+**Expected outcome:** when the script finishes it prints a summary similar to:
+
+```
+ContosoPay demo deployed
+  Frontend URL : https://frontend.<region>.azurecontainerapps.io
+  Resource grp : rg-contosopay-demo-<suffix>
+  Grafana      : https://graf-<suffix>.<region>.grafana.azure.com
 ```
 
-- This runs a single `az containerapp update` that sets `ENABLE_SLOW_LEAK=true`
-  on the live `payment-service` app — a new revision rolls out immediately.
-- Talk track: "Someone just toggled a risky feature flag straight on the running
-  service. Let's see what the SRE Agent does."
+Note the **Frontend URL** and **Resource group** — you will use them throughout.
 
-### 3. Detection (return after memory climbs)
+4. Open the **Frontend URL** in a browser, place a test order, and tick
+   **"Generate steady traffic"**. This produces a steady stream of telemetry into
+   Application Insights so the agent has a healthy baseline to compare against.
 
-- In Application Insights, `process_memory_rss_bytes` / working-set memory for
-  payment-service trends up.
-- The **Azure Monitor alert** (`alert-payment-memory-*`) fires. The SRE Agent's
-  **incident scanner** (a ~1-minute poll of the Alerts API) picks it up and opens
-  an investigation thread.
+---
 
-### 4. Investigation & root cause (the star moment)
+## Part 2 — Create the SRE Agent
 
-- The agent correlates the memory trend with the recent change and produces an
-  **explainable root-cause hypothesis** — memory growth began right after
-  `ENABLE_SLOW_LEAK` was turned on for the payment-service revision.
+**What you will do:** create the managed SRE Agent that will watch this
+environment.
 
-### 5. Remediation on the spot (human approval)
+1. Go to <https://sre.azure.com> and sign in with your Azure account.
+2. Start the create-agent wizard and fill in the **Basics**:
 
-- The agent **proposes a mitigation** — restart the leaking revision and/or set
-  `ENABLE_SLOW_LEAK=false` — and waits.
-- **Approve it** in the agent UI. The agent executes the Azure action directly
-  (it has Privileged access), rolls a fresh revision, and memory recovers.
-- Talk track: "Diagnosed, proposed, and — once a human said yes — fixed in
-  seconds, all from the agent."
+   | Field | Value |
+   | --- | --- |
+   | **Subscription** | The subscription that owns `rg-contosopay-demo-<suffix>`. |
+   | **Resource group** | Create a new, dedicated group such as `rg-sre-agent` (keep it separate from the demo resources). |
+   | **Agent name** | A name of your choice, for example `contosopay-sre-agent`. |
+   | **Region** | **Sweden Central**, to match the demo and stay inside the EU Data Boundary. |
+   | **Application Insights** | Create new (this is the agent's own telemetry). |
 
-### 6. Proactive & conversational
+3. Review and create. Provisioning takes a few minutes.
 
-- Show a **scheduled health-check** task posting results to Teams/Slack.
-- Ask the agent **natural-language questions** ("What changed before this
-  incident?", "Which app owns the most memory right now?").
+**Expected outcome:** the agent's status becomes **Succeeded**. The wizard
+creates the agent, a managed identity, and a Log Analytics workspace and
+Application Insights instance for the agent itself.
 
-### 7. Memory / pattern awareness
+---
 
-- Re-arm with `./scripts/trigger-incident-direct.sh` and show the agent resolving
-  faster, recognising the now-familiar pattern.
+## Part 3 — Connect the agent
 
-### 8. Reset / clean up
+The agent now exists but cannot yet see your code, your resources, or your
+alerts. You will connect all three.
+
+### 3a. Connect your source code
+
+**What you will do:** let the agent read this repository so it can link the
+incident to the change that caused it.
+
+1. On the agent setup page, find the **Code** card and select **+**.
+2. Choose **GitHub**, sign in, and approve access.
+3. Select the **`rutgerpels/sreagent`** repository and add it.
+
+**Expected outcome:** the **Code** card shows the repository with a green check
+and begins indexing.
+
+### 3b. Grant access to the demo resources
+
+**What you will do:** give the agent permission to investigate **and act on** the
+demo resource group. In this scenario the agent is allowed to make changes, so it
+needs write-level access.
+
+1. On the setup page, find the **Azure Resources** card and select **+**.
+2. Choose **Resource groups** and select **`rg-contosopay-demo-<suffix>`**.
+3. Grant it **Privileged** access (this allows the agent to apply fixes) **and**
+   **Monitoring Contributor** (this allows the alert scanner to read fired
+   alerts).
+
+**Expected outcome:** the **Azure Resources** card lists the demo resource group.
+The matching role assignments are created automatically within a few seconds.
+
+### 3c. Connect Azure Monitor
+
+**What you will do:** tell the agent to watch Azure Monitor for incidents.
+
+1. In the agent, open **Builder → Incident platform**.
+2. Choose **Azure Monitor** and save.
+
+**What is happening:** the agent begins polling the Azure Monitor Alerts API
+about once a minute for fired alerts in the resource group it can read.
+
+**Expected outcome:** Azure Monitor shows as **Connected**.
+
+---
+
+## Part 4 — Set up the response plan
+
+**What you will do:** create the rule that tells the agent how to respond when
+the memory alert fires.
+
+1. From the incident platform page, select **Create a response plan**.
+2. Configure it:
+
+   | Setting | Value |
+   | --- | --- |
+   | **Severity filter** | Include **Sev2 / Warning** (the demo's memory alert is severity 2). |
+   | **Response agent** | **Default agent**. |
+   | **Autonomy level** | **Review** — the agent diagnoses the problem and **proposes** a fix, then waits for your approval before acting. |
+
+**What is happening:** because the agent has Privileged access and Review
+autonomy, when the incident fires it will propose a concrete Azure action (such
+as switching the fault off or restarting the affected revision) and pause for a
+human decision.
+
+**Expected outcome:** the response plan is saved and active. Your environment is
+now fully wired.
+
+---
+
+## Part 5 — Run the incident
+
+**What you will do:** switch the planted fault on and watch the agent handle the
+incident end to end.
+
+### 5a. Switch the fault on
+
+Run the trigger script from the repository root:
 
 ```bash
-./scripts/trigger-incident-direct.sh --reset     # set ENABLE_SLOW_LEAK=false on the live app
-./scripts/teardown.sh -s "<your-subscription>"   # remove everything
+./scripts/trigger-incident-direct.sh           # Bash
+# or
+pwsh ./scripts/trigger-incident-direct.ps1     # PowerShell
+```
+
+**What is happening:** the script makes a single change to the running
+payment-service, turning the memory-leak feature flag on. The change takes effect
+immediately on the live service.
+
+**Expected outcome:** the script confirms the flag is set. From this point the
+payment-service's memory begins to climb.
+
+### 5b. Watch the memory climb and the alert fire
+
+Open **Application Insights** (or the **Grafana** dashboard) for the demo and look
+at the payment-service's memory. Over roughly 30–40 minutes it trends steadily
+upward. When it crosses the threshold, the **Azure Monitor alert**
+(`alert-payment-memory-<suffix>`) fires.
+
+This is a good moment to take a short break or walk through the architecture.
+
+**Expected outcome:** the alert moves to a fired state, and within about a minute
+the agent opens an investigation for it.
+
+### 5c. Watch the investigation and root cause
+
+Open the investigation in the agent. The agent correlates the rising memory with
+the recent change and produces a clear root-cause explanation: memory began
+growing right after the leak feature flag was switched on for the payment
+service.
+
+**Expected outcome:** the agent presents an explainable hypothesis rather than a
+generic alert.
+
+### 5d. Approve the fix
+
+The agent proposes a remediation — switching the fault off and/or restarting the
+affected revision — and waits.
+
+**Approve it** in the agent. The agent applies the change directly (it has
+Privileged access), a fresh revision rolls out, and memory returns to normal.
+
+**Expected outcome:** the agent reports the action it took, the alert resolves,
+and payment-service memory flattens back to the baseline.
+
+### 5e. (Optional) Show it again
+
+Run the trigger script a second time to show the agent recognising the now
+familiar pattern and resolving it faster.
+
+---
+
+## Part 6 — Reset and clean up
+
+**Reset the fault** (return the service to a healthy state without removing the
+environment):
+
+```bash
+./scripts/trigger-incident-direct.sh --reset
+# or
+pwsh ./scripts/trigger-incident-direct.ps1 -Reset
+```
+
+**Remove the ContosoPay environment** when you are finished:
+
+```bash
+./scripts/teardown.sh -s "<your-subscription>"
+```
+
+**Remove the SRE Agent** (it is separate from the demo's Terraform):
+
+```bash
+az group delete --name rg-sre-agent --yes
 ```
 
 ---
 
-## A3. Mapping to Azure SRE Agent capabilities
+## How this maps to Azure SRE Agent capabilities
 
-| Demo moment | SRE Agent capability |
+| Step | Capability shown |
 | --- | --- |
-| Step 3 | Detect incident from Azure Monitor / alerts |
-| Step 4 | Correlate telemetry with the originating change; explainable root cause |
-| Step 5 | **Directly** remediate the Azure resource after human approval (Privileged access, Review mode) |
-| Step 6 | Proactive scheduled health checks; natural-language Q&A |
-| Step 7 | Pattern-aware, faster repeat resolution |
-
----
-
-## A4. Troubleshooting (Scenario A)
-
-| Symptom | Cause / fix |
-| --- | --- |
-| Agent sees the RG but can't run the mitigation | It only has Reader/Monitoring Contributor. Re-run common-setup §4 and grant **Privileged (`High`)** on `rg-contosopay-demo-<suffix>`. |
-| Agent opens a PR instead of fixing directly | You applied the Scenario B Tool Access Policy / `gitops-remediation` agent. For Scenario A, route the response plan to the **default agent** and remove the global deny policy. |
-| `trigger-incident-direct` can't find the app | Pass `-g <rg> -p <payment-app>` (PowerShell: `-ResourceGroup`/`-PaymentApp`), or run it from the repo root so `terraform output` resolves the names. |
-
-See [`sre-agent-setup.md`](sre-agent-setup.md) §7 for common troubleshooting.
+| 5b | Detects an incident from an Azure Monitor alert. |
+| 5c | Correlates telemetry with the change that caused it and explains the root cause. |
+| 5d | Applies a fix to the Azure resource directly, after human approval. |
+| 5e | Recognises a repeated pattern and resolves it faster. |
