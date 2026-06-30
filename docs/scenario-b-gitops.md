@@ -57,7 +57,9 @@ Because the heavy lifting happens in CI, you need very little installed locally:
   grant it roles in Part 1.
 - The [Azure CLI](https://learn.microsoft.com/cli/azure/) and the
   [GitHub CLI](https://cli.github.com/) (`gh`), both signed in.
-- A Bash shell or PowerShell 7+.
+- A shell to run the Part 1 commands: **PowerShell 7+** on Windows, or **Bash** on
+  macOS, Linux, WSL, or [Azure Cloud Shell](https://shell.azure.com). (On Windows,
+  avoid Git Bash for these `az` commands.)
 - A clone of this repository, and permission to run GitHub Actions and to open and
   merge Pull Requests on it.
 
@@ -83,39 +85,31 @@ thing: sign in, create an app registration, add federated credentials for the
 three variables the workflows read. Replace `<your-org>/<your-repo>` and
 `<your-subscription>` first.
 
-> **Why two versions?** Bash and PowerShell assign variables differently —
-> `SUB=$(az ...)` is Bash syntax and will fail in PowerShell with
-> *"is not recognized as a name of a cmdlet"*. In PowerShell you write
-> `$SUB = az ...` instead.
-
-> **Git Bash on Windows — two quirks to know.** Both are already handled in the
-> block below, and the workarounds are harmless on macOS/Linux, so you can use the
-> block as-is everywhere:
+> **Which block do I use?**
+> - On **macOS, Linux, WSL, or Azure Cloud Shell**, use the **Bash** block.
+> - On **Windows**, use the **PowerShell** block.
 >
-> 1. `az ... -o tsv` returns values with a trailing carriage return (`\r`). Left in
->    place, scopes such as `/subscriptions/$SUB` become invalid and Azure replies
->    *"MissingSubscription"*. Every capture below pipes through `| tr -d '\r'`.
-> 2. Git Bash rewrites any argument that **starts with `/`** into a Windows path
->    before passing it to `az` (MSYS path conversion), which also corrupts
->    `--scope "/subscriptions/..."` and yields *"MissingSubscription"*. Setting
->    `export MSYS_NO_PATHCONV=1` once disables this for the session.
+> Bash and PowerShell assign variables differently — `SUB=$(az ...)` is Bash syntax
+> and fails in PowerShell with *"is not recognized as a name of a cmdlet"*; in
+> PowerShell you write `$SUB = az ...` instead.
+>
+> **Windows users:** run these in **PowerShell**, **WSL**, or **Azure Cloud Shell**
+> (<https://shell.azure.com>). Avoid Git Bash for this step — it rewrites
+> `/subscriptions/...` scopes and mangles `az` output, which produces confusing
+> *"MissingSubscription"* errors.
 
-### Bash / macOS / Linux / WSL / Git Bash
+### Bash (macOS / Linux / WSL / Azure Cloud Shell)
 
 ```bash
 az login
 az account set --subscription "<your-subscription>"
 
-# Git Bash on Windows: stop MSYS rewriting /subscriptions/... into a Windows path.
-# Harmless on macOS/Linux.
-export MSYS_NO_PATHCONV=1
-
 REPO="<your-org>/<your-repo>"
-SUB=$(az account show --query id -o tsv | tr -d '\r')
-TENANT=$(az account show --query tenantId -o tsv | tr -d '\r')
+SUB=$(az account show --query id -o tsv)
+TENANT=$(az account show --query tenantId -o tsv)
 
 # App registration + service principal
-APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv | tr -d '\r')
+APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv)
 az ad sp create --id "$APP_ID"
 
 # Federated credentials: main branch (workflow_dispatch) and pull requests
