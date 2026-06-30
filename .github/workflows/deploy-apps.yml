@@ -1,0 +1,90 @@
+name: deploy-apps
+
+# Build the three ContosoPay images and roll them out to Container Apps.
+# Authentication is OIDC-only (no stored credentials, no creds JSON blob).
+#
+# The operator configures these GitHub Actions *variables* (Settings > Secrets
+# and variables > Actions > Variables) after running scripts/deploy.* once:
+#   AZURE_CLIENT_ID          - app registration / managed identity client id
+#   AZURE_TENANT_ID          - tenant id
+#   AZURE_SUBSCRIPTION_ID    - subscription id
+#   AZURE_RESOURCE_GROUP     - terraform output resource_group_name
+#   ACR_NAME                 - terraform output acr_name
+#   FRONTEND_APP             - terraform output frontend_app_name
+#   CHECKOUT_APP             - terraform output checkout_app_name
+#   PAYMENT_APP              - terraform output payment_app_name
+# A federated credential must trust this repo (subject repo:OWNER/REPO:ref:...).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - ".github/workflows/deploy-apps.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for OIDC token
+  contents: read
+
+concurrency:
+  group: deploy-apps-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: frontend
+            app_var: FRONTEND_APP
+          - service: checkout-api
+            app_var: CHECKOUT_APP
+          - service: payment-service
+            app_var: PAYMENT_APP
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve image tag
+        id: tag
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: ACR login
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Build and push image
+        env:
+          ACR: ${{ vars.ACR_NAME }}
+          SVC: ${{ matrix.service }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LOGIN_SERVER="${ACR}.azurecr.io"
+          docker build -t "${LOGIN_SERVER}/${SVC}:${TAG}" -t "${LOGIN_SERVER}/${SVC}:latest" "src/${SVC}"
+          docker push "${LOGIN_SERVER}/${SVC}:${TAG}"
+          docker push "${LOGIN_SERVER}/${SVC}:latest"
+
+      - name: Update Container App revision
+        env:
+          ACR: ${{ vars.ACR_NAME }}
+          SVC: ${{ matrix.service }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars[matrix.app_var] }}
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --name "${APP_NAME}" \
+            --resource-group "${RG}" \
+            --image "${ACR}.azurecr.io/${SVC}:${TAG}"

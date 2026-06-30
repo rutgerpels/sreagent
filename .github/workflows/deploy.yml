@@ -1,0 +1,193 @@
+name: deploy
+
+# Full GitOps deploy of the ContosoPay environment from CI/CD.
+#
+# This is the Scenario B "deploy from the beginning with CI/CD" entry point. It
+# does exactly what scripts/deploy.* does locally, but in GitHub Actions over
+# OIDC (no stored credentials):
+#   1. Bootstrap the remote Terraform state storage (idempotent).
+#   2. terraform apply (phase 1): platform only -- no apps yet (images don't exist).
+#   3. Build + push the three container images to ACR.
+#   4. terraform apply (phase 2): the three Container Apps + alert, on the new tag.
+#   5. Publish the resulting URLs / names to the job summary.
+#
+# Run it from the Actions tab (Run workflow). It is intentionally manual
+# (workflow_dispatch) so a fresh environment is only ever stood up on purpose.
+#
+# One-time bootstrap the operator must do first (see docs/scenario-b-gitops.md
+# "Part 0"): create the deployment identity, add federated credentials trusting
+# this repo, grant it Contributor + Storage Blob Data Contributor on the
+# subscription, and set these GitHub Actions *variables*:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+# Optional (defaults shown): TF_PREFIX (contosopay), TF_ENVIRONMENT (demo),
+#   TF_LOCATION (swedencentral).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: "Resource name prefix"
+        required: false
+        default: "contosopay"
+      environment:
+        description: "Environment label (dev | demo | test)"
+        required: false
+        default: "demo"
+      location:
+        description: "Azure region"
+        required: false
+        default: "swedencentral"
+
+permissions:
+  id-token: write # required for OIDC
+  contents: read
+
+concurrency:
+  group: deploy-environment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
+      TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+      TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Compute backend config + bootstrap state storage
+        id: backend
+        run: |
+          set -euo pipefail
+          # Deterministic, non-identifying remote-state names (match scripts/deploy.*).
+          STATE_RG="rg-${TF_PREFIX}-tfstate"
+          STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${TF_PREFIX}" | sha256sum | cut -c1-16)"
+          STATE_SA="sttf${STATE_HASH}"
+          STATE_CONTAINER="tfstate"
+          STATE_KEY="${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
+
+          echo "==> Ensuring remote state storage (${STATE_SA})"
+          az group create --name "${STATE_RG}" --location "${TF_LOCATION}" \
+            --tags project=sre-agent-demo env="${TF_ENVIRONMENT}" managed_by=terraform --output none
+          if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
+            az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
+              --location "${TF_LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+              --allow-blob-public-access false --https-only true \
+              --tags project=sre-agent-demo env="${TF_ENVIRONMENT}" managed_by=terraform --output none
+          fi
+          created="false"
+          for _ in $(seq 1 12); do
+            if az storage container create --name "${STATE_CONTAINER}" --account-name "${STATE_SA}" \
+              --auth-mode login --output none 2>/dev/null; then created="true"; break; fi
+            sleep 10
+          done
+          [[ "${created}" == "true" ]] || { echo "Could not create state container (check the identity has Storage Blob Data Contributor)." >&2; exit 1; }
+
+          {
+            echo "state_rg=${STATE_RG}"
+            echo "state_sa=${STATE_SA}"
+            echo "state_container=${STATE_CONTAINER}"
+            echo "state_key=${STATE_KEY}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init (remote state)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
+            -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
+            -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
+            -backend-config="key=${{ steps.backend.outputs.state_key }}"
+
+      - name: Terraform apply (phase 1 -- platform, no apps yet)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform apply -input=false -auto-approve \
+            -var 'deploy_apps=false' \
+            -var "prefix=${TF_PREFIX}" \
+            -var "environment=${TF_ENVIRONMENT}" \
+            -var "location=${TF_LOCATION}"
+
+      - name: Build and push images
+        working-directory: infra
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACR_NAME="$(terraform output -raw acr_name)"
+          ACR_LOGIN_SERVER="$(terraform output -raw acr_login_server)"
+          az acr login --name "${ACR_NAME}"
+          for svc in frontend checkout-api payment-service; do
+            docker build \
+              -t "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}" \
+              -t "${ACR_LOGIN_SERVER}/${svc}:latest" \
+              "../src/${svc}"
+            docker push "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}"
+            docker push "${ACR_LOGIN_SERVER}/${svc}:latest"
+          done
+
+      - name: Terraform apply (phase 2 -- container apps + alert)
+        working-directory: infra
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          terraform apply -input=false -auto-approve \
+            -var 'deploy_apps=true' \
+            -var "image_tag=${IMAGE_TAG}" \
+            -var "prefix=${TF_PREFIX}" \
+            -var "environment=${TF_ENVIRONMENT}" \
+            -var "location=${TF_LOCATION}"
+
+      - name: Publish outputs
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          FRONTEND_URL="$(terraform output -raw frontend_url)"
+          RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
+          ACR_NAME="$(terraform output -raw acr_name)"
+          FRONTEND_APP="$(terraform output -raw frontend_app_name)"
+          CHECKOUT_APP="$(terraform output -raw checkout_app_name)"
+          PAYMENT_APP="$(terraform output -raw payment_app_name)"
+          GRAFANA="$(terraform output -raw grafana_endpoint 2>/dev/null || true)"
+          {
+            echo "## ContosoPay environment deployed"
+            echo ""
+            echo "| Output | Value |"
+            echo "| --- | --- |"
+            echo "| Frontend URL | ${FRONTEND_URL} |"
+            echo "| Resource group | ${RESOURCE_GROUP} |"
+            [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "| Grafana | ${GRAFANA} |"
+            echo ""
+            echo "### Set these GitHub Actions *variables* so deploy-apps.yml can ship code changes:"
+            echo ""
+            echo "| Variable | Value |"
+            echo "| --- | --- |"
+            echo "| AZURE_RESOURCE_GROUP | ${RESOURCE_GROUP} |"
+            echo "| ACR_NAME | ${ACR_NAME} |"
+            echo "| FRONTEND_APP | ${FRONTEND_APP} |"
+            echo "| CHECKOUT_APP | ${CHECKOUT_APP} |"
+            echo "| PAYMENT_APP | ${PAYMENT_APP} |"
+          } >> "$GITHUB_STEP_SUMMARY"

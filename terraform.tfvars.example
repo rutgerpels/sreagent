@@ -1,0 +1,37 @@
+###############################################################################
+# ContosoPay / Azure SRE Agent demo — EXAMPLE variables.
+# Copy this file to `terraform.tfvars` and adjust. NEVER commit terraform.tfvars.
+# Contains placeholders only — no real subscription IDs, tenant IDs, or secrets.
+###############################################################################
+
+# Short, non-identifying prefix used to build globally-unique resource names.
+# A random suffix is appended automatically (see infra/main.tf).
+prefix = "contosopay"
+
+# Deployment environment label (free text): dev | demo | test
+environment = "demo"
+
+# Azure region. Co-locate with an SRE Agent region where possible.
+# SRE Agent preview regions: eastus2, canadacentral, swedencentral, uksouth,
+# francecentral, koreacentral, australiaeast.
+location = "swedencentral"
+
+# Deploy Azure Managed Grafana (adds cost). true for the full demo experience.
+enable_grafana = true
+
+# Optional: pin a specific image tag pushed to ACR. The deploy script overrides
+# this with the freshly-built tag. Leave as "latest" for first apply.
+image_tag = "latest"
+
+# Optional CIDR allow-list for the public frontend ingress. Empty = allow all.
+# frontend_allowed_ips = ["203.0.113.0/24"]
+
+# --- Optional: provision the two SRE Agents in Terraform (preview) ----------
+# Off by default. When true, also set sre_agent_sponsor_group_id. This creates
+# agent-a (High/Contributor, Scenario A) and agent-b (Low/Reader, Scenario B)
+# with Monitoring Contributor + Azure Monitor wired. The GitHub OAuth, tool
+# access policy, custom agent, and response plan still get set up in the portal.
+# enable_sre_agents          = true
+# sre_agent_sponsor_group_id = "00000000-0000-0000-0000-000000000000"  # Entra group object id (do NOT commit a real one)
+# sre_agent_model_provider   = "MicrosoftFoundry"   # or "Anthropic" outside EU
+# sre_agent_model_name       = "gpt-5"

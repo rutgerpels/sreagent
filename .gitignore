@@ -9,6 +9,9 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+# leak.auto.tfvars is the committed, non-secret GitOps source of truth for the
+# planted memory-leak flag (CI applies it on merge). It contains no secrets.
+!infra/leak.auto.tfvars
 override.tf
 override.tf.json
 *_override.tf
