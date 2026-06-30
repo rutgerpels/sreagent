@@ -86,7 +86,25 @@ jobs:
             echo "state_key=${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Check remote state exists
+        id: state
+        run: |
+          set -euo pipefail
+          # Preflight guard: apply-infra only runs against an environment that the
+          # 'deploy' workflow has already provisioned (it creates the remote-state
+          # storage account). On the initial bootstrap merge the state account does
+          # not exist yet, so skip the apply steps cleanly and keep the run green.
+          if az storage account show \
+               --name "${{ steps.backend.outputs.state_sa }}" \
+               --resource-group "${{ steps.backend.outputs.state_rg }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Remote Terraform state not found yet. Run the 'deploy' workflow first to create the environment; skipping apply-infra."
+          fi
+
       - name: Terraform init (remote state)
+        if: steps.state.outputs.exists == 'true'
         working-directory: infra
         run: |
           set -euo pipefail
@@ -97,6 +115,7 @@ jobs:
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
       - name: Terraform apply
+        if: steps.state.outputs.exists == 'true'
         working-directory: infra
         run: |
           set -euo pipefail
@@ -108,6 +127,7 @@ jobs:
             -var "location=${TF_LOCATION}"
 
       - name: Report leak state
+        if: steps.state.outputs.exists == 'true'
         working-directory: infra
         run: |
           echo "enable_slow_leak applied. Current payment-service revision will reflect the flag."
