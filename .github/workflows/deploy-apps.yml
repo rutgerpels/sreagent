@@ -34,6 +34,12 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    # Preflight guard: this workflow only ships app changes to an *existing*
+    # environment. ACR_NAME is set from the deploy workflow's run summary after
+    # the environment is first created. Until then (e.g. the initial bootstrap
+    # merge) the job skips cleanly so the run stays green instead of failing at
+    # ACR login.
+    if: ${{ vars.ACR_NAME != '' }}
     strategy:
       fail-fast: false
       matrix:

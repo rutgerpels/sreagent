@@ -131,6 +131,8 @@ az role assignment create --assignee "$APP_ID" --role "Contributor" \
   --scope "/subscriptions/$SUB"
 az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" \
   --scope "/subscriptions/$SUB"
+az role assignment create --assignee "$APP_ID" --role "User Access Administrator" \
+  --scope "/subscriptions/$SUB"
 
 # GitHub Actions variables the workflows read
 gh variable set AZURE_CLIENT_ID       --repo "$REPO" --body "$APP_ID"
@@ -180,6 +182,8 @@ az role assignment create --assignee $APP_ID --role "Contributor" `
   --scope "/subscriptions/$SUB"
 az role assignment create --assignee $APP_ID --role "Storage Blob Data Contributor" `
   --scope "/subscriptions/$SUB"
+az role assignment create --assignee $APP_ID --role "User Access Administrator" `
+  --scope "/subscriptions/$SUB"
 
 # GitHub Actions variables the workflows read
 gh variable set AZURE_CLIENT_ID       --repo $REPO --body $APP_ID
@@ -188,8 +192,12 @@ gh variable set AZURE_SUBSCRIPTION_ID --repo $REPO --body $SUB
 ```
 
 In both versions, **Contributor** lets the pipeline create and manage the demo
-resources, and **Storage Blob Data Contributor** lets it read and write the
-Terraform state that the first pipeline run creates.
+resources, **Storage Blob Data Contributor** lets it read and write the Terraform
+state that the first pipeline run creates, and **User Access Administrator** lets
+it assign the managed-identity roles the apps need (for example `AcrPull` and
+`Key Vault Secrets User`). Without **User Access Administrator** the deploy fails
+partway with *"does not have authorization to perform action
+'Microsoft.Authorization/roleAssignments/write'"*.
 
 **Expected outcome:** the repository's **Settings → Secrets and variables →
 Actions → Variables** lists `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
