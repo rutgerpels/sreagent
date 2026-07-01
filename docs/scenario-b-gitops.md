@@ -335,11 +335,14 @@ files live in the [`agent/`](../agent/) folder of this repository.
 **What you will do:** apply a global policy that denies Azure write commands, so
 the agent cannot change live resources even if asked.
 
-1. Open **Builder → Settings → Tool access policies** (global scope).
+1. Open the agent's **Settings → Permissions** (global scope). This is a
+   top-level agent setting, **not** under Builder — older portal builds labelled
+   it **Builder → Settings → Tool access policies**.
 2. Apply the policy in
-   [`agent/tool-access-policy.json`](../agent/tool-access-policy.json). It allows
-   read commands and denies Azure CLI writes, Kubernetes writes, and shell
-   commands.
+   [`agent/tool-access-policy.json`](../agent/tool-access-policy.json): add its
+   entries to the global **allow / ask / deny** lists. It allows read commands and
+   denies Azure CLI writes, Kubernetes writes, and shell commands (e.g.
+   `RunAzCliWriteCommands`, `bash(az * delete *)`).
 
 **What is happening:** combined with the Reader access from Part 4c, the agent now
 has neither the permission nor the tooling to write to Azure — two independent
@@ -347,10 +350,13 @@ guardrails.
 
 ### 5b. Add the GitOps behaviour (custom agent)
 
-1. Open **Builder → Custom agents → New**.
-2. Name it `gitops-remediation` and paste the instructions from
-   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md).
-3. Give it the **GitHub Connector** and **Code Access** tools, and save.
+1. Open **Builder → Agent Canvas**, then select **Create → Custom Agent**.
+   (In older portal builds this was **Builder → Custom agents → New**.)
+2. Set **Name** to `gitops-remediation` and paste the instructions from
+   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
+   into the **Instructions** field.
+3. Under **Built-in Tools / Custom Tools**, enable the **GitHub Connector** and
+   **Code Access**, and save.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -358,7 +364,9 @@ Request, not to run commands against Azure.
 ### 5c. Add the runbook (knowledge)
 
 Add [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md)
-under **Builder → Knowledge → Add**. This tells the agent that the memory leak is
+under **Builder → Knowledge Sources → Add** (or attach it directly on the
+`gitops-remediation` agent in **Agent Canvas** via its **Knowledge base**
+option). This tells the agent that the memory leak is
 controlled by the `enable_slow_leak` setting in `infra/leak.auto.tfvars`, so its
 Pull Request edits the right file.
 
