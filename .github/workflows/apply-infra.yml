@@ -30,10 +30,16 @@ name: apply-infra
 on:
   push:
     branches: [main]
+    # Deliberately scoped to ONLY the planted leak toggle. This workflow is the
+    # GitOps loop for Scenario B (flip enable_slow_leak on/off via PR); it is NOT
+    # how the environment is stood up -- that is the manual 'deploy' workflow,
+    # which also builds and pushes the container images. Triggering on every
+    # infra/**.tf change would run a full `terraform apply` on unrelated edits
+    # (provider bumps, new resources, etc.), and against an empty/undeployed
+    # state it would try to recreate the whole environment with an image tag that
+    # has never been pushed -- which fails. Keep the trigger narrow.
     paths:
       - "infra/leak.auto.tfvars"
-      - "infra/**.tf"
-      - ".github/workflows/apply-infra.yml"
   workflow_dispatch:
 
 permissions:
@@ -114,8 +120,26 @@ jobs:
             -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
-      - name: Terraform apply
+      - name: Check state has resources
+        id: statecontent
         if: steps.state.outputs.exists == 'true'
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          # Second guard: the state storage account can exist while the state
+          # itself is empty (e.g. after a full teardown that keeps the state RG).
+          # Applying against empty state would recreate the ENTIRE environment
+          # from scratch -- with an image tag that was never pushed -- and fail.
+          # Only apply the leak toggle when there is an environment to apply it to.
+          if [ -n "$(terraform state list)" ]; then
+            echo "populated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "populated=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Terraform state is empty (no environment deployed). Run the 'deploy' workflow first; skipping apply-infra."
+          fi
+
+      - name: Terraform apply
+        if: steps.statecontent.outputs.populated == 'true'
         working-directory: infra
         run: |
           set -euo pipefail
@@ -127,7 +151,7 @@ jobs:
             -var "location=${TF_LOCATION}"
 
       - name: Report leak state
-        if: steps.state.outputs.exists == 'true'
+        if: steps.statecontent.outputs.populated == 'true'
         working-directory: infra
         run: |
           echo "enable_slow_leak applied. Current payment-service revision will reflect the flag."
