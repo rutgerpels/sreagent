@@ -360,15 +360,82 @@ The policy to apply (from
 }
 ```
 
-Apply it at the **global** scope (only the global scope may *deny*), using
-whichever is available in your build:
+Apply it at the **global** scope (only the global scope may *deny*). If your
+portal build shows a **Settings → Permissions** page, add the `allow` / `deny`
+entries there. Most builds don't yet, so the reliable method is the **API**,
+described step by step below (no prior API experience needed).
 
-- **Portal:** open the agent's **Settings → Permissions** and add the `allow` /
-  `deny` entries above. (Newer builds only; if there is no **Permissions** item
-  under Settings, use the API instead.)
-- **API:** `PUT https://<your-agent-endpoint>/api/v2/agent/settings/global` with
-  the JSON above as the body. See
-  [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies).
+#### Apply the policy with the API (step by step)
+
+You will use **Azure Cloud Shell** — a browser terminal that already has the
+Azure CLI installed and is already signed in as you, so there is nothing to set
+up locally. (This also sidesteps the Windows shell issues in Part 1.)
+
+You need to be an **Administrator** on the SRE Agent (global tool policies are an
+admin-only setting).
+
+1. **Open Azure Cloud Shell.** Go to [https://shell.azure.com](https://shell.azure.com)
+   (or select the `>_` icon in the top bar of the Azure portal). If prompted,
+   choose **Bash**.
+
+2. **Find your agent's host name.** It looks like `myagent.sre.azure.com`. Two
+   easy ways to get it:
+   - Copy it from the **address bar** of the agent portal you are already using
+     — the part between `https://` and the first `/`, ending in `.sre.azure.com`; or
+   - In the agent, open **Builder → HTTP triggers**, open any trigger, and copy
+     the host from its **Trigger URL** (`https://<host>/api/v1/httptriggers/...`).
+
+   Then store it in a variable (paste your own host):
+
+   ```bash
+   AGENT_HOST="myagent.sre.azure.com"
+   ```
+
+3. **Get an access token** for the SRE Agent API. The `--resource` GUID is the
+   fixed SRE Agent application ID (the audience the API expects) — copy it exactly:
+
+   ```bash
+   TOKEN=$(az account get-access-token \
+     --resource 59f0a04a-b322-4310-adc9-39ac41e9631e \
+     --query accessToken -o tsv)
+   ```
+
+   (The token lasts about an hour. If a later call returns `401`, just re-run
+   this line to get a fresh one.)
+
+4. **Apply the policy** with a `PUT` request:
+
+   ```bash
+   curl -X PUT "https://$AGENT_HOST/api/v2/agent/settings/global" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "permissions": {
+         "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+         "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+       }
+     }'
+   ```
+
+   A `2xx` response (for example `200`) means it was accepted.
+
+5. **Verify** the policy is stored by reading it back:
+
+   ```bash
+   curl -s "https://$AGENT_HOST/api/v2/agent/settings/global" \
+     -H "Authorization: Bearer $TOKEN" | jq .
+   ```
+
+   You should see your `allow` and `deny` lists in the response.
+
+**Troubleshooting:**
+- `401 Unauthorized` → token expired or missing; re-run step 3.
+- `403 Forbidden` → your account isn't an **Administrator** on the agent.
+- `404 Not Found` → the `AGENT_HOST` is wrong; re-check step 2 (it must end in
+  `.sre.azure.com`, with no `https://` or trailing `/`).
+
+See [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
+for the full API reference.
 
 **What is happening:** combined with the Reader access from Part 4c, the agent now
 has neither the permission nor the tooling to write to Azure — two independent
