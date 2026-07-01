@@ -335,12 +335,19 @@ files live in the [`agent/`](../agent/) folder of this repository.
 **What you will do:** apply a global policy that denies Azure write commands, so
 the agent cannot change live resources even if asked.
 
-> **This step is defense-in-depth, not required.** The primary write-block is
-> already in place from **Part 4c** (the agent's permission level is **Reader**,
-> so it holds no Azure *write* RBAC) plus the **Review** run mode (every action
-> waits for approval). The tool access policy below is a second, independent
-> guardrail. If your portal build does not expose the global policy UI, you can
-> safely skip this and continue — or apply it via the API.
+> **This step is defense-in-depth, not required — feel free to skip it.** The
+> primary write-block is already in place from **Part 4c** (the agent's permission
+> level is **Reader**, so it holds no Azure *write* RBAC) plus the **Review** run
+> mode (every action waits for approval). The tool access policy below is a second,
+> independent guardrail and does **not** change how the demo behaves.
+>
+> The API method needs a *user* token for the SRE Agent audience. In many tenants
+> **Azure Cloud Shell cannot get one** — its Managed Identity rejects the custom
+> audience, and the `az login --scope …/.default` fallback uses the device-code
+> flow, which **Conditional Access / MFA policies often block** (*"Your sign-in was
+> successful but does not meet the criteria to access this resource"*). If you hit
+> either, **just skip this step** — Reader + Review already covers you. Only pursue
+> the API from a machine with an unrestricted interactive `az login`.
 
 > **Two different "Settings" — don't confuse them.** The **Settings → Azure
 > Settings / Managed Resources** page (Basics, Managed Resources, Azure Settings,
