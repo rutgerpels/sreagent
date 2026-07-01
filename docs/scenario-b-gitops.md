@@ -407,6 +407,19 @@ admin-only setting).
    (The token lasts about an hour. If a later call returns `401`, just re-run
    this line to get a fresh one.)
 
+   > **Cloud Shell note:** Cloud Shell signs you in with a Managed Identity (MSI),
+   > which only issues tokens for a fixed set of audiences and will reject this
+   > one with *"Audience … is not a supported MSI token audience."* If you see
+   > that, sign in for this scope as a **user** first, then re-run the command above:
+   >
+   > ```bash
+   > az login --scope "59f0a04a-b322-4310-adc9-39ac41e9631e/.default"
+   > ```
+   >
+   > It prints a device-code URL — open it, paste the code, and you are done.
+   > (Running this from a local machine where you did an interactive `az login`
+   > avoids the MSI limitation entirely.)
+
 4. **Apply the policy** with a `PUT` request:
 
    ```bash
