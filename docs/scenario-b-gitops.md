@@ -367,12 +367,42 @@ The policy to apply (from
 }
 ```
 
-Apply it at the **global** scope (only the global scope may *deny*). If your
-portal build shows a **Settings → Permissions** page, add the `allow` / `deny`
-entries there. Most builds don't yet, so the reliable method is the **API**,
-described step by step below (no prior API experience needed).
+Apply it at the **global** scope (only the global scope may *deny*). There are
+two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
+Shell.**
 
-#### Apply the policy with the API (step by step)
+#### Method 1 (recommended): the Tools UI — no API needed
+
+In the SRE Agent portal, open **Capabilities → Tools** (left nav). This grid of
+built-in tools *is* the tool access policy, edited with simple toggles:
+
+1. Use the **search box** (or the **Category** / **Permissions** filters) to find
+   each tool below.
+2. Set these to **`Off`** (disables the tool — the "deny" you want), or to
+   **`Ask`** if you'd rather keep it available but force approval:
+   - `RunAzCliWriteCommands`
+   - `RunKubectlWriteCommand`
+   - `RunInTerminal`
+   - `RunShellCommand`
+3. Confirm these stay **`On`** with permission **`Allow`** (safe, read-only):
+   - `RunAzCliReadCommands`
+   - `RunKubectlReadCommand`
+
+That's it — no token, no MFA. The **Advanced permissions** tab on the same page
+is a glob-pattern editor (e.g. `bash(az * delete *)`) if you want finer rules,
+but the per-tool toggles above are enough for this demo.
+
+> Older/newer builds may instead expose a **Settings → Permissions** page for the
+> same global policy. If you see it, you can paste the `allow`/`deny` lists there.
+> Both are equivalent; **Capabilities → Tools** is the one present in current builds.
+
+#### Method 2 (fallback): apply the policy with the API (step by step)
+
+Only needed if the Tools UI is unavailable. This path requires a *user* token for
+the SRE Agent audience, which **Cloud Shell often cannot obtain** (its Managed
+Identity rejects the audience, and the `az login` device-code fallback is
+frequently blocked by Conditional Access/MFA). If you hit that, use Method 1 or
+skip 5a entirely.
 
 You will use **Azure Cloud Shell** — a browser terminal that already has the
 Azure CLI installed and is already signed in as you, so there is nothing to set
