@@ -378,18 +378,22 @@ admin-only setting).
    (or select the `>_` icon in the top bar of the Azure portal). If prompted,
    choose **Bash**.
 
-2. **Find your agent's host name.** It looks like `myagent.sre.azure.com`. Two
-   easy ways to get it:
-   - Copy it from the **address bar** of the agent portal you are already using
-     — the part between `https://` and the first `/`, ending in `.sre.azure.com`; or
-   - In the agent, open **Builder → HTTP triggers**, open any trigger, and copy
-     the host from its **Trigger URL** (`https://<host>/api/v1/httptriggers/...`).
-
-   Then store it in a variable (paste your own host):
+2. **Get your agent's API endpoint.** It is stored on the agent resource as
+   `properties.agentEndpoint` (a host on `azuresre.ai` — *not* the
+   `sre.azure.com` address you see in the browser, which is only the portal UI).
+   Read it with the CLI, substituting your resource group and agent name:
 
    ```bash
-   AGENT_HOST="myagent.sre.azure.com"
+   AGENT_ENDPOINT=$(az resource show \
+     --resource-group sreagentrg \
+     --name contosopay-sre-agent \
+     --resource-type Microsoft.App/agents \
+     --query properties.agentEndpoint -o tsv)
+   echo "$AGENT_ENDPOINT"
    ```
+
+   It prints something like
+   `https://contosopay-sre-agent--70b63853.df9bfa8c.swedencentral.azuresre.ai`.
 
 3. **Get an access token** for the SRE Agent API. The `--resource` GUID is the
    fixed SRE Agent application ID (the audience the API expects) — copy it exactly:
@@ -406,7 +410,7 @@ admin-only setting).
 4. **Apply the policy** with a `PUT` request:
 
    ```bash
-   curl -X PUT "https://$AGENT_HOST/api/v2/agent/settings/global" \
+   curl -X PUT "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{
@@ -422,7 +426,7 @@ admin-only setting).
 5. **Verify** the policy is stored by reading it back:
 
    ```bash
-   curl -s "https://$AGENT_HOST/api/v2/agent/settings/global" \
+   curl -s "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
      -H "Authorization: Bearer $TOKEN" | jq .
    ```
 
@@ -431,8 +435,9 @@ admin-only setting).
 **Troubleshooting:**
 - `401 Unauthorized` → token expired or missing; re-run step 3.
 - `403 Forbidden` → your account isn't an **Administrator** on the agent.
-- `404 Not Found` → the `AGENT_HOST` is wrong; re-check step 2 (it must end in
-  `.sre.azure.com`, with no `https://` or trailing `/`).
+- `404 Not Found` / connection error → `AGENT_ENDPOINT` is empty or wrong; re-run
+  step 2 and confirm it printed an `https://…azuresre.ai` URL (check the resource
+  group and agent name).
 
 See [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
 for the full API reference.
