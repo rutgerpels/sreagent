@@ -330,19 +330,45 @@ These steps make the agent behave the GitOps way: physically unable to change
 Azure, and steered toward fixing incidents through Pull Requests. The supporting
 files live in the [`agent/`](../agent/) folder of this repository.
 
-### 5a. Block direct Azure changes (tool access policy)
+### 5a. Block direct Azure changes (tool access policy) — *optional hardening*
 
 **What you will do:** apply a global policy that denies Azure write commands, so
 the agent cannot change live resources even if asked.
 
-1. Open the agent's **Settings → Permissions** (global scope). This is a
-   top-level agent setting, **not** under Builder — older portal builds labelled
-   it **Builder → Settings → Tool access policies**.
-2. Apply the policy in
-   [`agent/tool-access-policy.json`](../agent/tool-access-policy.json): add its
-   entries to the global **allow / ask / deny** lists. It allows read commands and
-   denies Azure CLI writes, Kubernetes writes, and shell commands (e.g.
-   `RunAzCliWriteCommands`, `bash(az * delete *)`).
+> **This step is defense-in-depth, not required.** The primary write-block is
+> already in place from **Part 4c** (the agent's permission level is **Reader**,
+> so it holds no Azure *write* RBAC) plus the **Review** run mode (every action
+> waits for approval). The tool access policy below is a second, independent
+> guardrail. If your portal build does not expose the global policy UI, you can
+> safely skip this and continue — or apply it via the API.
+
+> **Two different "Settings" — don't confuse them.** The **Settings → Azure
+> Settings / Managed Resources** page (Basics, Managed Resources, Azure Settings,
+> …) is where Part 4c sets the RBAC permission *level* (Reader / Privileged).
+> The *tool access policy* here is a separate allow/deny list at the agent's
+> **global scope**.
+
+The policy to apply (from
+[`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+
+```json
+{
+  "permissions": {
+    "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+    "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+  }
+}
+```
+
+Apply it at the **global** scope (only the global scope may *deny*), using
+whichever is available in your build:
+
+- **Portal:** open the agent's **Settings → Permissions** and add the `allow` /
+  `deny` entries above. (Newer builds only; if there is no **Permissions** item
+  under Settings, use the API instead.)
+- **API:** `PUT https://<your-agent-endpoint>/api/v2/agent/settings/global` with
+  the JSON above as the body. See
+  [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies).
 
 **What is happening:** combined with the Reader access from Part 4c, the agent now
 has neither the permission nor the tooling to write to Azure — two independent
