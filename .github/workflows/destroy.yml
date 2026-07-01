@@ -1,0 +1,166 @@
+name: destroy
+
+# Tear down the ContosoPay environment that `deploy` (Scenario B) stood up.
+#
+# This is the CI/CD mirror of scripts/teardown.* -- it runs `terraform destroy`
+# against the SAME remote state the deploy pipeline writes to, over OIDC (no
+# stored credentials). It removes every resource Terraform manages: the Container
+# Apps, ACR, Key Vault, alert rule, identities, observability, etc.
+#
+# It is intentionally manual (workflow_dispatch) and guarded: you must type the
+# resource prefix into the `confirm` box, otherwise the run aborts. This prevents
+# an accidental teardown of a live demo environment.
+#
+# Prerequisites are identical to deploy.yml -- the same deployment identity and
+# GitHub Actions *variables* must already be set:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+# Optional (defaults shown): TF_PREFIX (contosopay), TF_ENVIRONMENT (demo),
+#   TF_LOCATION (swedencentral).
+#
+# Note: the Key Vault has purge protection enabled, so it is soft-deleted (not
+# purged) and ages out after its retention window. The random name suffix means
+# this never blocks a future deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type the resource prefix to confirm destruction (e.g. contosopay)"
+        required: true
+      prefix:
+        description: "Resource name prefix"
+        required: false
+        default: "contosopay"
+      environment:
+        description: "Environment label (dev | demo | test)"
+        required: false
+        default: "demo"
+      location:
+        description: "Azure region"
+        required: false
+        default: "swedencentral"
+      delete_state_storage:
+        description: "Also delete the remote Terraform state storage RG after destroy"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  id-token: write # required for OIDC
+  contents: read
+
+concurrency:
+  group: deploy-environment # share with deploy.yml so the two never overlap
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
+      TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+      TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
+    steps:
+      - name: Validate confirmation
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event.inputs.confirm }}" != "${TF_PREFIX}" ]]; then
+            echo "::error::Confirmation '${{ github.event.inputs.confirm }}' does not match prefix '${TF_PREFIX}'. Aborting." >&2
+            exit 1
+          fi
+          echo "Confirmation matched prefix '${TF_PREFIX}'. Proceeding with destroy."
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Compute backend config
+        id: backend
+        run: |
+          set -euo pipefail
+          # Deterministic, non-identifying remote-state names (match deploy.yml / scripts/deploy.*).
+          STATE_RG="rg-${TF_PREFIX}-tfstate"
+          STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${TF_PREFIX}" | sha256sum | cut -c1-16)"
+          STATE_SA="sttf${STATE_HASH}"
+          STATE_CONTAINER="tfstate"
+          STATE_KEY="${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
+
+          if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
+            echo "::error::Remote state storage '${STATE_SA}' not found. Nothing to destroy (was the environment ever deployed?)." >&2
+            exit 1
+          fi
+
+          {
+            echo "state_rg=${STATE_RG}"
+            echo "state_sa=${STATE_SA}"
+            echo "state_container=${STATE_CONTAINER}"
+            echo "state_key=${STATE_KEY}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init (remote state)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
+            -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
+            -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
+            -backend-config="key=${{ steps.backend.outputs.state_key }}"
+
+      - name: Terraform destroy
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          # deploy_apps=true + a placeholder image_tag so the configuration matches
+          # the deployed state; destroy removes everything tracked in state regardless.
+          terraform destroy -input=false -auto-approve \
+            -var 'deploy_apps=true' \
+            -var 'image_tag=destroy' \
+            -var "prefix=${TF_PREFIX}" \
+            -var "environment=${TF_ENVIRONMENT}" \
+            -var "location=${TF_LOCATION}"
+
+      - name: Delete remote state storage (optional)
+        if: ${{ github.event.inputs.delete_state_storage == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "==> Deleting remote state resource group ${{ steps.backend.outputs.state_rg }}"
+          az group delete --name "${{ steps.backend.outputs.state_rg }}" --yes --no-wait
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## ContosoPay environment destroy"
+            echo ""
+            if [[ "${{ job.status }}" == "success" ]]; then
+              echo "Terraform destroy completed for prefix \`${TF_PREFIX}\` (env \`${TF_ENVIRONMENT}\`)."
+            else
+              echo "Destroy did not complete cleanly -- check the job logs above."
+            fi
+            echo ""
+            if [[ "${{ github.event.inputs.delete_state_storage }}" == "true" ]]; then
+              echo "Remote state storage RG \`${{ steps.backend.outputs.state_rg }}\` deletion was requested (running asynchronously)."
+            else
+              echo "Remote state storage was kept. Re-run with **delete_state_storage** to remove it too."
+            fi
+            echo ""
+            echo "> Key Vault has purge protection, so it is soft-deleted (not purged) and ages out after its retention window."
+          } >> "$GITHUB_STEP_SUMMARY"
