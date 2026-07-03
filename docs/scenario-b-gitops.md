@@ -330,16 +330,167 @@ These steps make the agent behave the GitOps way: physically unable to change
 Azure, and steered toward fixing incidents through Pull Requests. The supporting
 files live in the [`agent/`](../agent/) folder of this repository.
 
-### 5a. Block direct Azure changes (tool access policy)
+### 5a. Block direct Azure changes (tool access policy) — *optional hardening*
 
 **What you will do:** apply a global policy that denies Azure write commands, so
 the agent cannot change live resources even if asked.
 
-1. Open **Builder → Settings → Tool access policies** (global scope).
-2. Apply the policy in
-   [`agent/tool-access-policy.json`](../agent/tool-access-policy.json). It allows
-   read commands and denies Azure CLI writes, Kubernetes writes, and shell
-   commands.
+> **This step is defense-in-depth, not required — feel free to skip it.** The
+> primary write-block is already in place from **Part 4c** (the agent's permission
+> level is **Reader**, so it holds no Azure *write* RBAC) plus the **Review** run
+> mode (every action waits for approval). The tool access policy below is a second,
+> independent guardrail and does **not** change how the demo behaves.
+>
+> The API method needs a *user* token for the SRE Agent audience. In many tenants
+> **Azure Cloud Shell cannot get one** — its Managed Identity rejects the custom
+> audience, and the `az login --scope …/.default` fallback uses the device-code
+> flow, which **Conditional Access / MFA policies often block** (*"Your sign-in was
+> successful but does not meet the criteria to access this resource"*). If you hit
+> either, **just skip this step** — Reader + Review already covers you. Only pursue
+> the API from a machine with an unrestricted interactive `az login`.
+
+> **Two different "Settings" — don't confuse them.** The **Settings → Azure
+> Settings / Managed Resources** page (Basics, Managed Resources, Azure Settings,
+> …) is where Part 4c sets the RBAC permission *level* (Reader / Privileged).
+> The *tool access policy* here is a separate allow/deny list at the agent's
+> **global scope**.
+
+The policy to apply (from
+[`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+
+```json
+{
+  "permissions": {
+    "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+    "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+  }
+}
+```
+
+Apply it at the **global** scope (only the global scope may *deny*). There are
+two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
+Shell.**
+
+#### Method 1 (recommended): the Tools UI — no API needed
+
+In the SRE Agent portal, open **Capabilities → Tools** (left nav). This grid of
+built-in tools *is* the tool access policy, edited with simple toggles:
+
+1. Use the **search box** (or the **Category** / **Permissions** filters) to find
+   each tool below.
+2. Set these to **`Off`** (disables the tool — the "deny" you want), or to
+   **`Ask`** if you'd rather keep it available but force approval:
+   - `RunAzCliWriteCommands`
+   - `RunKubectlWriteCommand`
+   - `RunInTerminal`
+   - `RunShellCommand`
+3. Confirm these stay **`On`** with permission **`Allow`** (safe, read-only):
+   - `RunAzCliReadCommands`
+   - `RunKubectlReadCommand`
+
+That's it — no token, no MFA. The **Advanced permissions** tab on the same page
+is a glob-pattern editor (e.g. `bash(az * delete *)`) if you want finer rules,
+but the per-tool toggles above are enough for this demo.
+
+> Older/newer builds may instead expose a **Settings → Permissions** page for the
+> same global policy. If you see it, you can paste the `allow`/`deny` lists there.
+> Both are equivalent; **Capabilities → Tools** is the one present in current builds.
+
+#### Method 2 (fallback): apply the policy with the API (step by step)
+
+Only needed if the Tools UI is unavailable. This path requires a *user* token for
+the SRE Agent audience, which **Cloud Shell often cannot obtain** (its Managed
+Identity rejects the audience, and the `az login` device-code fallback is
+frequently blocked by Conditional Access/MFA). If you hit that, use Method 1 or
+skip 5a entirely.
+
+You will use **Azure Cloud Shell** — a browser terminal that already has the
+Azure CLI installed and is already signed in as you, so there is nothing to set
+up locally. (This also sidesteps the Windows shell issues in Part 1.)
+
+You need to be an **Administrator** on the SRE Agent (global tool policies are an
+admin-only setting).
+
+1. **Open Azure Cloud Shell.** Go to [https://shell.azure.com](https://shell.azure.com)
+   (or select the `>_` icon in the top bar of the Azure portal). If prompted,
+   choose **Bash**.
+
+2. **Get your agent's API endpoint.** It is stored on the agent resource as
+   `properties.agentEndpoint` (a host on `azuresre.ai` — *not* the
+   `sre.azure.com` address you see in the browser, which is only the portal UI).
+   Read it with the CLI, substituting your resource group and agent name:
+
+   ```bash
+   AGENT_ENDPOINT=$(az resource show \
+     --resource-group sreagentrg \
+     --name contosopay-sre-agent \
+     --resource-type Microsoft.App/agents \
+     --query properties.agentEndpoint -o tsv)
+   echo "$AGENT_ENDPOINT"
+   ```
+
+   It prints something like
+   `https://contosopay-sre-agent--70b63853.df9bfa8c.swedencentral.azuresre.ai`.
+
+3. **Get an access token** for the SRE Agent API. The `--resource` GUID is the
+   fixed SRE Agent application ID (the audience the API expects) — copy it exactly:
+
+   ```bash
+   TOKEN=$(az account get-access-token \
+     --resource 59f0a04a-b322-4310-adc9-39ac41e9631e \
+     --query accessToken -o tsv)
+   ```
+
+   (The token lasts about an hour. If a later call returns `401`, just re-run
+   this line to get a fresh one.)
+
+   > **Cloud Shell note:** Cloud Shell signs you in with a Managed Identity (MSI),
+   > which only issues tokens for a fixed set of audiences and will reject this
+   > one with *"Audience … is not a supported MSI token audience."* If you see
+   > that, sign in for this scope as a **user** first, then re-run the command above:
+   >
+   > ```bash
+   > az login --scope "59f0a04a-b322-4310-adc9-39ac41e9631e/.default"
+   > ```
+   >
+   > It prints a device-code URL — open it, paste the code, and you are done.
+   > (Running this from a local machine where you did an interactive `az login`
+   > avoids the MSI limitation entirely.)
+
+4. **Apply the policy** with a `PUT` request:
+
+   ```bash
+   curl -X PUT "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "permissions": {
+         "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+         "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+       }
+     }'
+   ```
+
+   A `2xx` response (for example `200`) means it was accepted.
+
+5. **Verify** the policy is stored by reading it back:
+
+   ```bash
+   curl -s "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
+     -H "Authorization: Bearer $TOKEN" | jq .
+   ```
+
+   You should see your `allow` and `deny` lists in the response.
+
+**Troubleshooting:**
+- `401 Unauthorized` → token expired or missing; re-run step 3.
+- `403 Forbidden` → your account isn't an **Administrator** on the agent.
+- `404 Not Found` / connection error → `AGENT_ENDPOINT` is empty or wrong; re-run
+  step 2 and confirm it printed an `https://…azuresre.ai` URL (check the resource
+  group and agent name).
+
+See [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
+for the full API reference.
 
 **What is happening:** combined with the Reader access from Part 4c, the agent now
 has neither the permission nor the tooling to write to Azure — two independent
@@ -347,10 +498,13 @@ guardrails.
 
 ### 5b. Add the GitOps behaviour (custom agent)
 
-1. Open **Builder → Custom agents → New**.
-2. Name it `gitops-remediation` and paste the instructions from
-   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md).
-3. Give it the **GitHub Connector** and **Code Access** tools, and save.
+1. Open **Builder → Agent Canvas**, then select **Create → Custom Agent**.
+   (In older portal builds this was **Builder → Custom agents → New**.)
+2. Set **Name** to `gitops-remediation` and paste the instructions from
+   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
+   into the **Instructions** field.
+3. Under **Built-in Tools / Custom Tools**, enable the **GitHub Connector** and
+   **Code Access**, and save.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -358,7 +512,9 @@ Request, not to run commands against Azure.
 ### 5c. Add the runbook (knowledge)
 
 Add [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md)
-under **Builder → Knowledge → Add**. This tells the agent that the memory leak is
+under **Builder → Knowledge Sources → Add** (or attach it directly on the
+`gitops-remediation` agent in **Agent Canvas** via its **Knowledge base**
+option). This tells the agent that the memory leak is
 controlled by the `enable_slow_leak` setting in `infra/leak.auto.tfvars`, so its
 Pull Request edits the right file.
 
