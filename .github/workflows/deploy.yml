@@ -248,17 +248,40 @@ jobs:
             exit 0
           fi
 
+          # Push the incident branch via the shared script (single source of truth
+          # for the flag edit + branch/commit conventions). --no-pr means it only
+          # pushes; we create the PR below so we can fall back gracefully.
+          BRANCH="Feature/trigger-memory-leak-$(date -u +%Y%m%d%H%M%S)"
           chmod +x ./scripts/trigger-incident-gitops.sh
-          ./scripts/trigger-incident-gitops.sh --base "${BASE_BRANCH}" | tee /tmp/incident.out
+          ./scripts/trigger-incident-gitops.sh --base "${BASE_BRANCH}" --branch "${BRANCH}" --no-pr
 
-          url="$(grep -Eo 'https://github.com/[^ ]+/pull/[0-9]+' /tmp/incident.out | head -n1 || true)"
-          {
-            echo "## Demo incident PR is armed and waiting"
-            echo ""
-            echo "A Pull Request that sets \`enable_slow_leak = true\` in \`infra/leak.auto.tfvars\` has been opened."
-            echo "**Merge it during the demo** to trigger the ContosoPay memory-leak incident (Scenario B)."
-            echo ""
-            echo "Merging it runs the \`apply-infra\` workflow, which \`terraform apply\`s the change so the fault"
-            echo "ships the GitOps way -- no one edits the live service by hand."
-            [[ -n "${url}" ]] && { echo ""; echo "PR: ${url}"; }
-          } >> "$GITHUB_STEP_SUMMARY"
+          TITLE="demo(payment-service): enable slow memory leak (enable_slow_leak=true)"
+          BODY="Arms the ContosoPay demo incident (Scenario B). Merging this PR runs the \`apply-infra\` workflow, which \`terraform apply\`s \`enable_slow_leak = true\` so payment-service memory climbs until the Azure Monitor alert fires."
+          COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/${BASE_BRANCH}...${BRANCH}?expand=1"
+
+          # gh pr create fails if "Allow GitHub Actions to create and approve pull
+          # requests" is disabled (default on a fresh fork). Don't fail the deploy:
+          # the branch is pushed, so surface a one-click compare link instead.
+          if url="$(gh pr create --base "${BASE_BRANCH}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}" 2>/tmp/pr.err)"; then
+            {
+              echo "## Demo incident PR is armed and waiting"
+              echo ""
+              echo "A Pull Request that sets \`enable_slow_leak = true\` in \`infra/leak.auto.tfvars\` has been opened."
+              echo "**Merge it during the demo** to trigger the ContosoPay memory-leak incident (Scenario B)."
+              echo ""
+              echo "PR: ${url}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Demo incident branch pushed (open the PR manually)"
+              echo ""
+              echo "The incident branch \`${BRANCH}\` was pushed, but this workflow could not open the PR automatically:"
+              echo ""
+              echo "> $(cat /tmp/pr.err)"
+              echo ""
+              echo "This usually means **\"Allow GitHub Actions to create and approve pull requests\"** is off."
+              echo "Enable it under **Settings > Actions > General > Workflow permissions**, or just open the PR now:"
+              echo ""
+              echo "[Open the incident PR](${COMPARE})"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
