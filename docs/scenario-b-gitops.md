@@ -229,6 +229,13 @@ the deployed environment's details:
 | Frontend URL | `https://frontend.<region>.azurecontainerapps.io` |
 | Resource group | `rg-contosopay-demo-<suffix>` |
 
+> **The demo incident is pre-armed for you.** At the end of a successful `deploy`
+> run, a follow-up job automatically opens the **incident Pull Request** that
+> switches the memory-leak fault on (`enable_slow_leak = true`). It waits,
+> unmerged, in the **Pull requests** tab — the run summary links to it. When you
+> reach [Part 6](#part-6--run-the-incident), you just review and merge it. (To opt
+> out, run `deploy` with **Open incident PR** set to `false`.)
+
 2. The run summary also lists a small set of variables for the **deploy-apps**
    workflow (which ships future application-code changes). Set them once so that
    pipeline is ready too:
@@ -542,14 +549,26 @@ remediate it through another Pull Request.
 
 ### 6a. Open the Pull Request that switches the fault on
 
+If you deployed with the **`deploy` workflow** (Actions tab), an incident Pull
+Request has **already been opened for you** at the end of that run — it sets
+`enable_slow_leak = true` in `infra/leak.auto.tfvars` and is waiting in the
+**Pull requests** tab. (The deploy run's summary links straight to it.) You can
+skip ahead and simply review and **merge** it.
+
+> To deploy without auto-opening the PR, run the `deploy` workflow with
+> **Open incident PR** set to `false`, then open it yourself with the script below.
+
+To open (or re-open) the incident PR manually instead — for example after a
+`--reset`, or when you deployed from your machine with `scripts/deploy.*`:
+
 ```bash
 ./scripts/trigger-incident-gitops.sh           # Bash
 # or
 pwsh ./scripts/trigger-incident-gitops.ps1     # PowerShell
 ```
 
-**What is happening:** the script opens a Pull Request that sets
-`enable_slow_leak = true` in `infra/leak.auto.tfvars`.
+**What is happening:** the deploy workflow (or the script) opens a Pull Request
+that sets `enable_slow_leak = true` in `infra/leak.auto.tfvars`.
 
 **Expected outcome:** a Pull Request appears in GitHub. Review the diff, then
 **merge it**. Merging runs the `apply-infra` workflow, which applies the change
