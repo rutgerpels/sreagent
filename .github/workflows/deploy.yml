@@ -37,6 +37,11 @@ on:
         description: "Azure region"
         required: false
         default: "swedencentral"
+      open_incident_pr:
+        description: "After deploy, auto-open the incident PR that arms the memory leak (Scenario B). Set to false to skip."
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   id-token: write # required for OIDC
@@ -190,4 +195,64 @@ jobs:
             echo "| FRONTEND_APP | ${FRONTEND_APP} |"
             echo "| CHECKOUT_APP | ${CHECKOUT_APP} |"
             echo "| PAYMENT_APP | ${PAYMENT_APP} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # After the environment is up, open the Scenario B "arm the leak" Pull Request
+  # so the demo is fully in-place: a fresh fork can deploy and immediately have
+  # the incident PR waiting to be merged -- no local machine or script required.
+  #
+  # This reuses scripts/trigger-incident-gitops.sh (single source of truth for
+  # the PR title/body/branch naming) and is guarded so re-running deploy will not
+  # pile up duplicate incident PRs.
+  arm-incident:
+    needs: deploy
+    if: ${{ github.event.inputs.open_incident_pr != 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the incident branch
+      pull-requests: write # open the incident PR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # trigger-incident-gitops.sh branches from origin/<base>
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Open incident PR (arm the memory leak)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Idempotency guard: don't open a second incident PR if one is already
+          # open (branch prefix is fixed by the trigger script).
+          existing="$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("Feature/trigger-memory-leak-"))] | length')"
+          if [[ "${existing}" -gt 0 ]]; then
+            {
+              echo "## Demo incident PR"
+              echo ""
+              echo "An incident PR that arms the memory leak is already open; not opening another."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          chmod +x ./scripts/trigger-incident-gitops.sh
+          ./scripts/trigger-incident-gitops.sh --base "${BASE_BRANCH}" | tee /tmp/incident.out
+
+          url="$(grep -Eo 'https://github.com/[^ ]+/pull/[0-9]+' /tmp/incident.out | head -n1 || true)"
+          {
+            echo "## Demo incident PR is armed and waiting"
+            echo ""
+            echo "A Pull Request that sets \`enable_slow_leak = true\` in \`infra/leak.auto.tfvars\` has been opened."
+            echo "**Merge it during the demo** to trigger the ContosoPay memory-leak incident (Scenario B)."
+            echo ""
+            echo "Merging it runs the \`apply-infra\` workflow, which \`terraform apply\`s the change so the fault"
+            echo "ships the GitOps way -- no one edits the live service by hand."
+            [[ -n "${url}" ]] && { echo ""; echo "PR: ${url}"; }
           } >> "$GITHUB_STEP_SUMMARY"

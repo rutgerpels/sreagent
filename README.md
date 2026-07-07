@@ -99,12 +99,17 @@ SRE Agent (granted **Privileged** access) proposes a direct mitigation you appro
 
 ### Scenario B — trigger via a Pull Request (GitOps)
 
+When you stand up the environment with the **`deploy` GitHub Actions workflow**, it
+**auto-opens the incident PR** (setting `enable_slow_leak=true`) at the end of the run — it waits
+in the **Pull requests** tab, ready to merge. To open one manually (or after a reset), run:
+
 ```bash
 ./scripts/trigger-incident-gitops.sh        # opens a PR setting enable_slow_leak=true in infra/leak.auto.tfvars
 # or: pwsh ./scripts/trigger-incident-gitops.ps1
 ```
 
-The script opens a **Pull Request** flipping the planted-fault flag. **Merging it** runs the
+The deploy workflow (or the script) opens a **Pull Request** flipping the planted-fault flag.
+**Merging it** runs the
 `apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
 deploys the leak — no one edits the live app by hand. **Remediation is GitOps too:** the agent is
 **read-only on Azure** (Reader RBAC + a global Tool Access Policy that denies Azure CLI writes), so
