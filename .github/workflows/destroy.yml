@@ -11,6 +11,11 @@ name: destroy
 # resource prefix into the `confirm` box, otherwise the run aborts. This prevents
 # an accidental teardown of a live demo environment.
 #
+# Resilience: the normal path retries after deleting orphaned Container Apps if
+# the environment delete hits 409 ManagedEnvironmentHasContainerApps (state drift
+# from a cancelled/re-run apply). For a badly drifted environment, set
+# `force_delete_rg` to nuke the env resource group(s) directly and reset state.
+#
 # Prerequisites are identical to deploy.yml -- the same deployment identity and
 # GitHub Actions *variables* must already be set:
 #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
@@ -41,6 +46,11 @@ on:
         default: "swedencentral"
       delete_state_storage:
         description: "Also delete the remote Terraform state storage RG after destroy"
+        type: boolean
+        required: false
+        default: false
+      force_delete_rg:
+        description: "Nuke: delete the env resource group(s) rg-<prefix>-<env>-* directly and reset remote state. Use when terraform destroy is stuck on orphaned resources / drifted state."
         type: boolean
         required: false
         default: false
@@ -102,9 +112,13 @@ jobs:
           STATE_CONTAINER="tfstate"
           STATE_KEY="${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
 
-          if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
-            echo "::error::Remote state storage '${STATE_SA}' not found. Nothing to destroy (was the environment ever deployed?)." >&2
-            exit 1
+          # Don't hard-fail when state storage is missing: the force-delete path
+          # works off resource-group name patterns and needs no state at all.
+          if az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
+            echo "state_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "state_exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Remote state storage '${STATE_SA}' not found; skipping terraform destroy."
           fi
 
           {
@@ -114,7 +128,14 @@ jobs:
             echo "state_key=${STATE_KEY}"
           } >> "$GITHUB_OUTPUT"
 
+      # ---------------------------------------------------------------------
+      # Normal path: terraform destroy, made resilient to orphaned Container
+      # Apps. If state has drifted (apps exist in Azure but not in state), the
+      # Container App Environment delete returns 409 ManagedEnvironmentHasContainerApps.
+      # We catch that, delete any Container Apps still in the app RG, and retry.
+      # ---------------------------------------------------------------------
       - name: Terraform init (remote state)
+        if: ${{ github.event.inputs.force_delete_rg != 'true' && steps.backend.outputs.state_exists == 'true' }}
         working-directory: infra
         run: |
           set -euo pipefail
@@ -125,17 +146,76 @@ jobs:
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
       - name: Terraform destroy
+        if: ${{ github.event.inputs.force_delete_rg != 'true' && steps.backend.outputs.state_exists == 'true' }}
         working-directory: infra
         run: |
           set -euo pipefail
           # deploy_apps=true + a placeholder image_tag so the configuration matches
           # the deployed state; destroy removes everything tracked in state regardless.
-          terraform destroy -input=false -auto-approve \
-            -var 'deploy_apps=true' \
-            -var 'image_tag=destroy' \
-            -var "prefix=${TF_PREFIX}" \
-            -var "environment=${TF_ENVIRONMENT}" \
-            -var "location=${TF_LOCATION}"
+          APP_RG="$(terraform output -raw resource_group_name 2>/dev/null || true)"
+
+          destroy() {
+            terraform destroy -input=false -auto-approve \
+              -var 'deploy_apps=true' \
+              -var 'image_tag=destroy' \
+              -var "prefix=${TF_PREFIX}" \
+              -var "environment=${TF_ENVIRONMENT}" \
+              -var "location=${TF_LOCATION}"
+          }
+
+          if destroy; then
+            exit 0
+          fi
+
+          echo "::warning::terraform destroy failed. Removing any orphaned Container Apps in '${APP_RG}' and retrying."
+          if [[ -n "${APP_RG}" ]] && az group show -n "${APP_RG}" >/dev/null 2>&1; then
+            # Use the generic resource API so no az containerapp extension is required.
+            for id in $(az resource list -g "${APP_RG}" \
+                          --resource-type Microsoft.App/containerApps \
+                          --query "[].id" -o tsv 2>/dev/null || true); do
+              echo "  deleting orphaned Container App: ${id}"
+              az resource delete --ids "${id}" 2>/dev/null || true
+            done
+          fi
+          destroy
+
+      # ---------------------------------------------------------------------
+      # Force path: nuke the environment resource group(s) directly. This does
+      # not rely on Terraform state, so it recovers a badly drifted environment.
+      # Names are rg-<prefix>-<env>-<suffix>, so we match on that prefix.
+      # ---------------------------------------------------------------------
+      - name: Force delete resource group(s)
+        if: ${{ github.event.inputs.force_delete_rg == 'true' }}
+        run: |
+          set -euo pipefail
+          PATTERN="rg-${TF_PREFIX}-${TF_ENVIRONMENT}-"
+          echo "==> Nuke mode: deleting resource groups starting with '${PATTERN}'"
+          mapfile -t RGS < <(az group list --query "[?starts_with(name, '${PATTERN}')].name" -o tsv)
+          if [[ ${#RGS[@]} -eq 0 ]]; then
+            echo "No matching resource groups found (already gone)."
+          else
+            for rg in "${RGS[@]}"; do
+              echo "  deleting ${rg}"
+              az group delete -n "${rg}" --yes
+            done
+          fi
+
+      - name: Reset remote state after force delete
+        if: ${{ github.event.inputs.force_delete_rg == 'true' && steps.backend.outputs.state_exists == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "==> Resetting remote state so the next deploy generates a fresh suffix"
+          # Break any stale lock lease first, then delete the state blob.
+          az storage blob lease break \
+            --account-name "${{ steps.backend.outputs.state_sa }}" \
+            --container-name "${{ steps.backend.outputs.state_container }}" \
+            --blob-name "${{ steps.backend.outputs.state_key }}" \
+            --auth-mode login 2>/dev/null || true
+          az storage blob delete \
+            --account-name "${{ steps.backend.outputs.state_sa }}" \
+            --container-name "${{ steps.backend.outputs.state_container }}" \
+            --name "${{ steps.backend.outputs.state_key }}" \
+            --auth-mode login 2>/dev/null || true
 
       - name: Delete remote state storage (optional)
         if: ${{ github.event.inputs.delete_state_storage == 'true' }}
