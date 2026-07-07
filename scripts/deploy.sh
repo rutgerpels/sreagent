@@ -84,11 +84,17 @@ STATE_CONTAINER="tfstate"
 STATE_KEY="${PREFIX}-${ENVIRONMENT}.tfstate"
 
 echo "==> Ensuring remote state storage (${STATE_SA})"
-az group create --name "${STATE_RG}" --location "${LOCATION}" \
+# The state resource group's location is immutable and independent of the app
+# region -- if it already exists (e.g. an earlier deploy in another region),
+# reuse its location so switching LOCATION doesn't fail with
+# InvalidResourceGroupLocation.
+STATE_LOCATION="$(az group show --name "${STATE_RG}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
+STATE_LOCATION="${STATE_LOCATION:-${LOCATION}}"
+az group create --name "${STATE_RG}" --location "${STATE_LOCATION}" \
     --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
 if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
     az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
-        --location "${LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+        --location "${STATE_LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
         --allow-blob-public-access false --https-only true \
         --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
 fi

@@ -104,14 +104,20 @@ function Initialize-StateStorage {
     param([object]$Backend, [string]$Location, [string]$PrincipalId, [hashtable]$Tags)
     Write-Host "==> Ensuring remote state storage ($($Backend.StorageAccount))" -ForegroundColor Cyan
     $tagArgs = ($Tags.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+    # The state resource group's location is immutable and independent of the app
+    # region -- if it already exists (e.g. an earlier deploy in another region),
+    # reuse its location so switching -Location doesn't fail with
+    # InvalidResourceGroupLocation.
+    $stateLocation = az group show --name $Backend.ResourceGroup --query location --output tsv 2>$null
+    if (-not $stateLocation) { $stateLocation = $Location }
     Invoke-Checked -Name 'az group create (tfstate)' {
-        az group create --name $Backend.ResourceGroup --location $Location --tags @tagArgs --output none
+        az group create --name $Backend.ResourceGroup --location $stateLocation --tags @tagArgs --output none
     }
     $exists = az storage account show --name $Backend.StorageAccount --resource-group $Backend.ResourceGroup --query name --output tsv 2>$null
     if (-not $exists) {
         Invoke-Checked -Name 'az storage account create (tfstate)' {
             az storage account create --name $Backend.StorageAccount --resource-group $Backend.ResourceGroup `
-                --location $Location --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 `
+                --location $stateLocation --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 `
                 --allow-blob-public-access false --https-only true --tags @tagArgs --output none
         }
     }
