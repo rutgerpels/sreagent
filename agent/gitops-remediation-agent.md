@@ -1,8 +1,12 @@
 # GitOps Remediation Agent — system prompt
 
-Paste the block below into a **custom agent** (Builder → Custom agents → New →
-*Instructions*). Route the demo's incident response plan to this agent in
-**Review** mode (see `../docs/scenario-b-gitops.md`, Part 5).
+**How to use this file (do not paste this part):** In the SRE Agent portal open
+**Builder → Agent Canvas → + Create subagent** (older builds: *Custom agents →
+New*), name it `gitops-remediation`, and paste **only the fenced block below**
+(the text between the ` ```text ` markers) into the **Instructions** field.
+Leave the subagent's tool selection empty so it inherits the GitHub Connector and
+Code Access; route the demo's incident response plan to it in **Review** mode
+(see `../docs/scenario-b-gitops.md`, Part 5).
 
 > The repository owner/name is read live from your GitHub connection — leave the
 > `OWNER/REPO` placeholder or replace it with your repository (`<your-org>/<your-repo>`).

@@ -544,11 +544,21 @@ guardrails.
 1. Open **Builder → Agent Canvas**, then select **+ Create subagent**.
    (Recent builds renamed this from **Custom Agent**; the canvas now shows
    **Subagent** nodes. Older builds had **Builder → Custom agents → New**.)
-2. Set **Name** to `gitops-remediation` and paste the instructions from
+2. Set **Name** to `gitops-remediation`. Open
    [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
-   into the **Instructions** field.
-3. Under **Built-in Tools / Custom Tools**, enable the **GitHub Connector** and
-   **Code Access**, and save.
+   and paste **only the fenced prompt block** (the text inside the ` ```text `
+   fence, from *"You are the ContosoPay GitOps remediation specialist."* to the
+   end) into the **Instructions** field. Do **not** include the file's markdown
+   header or the "Paste the block below" note — those are instructions *to you*,
+   not part of the agent's prompt.
+3. **Tools:** the subagent inherits all global tools by default (the panel says
+   *"inherits N global tools"*). There is no single "GitHub Connector" toggle
+   anymore — GitHub shows up as individual **DevOps** tools when you search
+   `github` (e.g. `CreateGithubPullRequest`, `CreateGithubIssue`,
+   `FetchGithubIssue`). **Easiest: leave the Tools selection empty** so the
+   subagent inherits the GitHub Connector (from Part 4b) and Code Access
+   (Part 4a). Only pick tools here if you want to *restrict* the subagent —
+   selecting any tool **overrides** the inherited defaults. Save when done.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
