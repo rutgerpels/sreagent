@@ -373,6 +373,13 @@ These steps make the agent behave the GitOps way: physically unable to change
 Azure, and steered toward fixing incidents through Pull Requests. The supporting
 files live in the [`agent/`](../agent/) folder of this repository.
 
+> **Refresh the agent after the setup wizard first.** When you finish the
+> onboarding wizard and land inside the agent, the backend can take a few minutes
+> to finish provisioning (settings objects, ETags, tool registry). Editing
+> permissions too soon triggers errors like *"Refusing to PUT global settings
+> without an If-Match ETag."* Do a **hard refresh (Ctrl+F5)** once you're inside
+> the agent before starting Part 5 — it clears most first-run save issues.
+
 ### 5a. Block direct Azure changes (tool access policy) — *optional hardening*
 
 **What you will do:** apply a global policy that denies Azure write commands, so
