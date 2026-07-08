@@ -373,6 +373,13 @@ These steps make the agent behave the GitOps way: physically unable to change
 Azure, and steered toward fixing incidents through Pull Requests. The supporting
 files live in the [`agent/`](../agent/) folder of this repository.
 
+> **Refresh the agent after the setup wizard first.** When you finish the
+> onboarding wizard and land inside the agent, the backend can take a few minutes
+> to finish provisioning (settings objects, ETags, tool registry). Editing
+> permissions too soon triggers errors like *"Refusing to PUT global settings
+> without an If-Match ETag."* Do a **hard refresh (Ctrl+F5)** once you're inside
+> the agent before starting Part 5 — it clears most first-run save issues.
+
 ### 5a. Block direct Azure changes (tool access policy) — *optional hardening*
 
 **What you will do:** apply a global policy that denies Azure write commands, so
@@ -398,46 +405,132 @@ the agent cannot change live resources even if asked.
 > The *tool access policy* here is a separate allow/deny list at the agent's
 > **global scope**.
 
-The policy to apply (from
-[`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+The policy to apply comes in **two shapes** — pick the one for how you apply it:
 
-```json
-{
-  "permissions": {
+- **Portal (Method 1)** — the **Advanced permissions → JSON** tab wants a
+  top-level object with just `allow` / `ask` / `deny` (paste
+  [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)):
+
+  ```json
+  {
     "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-    "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+    "ask": [],
+    "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
   }
-}
-```
+  ```
+
+- **API (Method 2)** — the global-settings endpoint wants the same lists wrapped
+  in a `permissions` object (see
+  [`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+
+  ```json
+  {
+    "permissions": {
+      "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+      "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+    }
+  }
+  ```
+
+> **Do not paste the `permissions`-wrapped form into the portal JSON box.** It
+> rejects unknown keys with *"Invalid JSON: Unknown key(s): permissions. Only
+> allow, ask, and deny are valid."* Use the un-wrapped `.portal.json` there.
 
 Apply it at the **global** scope (only the global scope may *deny*). There are
 two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
 Shell.**
 
-#### Method 1 (recommended): the Tools UI — no API needed
+#### Method 1 (recommended): the Permissions UI — no API needed
 
-In the SRE Agent portal, open **Capabilities → Tools** (left nav). This grid of
-built-in tools *is* the tool access policy, edited with simple toggles:
+In the SRE Agent portal, open **Settings → Permissions** (older builds:
+**Capabilities → Tools**). Two tabs make up the global tool access policy:
 
-1. Use the **search box** (or the **Category** / **Permissions** filters) to find
-   each tool below.
-2. Set these to **`Off`** (disables the tool — the "deny" you want), or to
-   **`Ask`** if you'd rather keep it available but force approval:
-   - `RunAzCliWriteCommands`
-   - `RunKubectlWriteCommand`
-   - `RunInTerminal`
-   - `RunShellCommand`
-3. Confirm these stay **`On`** with permission **`Allow`** (safe, read-only):
-   - `RunAzCliReadCommands`
-   - `RunKubectlReadCommand`
+- **Built-in tools** — a grid of per-tool `On/Off` + `Allow/Ask` toggles.
+- **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor, with a
+  **Form** and a **JSON** sub-tab.
 
-That's it — no token, no MFA. The **Advanced permissions** tab on the same page
-is a glob-pattern editor (e.g. `bash(az * delete *)`) if you want finer rules,
-but the per-tool toggles above are enough for this demo.
+**Fastest path — paste the whole policy as JSON (no per-tool clicking).**
+On the **Advanced permissions** tab, switch to the **JSON** sub-tab and replace
+the contents with
+[`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json):
 
-> Older/newer builds may instead expose a **Settings → Permissions** page for the
-> same global policy. If you see it, you can paste the `allow`/`deny` lists there.
-> Both are equivalent; **Capabilities → Tools** is the one present in current builds.
+```json
+{
+  "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+  "ask": [],
+  "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+}
+```
+
+This one paste sets the entire global policy — allow the read tools, deny the
+Azure/Kubernetes writes **and** the shell escape hatches — so you can skip the
+manual toggles below. (Remember: paste the un-wrapped form here, *not* the
+`permissions`-wrapped API form, or the box rejects it.)
+
+<details>
+<summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
+
+**Step 1 — turn off the Azure/Kubernetes *write* tools (Built-in tools tab).**
+Search for each and set it to **`Off`** (or **`Ask`** to keep it but force
+approval):
+
+- `RunAzCliWriteCommands`
+- `RunKubectlWriteCommand`
+
+Keep these **`On` / `Allow`** (safe, read-only):
+
+- `RunAzCliReadCommands`
+- `RunKubectlReadCommand`
+
+**Step 2 — neutralize the shell tools (Advanced permissions tab).**
+`RunInTerminal` is usually **locked `On`** in the grid (you *cannot* toggle it
+off), and `RunShellCommand` may not appear as a built-in at all — both behaviours
+are expected and vary by build. The grid toggle is not how you deny them: add
+them as **deny patterns** on the **Advanced permissions** tab instead. A global
+**deny** is evaluated before everything else, so it holds even for a
+locked-`On` tool:
+
+```
+RunInTerminal
+RunShellCommand
+```
+
+If you'd rather keep the shell available for read-only diagnostics, deny only the
+dangerous writes instead (the `bash(…)` alias expands to `RunInTerminal`,
+`RunShellCommand`, and the az CLI):
+
+```
+bash(az * create *)
+bash(az * update *)
+bash(az * delete *)
+```
+
+</details>
+
+That's it — no token, no MFA.
+
+> **Troubleshooting — *"Failed to save tool changes. Refusing to PUT global
+> settings without an If-Match ETag."*** This is the portal's optimistic-
+> concurrency guard: it won't save because it isn't holding a current ETag —
+> usually the global-settings object hasn't been initialized yet, or the page
+> loaded without fetching current settings. Fix it in order:
+> 1. **Hard-refresh** the Permissions page (Ctrl+F5) so the portal re-fetches
+>    settings + their ETag, then re-paste the JSON and **Save**.
+> 2. If it still refuses, **initialize the object first**: on the **Built-in
+>    tools** tab flip one write tool (e.g. `RunAzCliWriteCommands` → `Off`) and
+>    **Save**. That creates the settings object (and its ETag). Then return to
+>    **Advanced permissions → JSON**, paste, and **Save**.
+> 3. Last resort: apply via **Method 2 (API)** below, which does GET-then-PUT
+>    with `If-Match` explicitly.
+
+> **You are already safe without any of Step 1–2.** The real guarantee is the
+> **Reader** RBAC from **Part 4c** — with no Azure *write* role, the agent
+> physically cannot change Azure regardless of which tools are `On`. Part 5a is
+> defense-in-depth, so a locked-`On` `RunInTerminal` (or a missing
+> `RunShellCommand`) does **not** compromise the GitOps boundary.
+
+> Older builds expose this same global policy under **Capabilities → Tools**
+> instead of **Settings → Permissions**. The tabs and toggles are equivalent.
 
 #### Method 2 (fallback): apply the policy with the API (step by step)
 
