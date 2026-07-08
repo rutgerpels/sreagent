@@ -107,7 +107,7 @@ the agent and an investigation thread opens.
 ## 6. Optional: provisioning the agent with Terraform
 
 Most of the agent setup is done in the portal because the GitHub sign-in, the
-response plan, and (for Scenario B) the tool policy and custom agent are
+response plan, and (for Scenario B) the tool policy and subagent (custom agent) are
 interactive, portal-only steps. If you prefer, the agent resource itself, its
 access level, and its Azure Monitor wiring can be created in Terraform instead:
 set `enable_sre_agents = true` and `sre_agent_sponsor_group_id` in
