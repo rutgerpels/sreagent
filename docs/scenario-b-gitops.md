@@ -310,11 +310,25 @@ This lets the agent *read* the code and find the Pull Request behind an incident
 This is a separate connection from Code Access.
 
 1. Open **Builder → Connectors → Add connector → GitHub**.
-2. Sign in with an identity that has **Pull requests: Read/Write** and
-   **Issues: Read/Write** on your repository.
+2. Sign in with an identity (GitHub App or PAT) that has **all three** of these
+   permissions on your repository — opening a Pull Request needs the agent to
+   push a branch *and* create the PR, so **Contents** write is required, not just
+   Pull requests:
+   - **Contents: Read/Write** — create the fix branch and commit the file change.
+   - **Pull requests: Read/Write** — open the remediation PR.
+   - **Issues: Read/Write** — open the tracking issue.
 
 **Expected outcome:** the agent can now create branches, issues, and Pull
 Requests.
+
+> **Troubleshooting — the agent opens an *issue* but no *PR*.** Issue creation
+> only needs **Issues: Read/Write**, but a Pull Request also needs **Contents:
+> Read/Write** (to push the branch) and **Pull requests: Read/Write**. If you see
+> an issue appear with no accompanying PR, the connector identity is missing one
+> of those two — reconnect it in **Builder → Connectors → GitHub** with all three
+> permissions above. Also confirm the `gitops-remediation` subagent isn't
+> restricted to issue-only tools (leave its **Tools** selection empty to inherit
+> the branch/commit/PR tools — see Part 5b).
 
 ### 4c. Grant read-only access to the demo resources
 
