@@ -22,7 +22,7 @@ You will work through seven parts:
 1. [Bootstrap the pipeline (one-time)](#part-1--bootstrap-the-pipeline-one-time)
 2. [Deploy the environment with CI/CD](#part-2--deploy-the-environment-with-cicd)
 3. [Create the SRE Agent](#part-3--create-the-sre-agent)
-4. [Connect the agent to your code and resources](#part-4--connect-the-agent)
+4. [Connect the agent to your code, resources, logs and incidents](#part-4--connect-the-agent)
 5. [Apply the GitOps guardrails and behaviour](#part-5--apply-the-gitops-guardrails)
 6. [Run the incident and watch the fix](#part-6--run-the-incident)
 7. [Reset and clean up](#part-7--reset-and-clean-up)
@@ -288,6 +288,13 @@ environment.
 
 ## Part 4 — Connect the agent
 
+The agent's setup page shows an **Add context** screen with four cards — **Code**,
+**Logs**, **Azure resources**, and **Incidents**. Connect **all four**: each one
+the agent can see sharpens its root-cause correlation, and for this scenario the
+Logs card in particular is what ties the App Insights memory trend back to the
+Pull Request. The steps below cover every card (plus the separate GitHub
+Connector and Azure Monitor wiring).
+
 ### 4a. Connect your source code (read)
 
 1. On the agent setup page, find the **Code** card and select **+**.
@@ -322,7 +329,36 @@ the ability to change it — that is the point of this scenario.
 **Expected outcome:** the **Azure Resources** card lists the demo resource group
 with read-only access.
 
-### 4d. Connect Azure Monitor
+### 4d. Add logs context (App Insights / Log Analytics)
+
+**What you will do:** point the agent at the demo's telemetry so it can read the
+memory trend and correlate it with the code and deployment. On the onboarding
+screen this is the **Logs** card (marked *Recommended* / *Best with code*) — for
+this scenario it is the single most valuable context source after Code.
+
+1. On the setup page, find the **Logs** card and select **+**.
+2. Select the demo's **Log Analytics workspace** `law-<suffix>` (and, if offered,
+   the **Application Insights** resource `appi-<suffix>`) from
+   `rg-contosopay-demo-<suffix>`.
+
+**Expected outcome:** the **Logs** card shows the workspace. The agent can now
+query the payment-service memory metric that drives the incident and line it up
+against the commit/PR that introduced it.
+
+### 4e. Add past-incident context
+
+**What you will do:** let the agent learn from prior investigations so repeat
+incidents resolve faster (the "memory" moment in Part 6). On the onboarding
+screen this is the **Incidents** card.
+
+1. On the setup page, find the **Incidents** card and select **+**.
+2. Connect your incident source (e.g. Azure Monitor / the same subscription).
+
+**Expected outcome:** the **Incidents** card is connected. On a first run it may
+be empty — that is fine; after the demo runs once, re-triggering the leak shows
+the agent recalling the earlier pattern and resolving it more quickly.
+
+### 4f. Connect Azure Monitor
 
 1. Open **Builder → Incident platform**, choose **Azure Monitor**, and save.
 
