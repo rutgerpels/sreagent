@@ -119,12 +119,33 @@ jobs:
         working-directory: infra
         run: |
           set -euo pipefail
+
+          # The environment's region is fixed at first deploy and is NOT part of
+          # the remote-state key, so a mismatched TF_LOCATION (e.g. the default
+          # swedencentral while the env is in francecentral) would try to relocate
+          # every resource -- a destroy/recreate of the whole environment. Always
+          # reuse the region recorded in state.
+          LOCATION="$(terraform output -raw location 2>/dev/null || true)"
+          LOCATION="${LOCATION:-${TF_LOCATION}}"
+          echo "Applying in region: ${LOCATION}"
+
+          # Terraform reads the App Insights secret during refresh. If the Key
+          # Vault's public network access has drifted to Disabled (e.g. an Azure
+          # Policy flips it post-create), the GitHub-hosted runner gets a 403
+          # ForbiddenByConnection. The TF config already declares public access =
+          # true, so re-assert it up front to unblock the refresh/apply.
+          KV_NAME="$(terraform output -raw key_vault_name 2>/dev/null || true)"
+          if [[ -n "${KV_NAME}" ]]; then
+            echo "Ensuring Key Vault ${KV_NAME} is reachable from CI"
+            az keyvault update --name "${KV_NAME}" --public-network-access Enabled --output none 2>/dev/null || true
+          fi
+
           terraform apply -input=false -auto-approve \
             -var 'deploy_apps=true' \
             -var 'image_tag=latest' \
             -var "prefix=${TF_PREFIX}" \
             -var "environment=${TF_ENVIRONMENT}" \
-            -var "location=${TF_LOCATION}"
+            -var "location=${LOCATION}"
 
       - name: Report leak state
         if: steps.state.outputs.exists == 'true'
