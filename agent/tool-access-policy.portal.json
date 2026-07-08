@@ -1,0 +1,13 @@
+{
+  "allow": [
+    "RunAzCliReadCommands",
+    "RunKubectlReadCommand(kubectl get *)"
+  ],
+  "ask": [],
+  "deny": [
+    "RunAzCliWriteCommands",
+    "RunKubectlWriteCommand",
+    "RunInTerminal",
+    "RunShellCommand"
+  ]
+}

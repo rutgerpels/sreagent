@@ -398,17 +398,36 @@ the agent cannot change live resources even if asked.
 > The *tool access policy* here is a separate allow/deny list at the agent's
 > **global scope**.
 
-The policy to apply (from
-[`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+The policy to apply comes in **two shapes** — pick the one for how you apply it:
 
-```json
-{
-  "permissions": {
+- **Portal (Method 1)** — the **Advanced permissions → JSON** tab wants a
+  top-level object with just `allow` / `ask` / `deny` (paste
+  [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)):
+
+  ```json
+  {
     "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-    "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+    "ask": [],
+    "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
   }
-}
-```
+  ```
+
+- **API (Method 2)** — the global-settings endpoint wants the same lists wrapped
+  in a `permissions` object (see
+  [`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+
+  ```json
+  {
+    "permissions": {
+      "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+      "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+    }
+  }
+  ```
+
+> **Do not paste the `permissions`-wrapped form into the portal JSON box.** It
+> rejects unknown keys with *"Invalid JSON: Unknown key(s): permissions. Only
+> allow, ask, and deny are valid."* Use the un-wrapped `.portal.json` there.
 
 Apply it at the **global** scope (only the global scope may *deny*). There are
 two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
@@ -420,7 +439,29 @@ In the SRE Agent portal, open **Settings → Permissions** (older builds:
 **Capabilities → Tools**). Two tabs make up the global tool access policy:
 
 - **Built-in tools** — a grid of per-tool `On/Off` + `Allow/Ask` toggles.
-- **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor.
+- **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor, with a
+  **Form** and a **JSON** sub-tab.
+
+**Fastest path — paste the whole policy as JSON (no per-tool clicking).**
+On the **Advanced permissions** tab, switch to the **JSON** sub-tab and replace
+the contents with
+[`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json):
+
+```json
+{
+  "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+  "ask": [],
+  "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+}
+```
+
+This one paste sets the entire global policy — allow the read tools, deny the
+Azure/Kubernetes writes **and** the shell escape hatches — so you can skip the
+manual toggles below. (Remember: paste the un-wrapped form here, *not* the
+`permissions`-wrapped API form, or the box rejects it.)
+
+<details>
+<summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
 
 **Step 1 — turn off the Azure/Kubernetes *write* tools (Built-in tools tab).**
 Search for each and set it to **`Off`** (or **`Ask`** to keep it but force
@@ -456,6 +497,8 @@ bash(az * create *)
 bash(az * update *)
 bash(az * delete *)
 ```
+
+</details>
 
 That's it — no token, no MFA.
 
