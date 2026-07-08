@@ -38,7 +38,7 @@ especially for the SRE Agent. Three categories:
 | --- | --- | --- |
 | **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
 | **One-time bootstrap seed (cannot be GitOps)** | The identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: something has to exist before any pipeline can run. The remote Terraform state storage is *not* in this list — the first pipeline run creates it automatically. |
-| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub sign-in for Code Access and the Connector, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
+| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub sign-in for Code Access and the Connector, the tool access policy, the subagent (custom agent) and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
 
 So for the SRE Agent specifically: **the agent resource, its permissions, and its
 connection to Azure Monitor can be Infrastructure as Code** (see
@@ -632,15 +632,26 @@ for the full API reference.
 has neither the permission nor the tooling to write to Azure — two independent
 guardrails.
 
-### 5b. Add the GitOps behaviour (custom agent)
+### 5b. Add the GitOps behaviour (subagent)
 
-1. Open **Builder → Agent Canvas**, then select **Create → Custom Agent**.
-   (In older portal builds this was **Builder → Custom agents → New**.)
-2. Set **Name** to `gitops-remediation` and paste the instructions from
+1. Open **Builder → Agent Canvas**, then select **+ Create subagent**.
+   (Recent builds renamed this from **Custom Agent**; the canvas now shows
+   **Subagent** nodes. Older builds had **Builder → Custom agents → New**.)
+2. Set **Name** to `gitops-remediation`. Open
    [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
-   into the **Instructions** field.
-3. Under **Built-in Tools / Custom Tools**, enable the **GitHub Connector** and
-   **Code Access**, and save.
+   and paste **only the fenced prompt block** (the text inside the ` ```text `
+   fence, from *"You are the ContosoPay GitOps remediation specialist."* to the
+   end) into the **Instructions** field. Do **not** include the file's markdown
+   header or the "Paste the block below" note — those are instructions *to you*,
+   not part of the agent's prompt.
+3. **Tools:** the subagent inherits all global tools by default (the panel says
+   *"inherits N global tools"*). There is no single "GitHub Connector" toggle
+   anymore — GitHub shows up as individual **DevOps** tools when you search
+   `github` (e.g. `CreateGithubPullRequest`, `CreateGithubIssue`,
+   `FetchGithubIssue`). **Easiest: leave the Tools selection empty** so the
+   subagent inherits the GitHub Connector (from Part 4b) and Code Access
+   (Part 4a). Only pick tools here if you want to *restrict* the subagent —
+   selecting any tool **overrides** the inherited defaults. Save when done.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -662,7 +673,7 @@ Pull Request edits the right file.
    | Setting | Value |
    | --- | --- |
    | **Severity filter** | Include **Sev2 / Warning**. |
-   | **Response agent** | The **`gitops-remediation`** custom agent from 5b. |
+   | **Response agent** | The **`gitops-remediation`** subagent from 5b. |
    | **Autonomy level** | **Review**. |
 
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
