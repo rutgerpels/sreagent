@@ -414,30 +414,59 @@ Apply it at the **global** scope (only the global scope may *deny*). There are
 two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
 Shell.**
 
-#### Method 1 (recommended): the Tools UI — no API needed
+#### Method 1 (recommended): the Permissions UI — no API needed
 
-In the SRE Agent portal, open **Capabilities → Tools** (left nav). This grid of
-built-in tools *is* the tool access policy, edited with simple toggles:
+In the SRE Agent portal, open **Settings → Permissions** (older builds:
+**Capabilities → Tools**). Two tabs make up the global tool access policy:
 
-1. Use the **search box** (or the **Category** / **Permissions** filters) to find
-   each tool below.
-2. Set these to **`Off`** (disables the tool — the "deny" you want), or to
-   **`Ask`** if you'd rather keep it available but force approval:
-   - `RunAzCliWriteCommands`
-   - `RunKubectlWriteCommand`
-   - `RunInTerminal`
-   - `RunShellCommand`
-3. Confirm these stay **`On`** with permission **`Allow`** (safe, read-only):
-   - `RunAzCliReadCommands`
-   - `RunKubectlReadCommand`
+- **Built-in tools** — a grid of per-tool `On/Off` + `Allow/Ask` toggles.
+- **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor.
 
-That's it — no token, no MFA. The **Advanced permissions** tab on the same page
-is a glob-pattern editor (e.g. `bash(az * delete *)`) if you want finer rules,
-but the per-tool toggles above are enough for this demo.
+**Step 1 — turn off the Azure/Kubernetes *write* tools (Built-in tools tab).**
+Search for each and set it to **`Off`** (or **`Ask`** to keep it but force
+approval):
 
-> Older/newer builds may instead expose a **Settings → Permissions** page for the
-> same global policy. If you see it, you can paste the `allow`/`deny` lists there.
-> Both are equivalent; **Capabilities → Tools** is the one present in current builds.
+- `RunAzCliWriteCommands`
+- `RunKubectlWriteCommand`
+
+Keep these **`On` / `Allow`** (safe, read-only):
+
+- `RunAzCliReadCommands`
+- `RunKubectlReadCommand`
+
+**Step 2 — neutralize the shell tools (Advanced permissions tab).**
+`RunInTerminal` is usually **locked `On`** in the grid (you *cannot* toggle it
+off), and `RunShellCommand` may not appear as a built-in at all — both behaviours
+are expected and vary by build. The grid toggle is not how you deny them: add
+them as **deny patterns** on the **Advanced permissions** tab instead. A global
+**deny** is evaluated before everything else, so it holds even for a
+locked-`On` tool:
+
+```
+RunInTerminal
+RunShellCommand
+```
+
+If you'd rather keep the shell available for read-only diagnostics, deny only the
+dangerous writes instead (the `bash(…)` alias expands to `RunInTerminal`,
+`RunShellCommand`, and the az CLI):
+
+```
+bash(az * create *)
+bash(az * update *)
+bash(az * delete *)
+```
+
+That's it — no token, no MFA.
+
+> **You are already safe without any of Step 1–2.** The real guarantee is the
+> **Reader** RBAC from **Part 4c** — with no Azure *write* role, the agent
+> physically cannot change Azure regardless of which tools are `On`. Part 5a is
+> defense-in-depth, so a locked-`On` `RunInTerminal` (or a missing
+> `RunShellCommand`) does **not** compromise the GitOps boundary.
+
+> Older builds expose this same global policy under **Capabilities → Tools**
+> instead of **Settings → Permissions**. The tabs and toggles are equivalent.
 
 #### Method 2 (fallback): apply the policy with the API (step by step)
 
