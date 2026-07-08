@@ -502,6 +502,20 @@ bash(az * delete *)
 
 That's it — no token, no MFA.
 
+> **Troubleshooting — *"Failed to save tool changes. Refusing to PUT global
+> settings without an If-Match ETag."*** This is the portal's optimistic-
+> concurrency guard: it won't save because it isn't holding a current ETag —
+> usually the global-settings object hasn't been initialized yet, or the page
+> loaded without fetching current settings. Fix it in order:
+> 1. **Hard-refresh** the Permissions page (Ctrl+F5) so the portal re-fetches
+>    settings + their ETag, then re-paste the JSON and **Save**.
+> 2. If it still refuses, **initialize the object first**: on the **Built-in
+>    tools** tab flip one write tool (e.g. `RunAzCliWriteCommands` → `Off`) and
+>    **Save**. That creates the settings object (and its ETag). Then return to
+>    **Advanced permissions → JSON**, paste, and **Save**.
+> 3. Last resort: apply via **Method 2 (API)** below, which does GET-then-PUT
+>    with `If-Match` explicitly.
+
 > **You are already safe without any of Step 1–2.** The real guarantee is the
 > **Reader** RBAC from **Part 4c** — with no Azure *write* role, the agent
 > physically cannot change Azure regardless of which tools are `On`. Part 5a is
