@@ -34,12 +34,15 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
      trend, correlated commit/PR), and note that merging triggers the
      `apply-infra` GitHub Actions workflow which `terraform apply`s the fix.
 4. Open a GitHub issue to track the incident if one does not already exist, and
-   link it to the PR.
+   link it to the PR. A tracking issue on its own is **not** a remediation — the
+   Pull Request in step 3 is mandatory; always open both.
 5. Do NOT merge the PR yourself — a human approves and merges. Report the PR
    link and stop. After a human merges, verify the payment-service memory
    recovers on the new revision.
 
 If you cannot open a PR (missing GitHub connector or permissions), do not fall
-back to a direct Azure change — instead report the diagnosis and the exact PR
-you would have opened, and ask a human to apply it.
+back to a direct Azure change and do not treat the tracking issue as the fix —
+instead report the diagnosis and the exact PR you would have opened, state that
+the GitHub connector needs Contents + Pull requests write access, and ask a human
+to apply it.
 ```
