@@ -41,12 +41,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: apply-infra
+  group: deploy-environment
   cancel-in-progress: false
 
 jobs:
   terraform-apply:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
+    timeout-minutes: 45
     env:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
@@ -56,19 +57,23 @@ jobs:
       TF_PREFIX: ${{ vars.TF_PREFIX || 'contosopay' }}
       TF_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT || 'demo' }}
       TF_LOCATION: ${{ vars.TF_LOCATION || 'swedencentral' }}
+      TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
+      TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+      TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
@@ -97,7 +102,15 @@ jobs:
           if az storage account show \
                --name "${{ steps.backend.outputs.state_sa }}" \
                --resource-group "${{ steps.backend.outputs.state_rg }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+            STATE_BLOB_EXISTS="$(az storage blob exists \
+              --account-name "${{ steps.backend.outputs.state_sa }}" \
+              --container-name "${{ steps.backend.outputs.state_container }}" \
+              --name "${{ steps.backend.outputs.state_key }}" \
+              --auth-mode login --query exists -o tsv 2>/dev/null || echo false)"
+            echo "exists=${STATE_BLOB_EXISTS}" >> "$GITHUB_OUTPUT"
+            if [[ "${STATE_BLOB_EXISTS}" != "true" ]]; then
+              echo "::notice::Remote Terraform state blob does not exist yet. Run the 'deploy' workflow first; skipping apply-infra."
+            fi
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Remote Terraform state not found yet. Run the 'deploy' workflow first to create the environment; skipping apply-infra."
@@ -128,17 +141,6 @@ jobs:
           LOCATION="$(terraform output -raw location 2>/dev/null || true)"
           LOCATION="${LOCATION:-${TF_LOCATION}}"
           echo "Applying in region: ${LOCATION}"
-
-          # Terraform reads the App Insights secret during refresh. If the Key
-          # Vault's public network access has drifted to Disabled (e.g. an Azure
-          # Policy flips it post-create), the GitHub-hosted runner gets a 403
-          # ForbiddenByConnection. The TF config already declares public access =
-          # true, so re-assert it up front to unblock the refresh/apply.
-          KV_NAME="$(terraform output -raw key_vault_name 2>/dev/null || true)"
-          if [[ -n "${KV_NAME}" ]]; then
-            echo "Ensuring Key Vault ${KV_NAME} is reachable from CI"
-            az keyvault update --name "${KV_NAME}" --public-network-access Enabled --output none 2>/dev/null || true
-          fi
 
           terraform apply -input=false -auto-approve \
             -var 'deploy_apps=true' \

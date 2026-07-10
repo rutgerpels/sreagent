@@ -28,3 +28,17 @@ resource "azurerm_role_assignment" "kv_secrets" {
   principal_id                     = each.value.principal_id
   skip_service_principal_aad_check = true
 }
+
+# Give private DNS/endpoint provisioning and app-identity RBAC time to converge
+# before the first Container App revision pulls an image and resolves secrets.
+resource "time_sleep" "wait_app_dependencies" {
+  depends_on = [
+    azurerm_role_assignment.acr_pull,
+    azurerm_role_assignment.kv_secrets,
+    azurerm_private_dns_zone_virtual_network_link.acr,
+    azurerm_private_dns_zone_virtual_network_link.key_vault,
+    azurerm_private_endpoint.acr,
+    azurerm_private_endpoint.key_vault,
+  ]
+  create_duration = "60s"
+}

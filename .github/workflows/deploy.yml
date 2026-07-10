@@ -53,7 +53,8 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
+    timeout-minutes: 60
     env:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
@@ -63,19 +64,23 @@ jobs:
       TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
       TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
       TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
+      TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
+      TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+      TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
@@ -104,15 +109,91 @@ jobs:
             az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
               --location "${STATE_LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
               --allow-blob-public-access false --https-only true \
+              --public-network-access Disabled --default-action Deny \
               --tags project=sre-agent-demo env="${TF_ENVIRONMENT}" managed_by=terraform --output none
           fi
-          created="false"
+
+          STATE_ID="$(az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" --query id -o tsv)"
+          STATE_PE="pe-${STATE_SA}-blob"
+          STATE_ZONE="privatelink.blob.core.windows.net"
+          STATE_LINK="${TF_VAR_runner_vnet_name}-blob"
+          VNET_ID="$(az network vnet show \
+            --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+            --name "${TF_VAR_runner_vnet_name}" --query id -o tsv)"
+
+          if ! az network private-dns zone show \
+               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+               --name "${STATE_ZONE}" >/dev/null 2>&1; then
+            az network private-dns zone create \
+              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+              --name "${STATE_ZONE}" --output none
+          fi
+          if ! az network private-dns link vnet show \
+               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+               --zone-name "${STATE_ZONE}" --name "${STATE_LINK}" >/dev/null 2>&1; then
+            az network private-dns link vnet create \
+              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+              --zone-name "${STATE_ZONE}" --name "${STATE_LINK}" \
+              --virtual-network "${VNET_ID}" --registration-enabled false --output none
+          fi
+          if ! az network private-endpoint show \
+               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+               --name "${STATE_PE}" >/dev/null 2>&1; then
+            az network private-endpoint create \
+              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+              --name "${STATE_PE}" \
+              --vnet-name "${TF_VAR_runner_vnet_name}" \
+              --subnet "${TF_VAR_runner_private_endpoint_subnet_name}" \
+              --private-connection-resource-id "${STATE_ID}" \
+              --group-id blob \
+              --connection-name "${STATE_PE}-connection" \
+              --output none
+          fi
+          if ! az network private-endpoint dns-zone-group show \
+               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+               --endpoint-name "${STATE_PE}" --name blob-zone >/dev/null 2>&1; then
+            STATE_ZONE_ID="$(az network private-dns zone show \
+              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+              --name "${STATE_ZONE}" --query id -o tsv)"
+            az network private-endpoint dns-zone-group create \
+              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+              --endpoint-name "${STATE_PE}" --name blob-zone \
+              --private-dns-zone "${STATE_ZONE_ID}" --zone-name blob --output none
+          fi
+
+          az storage account update --name "${STATE_SA}" --resource-group "${STATE_RG}" \
+            --public-network-access Disabled --default-action Deny --output none
+
+          resolved="false"
           for _ in $(seq 1 12); do
-            if az storage container create --name "${STATE_CONTAINER}" --account-name "${STATE_SA}" \
-              --auth-mode login --output none 2>/dev/null; then created="true"; break; fi
+            STATE_IP="$(getent ahostsv4 "${STATE_SA}.blob.core.windows.net" | awk 'NR == 1 { print $1 }' || true)"
+            if [[ "${STATE_IP}" == 10.* || "${STATE_IP}" == 172.1[6-9].* || \
+                  "${STATE_IP}" == 172.2?.* || "${STATE_IP}" == 172.3[01].* || \
+                  "${STATE_IP}" == 192.168.* ]]; then
+              resolved="true"
+              break
+            fi
             sleep 10
           done
-          [[ "${created}" == "true" ]] || { echo "Could not create state container (check the identity has Storage Blob Data Contributor)." >&2; exit 1; }
+          [[ "${resolved}" == "true" ]] || {
+            echo "::error::State storage did not resolve to a private IP from the self-hosted runner." >&2
+            exit 1
+          }
+
+          created="false"
+          last_err=""
+          for _ in $(seq 1 12); do
+            if last_err="$(az storage container create --name "${STATE_CONTAINER}" --account-name "${STATE_SA}" \
+              --auth-mode login --output none 2>&1)"; then created="true"; break; fi
+            sleep 10
+          done
+          if [[ "${created}" != "true" ]]; then
+            echo "::error::Could not create state container '${STATE_CONTAINER}' on '${STATE_SA}' after 12 retries (~2 minutes)." >&2
+            echo "Last az CLI error was:" >&2
+            echo "${last_err}" >&2
+            echo "Check the OIDC identity's Storage Blob Data Contributor role and the Blob private endpoint/DNS." >&2
+            exit 1
+          fi
 
           {
             echo "state_rg=${STATE_RG}"
@@ -214,12 +295,13 @@ jobs:
     needs: deploy
     if: ${{ github.event.inputs.open_incident_pr != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # push the incident branch
       pull-requests: write # open the incident PR
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0 # trigger-incident-gitops.sh branches from origin/<base>
 

@@ -26,6 +26,39 @@ variable "location" {
   default     = "swedencentral"
 }
 
+variable "runner_vnet_resource_group" {
+  description = "Resource group containing the self-hosted runner VNet."
+  type        = string
+  default     = "agentrg"
+}
+
+variable "runner_vnet_name" {
+  description = "Existing VNet used by the self-hosted GitHub Actions runner."
+  type        = string
+  default     = "agent-vnet"
+}
+
+variable "runner_private_endpoint_subnet_name" {
+  description = "Existing subnet used for private endpoints reachable by the runner."
+  type        = string
+  default     = "private-endpoints"
+}
+
+variable "container_apps_subnet_address_prefix" {
+  description = "Dedicated /27-or-larger subnet prefix for the workload-profiles Container Apps environment."
+  type        = string
+  default     = "192.168.1.128/27"
+
+  validation {
+    condition = (
+      can(cidrhost(var.container_apps_subnet_address_prefix, 0)) &&
+      can(tonumber(split("/", var.container_apps_subnet_address_prefix)[1])) &&
+      tonumber(split("/", var.container_apps_subnet_address_prefix)[1]) <= 27
+    )
+    error_message = "container_apps_subnet_address_prefix must be a valid /27-or-larger CIDR prefix."
+  }
+}
+
 variable "subscription_id" {
   description = "Target subscription ID. If null, ARM_SUBSCRIPTION_ID env var is used."
   type        = string
