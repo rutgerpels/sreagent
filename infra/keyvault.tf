@@ -12,16 +12,13 @@ resource "azurerm_key_vault" "this" {
   rbac_authorization_enabled    = true
   purge_protection_enabled      = true
   soft_delete_retention_days    = 7
-  public_network_access_enabled = true
+  public_network_access_enabled = false
   tags                          = local.tags
 
-  # The deployer (Terraform/CI) writes secrets over the public data plane from a
-  # rotating NAT egress IP, so an IP allowlist is impractical. Access is still
-  # gated by Azure RBAC (no access policies). Declaring this block explicitly
-  # ensures any out-of-band drift to "Disabled" is detected and corrected on the
-  # next apply, fixing the 403 ForbiddenByConnection race on the first secret write.
+  # Data-plane access uses the private endpoint in the runner VNet. Azure RBAC
+  # remains the authorization boundary; no access policies or public IP rules.
   network_acls {
-    default_action = "Allow"
+    default_action = "Deny"
     bypass         = "AzureServices"
   }
 }
@@ -35,7 +32,11 @@ resource "azurerm_role_assignment" "deployer_kv_secrets_officer" {
 
 # Allow RBAC to propagate before writing the first secret (avoids 403 races).
 resource "time_sleep" "wait_kv_rbac" {
-  depends_on      = [azurerm_role_assignment.deployer_kv_secrets_officer]
+  depends_on = [
+    azurerm_role_assignment.deployer_kv_secrets_officer,
+    azurerm_private_dns_zone_virtual_network_link.key_vault,
+    azurerm_private_endpoint.key_vault,
+  ]
   create_duration = "60s"
 }
 

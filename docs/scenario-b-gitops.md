@@ -37,7 +37,7 @@ especially for the SRE Agent. Three categories:
 | Category | What it covers | How it is done |
 | --- | --- | --- |
 | **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
-| **One-time bootstrap seed (cannot be GitOps)** | The identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: something has to exist before any pipeline can run. The remote Terraform state storage is *not* in this list — the first pipeline run creates it automatically. |
+| **One-time bootstrap seed (cannot be GitOps)** | The private Linux runner and its VNet, the identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: the runner and identity must exist before any pipeline can run. The first deploy creates the remote state account and its private endpoint automatically. |
 | **SRE Agent portal-only (no IaC equivalent today)** | The GitHub sign-in for Code Access and the Connector, the tool access policy, the subagent (custom agent) and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
 
 So for the SRE Agent specifically: **the agent resource, its permissions, and its
@@ -62,6 +62,11 @@ Because the heavy lifting happens in CI, you need very little installed locally:
   avoid Git Bash for these `az` commands.)
 - A clone of this repository, and permission to run GitHub Actions and to open and
   merge Pull Requests on it.
+- A persistent Linux self-hosted runner registered to the repository with
+  `self-hosted`, `Linux`, `X64`, `azure-private`, and `contosopay` labels. The runner
+  must have Docker and Azure CLI installed and outbound HTTPS access to GitHub.
+- An Azure VNet for that runner with a dedicated private-endpoint subnet. The defaults
+  are resource group `agentrg`, VNet `agent-vnet`, and subnet `private-endpoints`.
 
 You do **not** need Terraform or Docker locally — the pipeline runs those for you.
 
@@ -204,6 +209,16 @@ Actions → Variables** lists `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
 `AZURE_SUBSCRIPTION_ID`. The pipeline can now authenticate to Azure with no stored
 credentials.
 
+The workflows also accept these optional repository variables when the shared
+runner network uses different names or address space:
+
+| Variable | Default |
+| --- | --- |
+| `RUNNER_NETWORK_RG` | `agentrg` |
+| `RUNNER_VNET_NAME` | `agent-vnet` |
+| `RUNNER_PE_SUBNET_NAME` | `private-endpoints` |
+| `CONTAINER_APPS_SUBNET_PREFIX` | `192.168.1.128/27` |
+
 ---
 
 ## Part 2 — Deploy the environment with CI/CD
@@ -215,11 +230,11 @@ GitHub Actions workflow — no local Terraform or Docker.
    **Run workflow** (you can keep the default prefix, environment, and region, or
    override them).
 
-**What is happening:** the `deploy` workflow signs in with the identity from
-Part 1 and performs the same steps a DevOps team would automate — it creates the
-remote Terraform state storage, applies the platform, builds and pushes the three
-application images, then deploys the application. No one runs anything against the
-live environment by hand.
+**What is happening:** the `deploy` workflow runs on the self-hosted runner and
+signs in with the identity from Part 1. It creates the remote Terraform state storage
+and Blob private endpoint, applies the platform with private Key Vault and Premium
+ACR endpoints, builds and pushes the three application images, then deploys the
+application. No one runs anything against the live environment by hand.
 
 **Expected outcome:** the workflow finishes green. Open its run summary to find
 the deployed environment's details:

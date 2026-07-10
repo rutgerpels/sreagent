@@ -23,17 +23,21 @@ Internet ──TLS──► frontend (public, ACA external ingress)
                       │                          │
           Managed Identity (user-assigned) per app
                       ▼
-   Key Vault (RBAC) · App Insights + Log Analytics · ACR (admin disabled)
+   Key Vault (RBAC, Private Link) · App Insights + Log Analytics
+   Premium ACR (Private Link, admin disabled)
                       ▼
    Azure Monitor alert ──► (SRE Agent scanner polls the Alerts API every ~1 min)
    Azure Managed Grafana ──► dashboards over App Insights / Log Analytics
 
-   GitHub PR ──merge──► apply-infra.yml (OIDC, terraform apply, remote state) ──► deploy
+   GitHub PR ──merge──► self-hosted runner in Azure VNet
+                              │ OIDC + private endpoints
+                              ▼
+                       Terraform / ACR / Key Vault
 ```
 
-Only **frontend** is publicly reachable. Everything else uses internal ingress. Terraform state is
-stored remotely in an **LRS storage account** (bootstrapped by the deploy script) so the
-`apply-infra` CI workflow can apply changes the GitOps way.
+Only **frontend** is publicly reachable. Application services use internal ingress, while Terraform
+state, Key Vault, and ACR are reached through private endpoints from the self-hosted runner VNet.
+Terraform state remains in an **LRS storage account** bootstrapped by the deploy workflow.
 
 ## Prerequisites
 
@@ -41,6 +45,8 @@ stored remotely in an **LRS storage account** (bootstrapped by the deploy script
 - [Terraform](https://developer.hashicorp.com/terraform) >= 1.9
 - [Docker](https://www.docker.com/) (daemon running — builds the three images)
 - A Bash shell (Linux/macOS/WSL/Git Bash) **or** PowerShell 7+ on Windows
+- For GitHub CI/CD: a Linux self-hosted runner with the labels `azure-private` and `contosopay`,
+  attached to the VNet configured by the runner networking Terraform variables.
 
 ## Quick start
 
@@ -120,7 +126,7 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 
 | Path | Purpose |
 |------|---------|
-| `infra/` | All Terraform (`azurerm`) — RG, identities, ACR, Key Vault, observability, ACA, alerts, Grafana |
+| `infra/` | All Terraform (`azurerm`) — RG, identities, private networking, ACR, Key Vault, observability, ACA, alerts, Grafana |
 | `infra/agents.tf` | **Optional** two SRE Agents (`azapi`, A=High / B=Reader) — off unless `enable_sre_agents=true` |
 | `infra/leak.auto.tfvars` | **GitOps source of truth** for the planted-leak flag (committed, non-secret) |
 | `src/frontend` | Public SPA + Node server |
@@ -141,8 +147,9 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 
 - No secrets in source. All secrets live in **Azure Key Vault**; apps read them via **managed
   identity**. CI/CD uses **OIDC federation**, never stored credentials.
-- ACR admin user disabled · Key Vault RBAC + purge protection · TLS-only ingress · least-privilege
-  role assignments · diagnostic settings to Log Analytics.
+- ACR admin user disabled · private endpoints for state, ACR, and Key Vault · Key Vault RBAC +
+  purge protection · TLS-only ingress · least-privilege role assignments · diagnostic settings to
+  Log Analytics.
 
 ## Connecting the Azure SRE Agent
 

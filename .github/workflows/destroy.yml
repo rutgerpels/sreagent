@@ -65,7 +65,8 @@ concurrency:
 
 jobs:
   destroy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
+    timeout-minutes: 60
     env:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
@@ -75,28 +76,34 @@ jobs:
       TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
       TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
       TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
+      TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
+      TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+      TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
     steps:
       - name: Validate confirmation
+        env:
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event.inputs.confirm }}" != "${TF_PREFIX}" ]]; then
-            echo "::error::Confirmation '${{ github.event.inputs.confirm }}' does not match prefix '${TF_PREFIX}'. Aborting." >&2
+          if [[ "${CONFIRM_INPUT}" != "${TF_PREFIX}" ]]; then
+            echo "::error::Confirmation does not match prefix '${TF_PREFIX}'. Aborting." >&2
             exit 1
           fi
           echo "Confirmation matched prefix '${TF_PREFIX}'. Proceeding with destroy."
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
@@ -218,11 +225,14 @@ jobs:
             --auth-mode login 2>/dev/null || true
 
       - name: Delete remote state storage (optional)
-        if: ${{ github.event.inputs.delete_state_storage == 'true' }}
+        if: ${{ github.event.inputs.delete_state_storage == 'true' && steps.backend.outputs.state_exists == 'true' }}
         run: |
           set -euo pipefail
+          az network private-endpoint delete \
+            --resource-group "${TF_VAR_runner_vnet_resource_group}" \
+            --name "pe-${{ steps.backend.outputs.state_sa }}-blob" 2>/dev/null || true
           echo "==> Deleting remote state resource group ${{ steps.backend.outputs.state_rg }}"
-          az group delete --name "${{ steps.backend.outputs.state_rg }}" --yes --no-wait
+          az group delete --name "${{ steps.backend.outputs.state_rg }}" --yes
 
       - name: Summary
         if: ${{ always() }}

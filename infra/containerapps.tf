@@ -9,7 +9,21 @@ resource "azurerm_container_app_environment" "this" {
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
+  public_network_access      = "Enabled"
   tags                       = local.tags
+
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = lower(azurerm_resource_group.this.location) == lower(data.azurerm_virtual_network.runner.location)
+      error_message = "The Container Apps environment and runner VNet must be in the same Azure region."
+    }
+  }
 }
 
 locals {
@@ -153,8 +167,7 @@ resource "azurerm_container_app" "app" {
   }
 
   depends_on = [
-    azurerm_role_assignment.acr_pull,
-    azurerm_role_assignment.kv_secrets,
     azurerm_key_vault_secret.appinsights_connection,
+    time_sleep.wait_app_dependencies,
   ]
 }
