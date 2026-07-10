@@ -127,8 +127,21 @@ jobs:
             -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
-      - name: Terraform apply
+      - name: Check environment state
+        id: environment
         if: steps.state.outputs.exists == 'true'
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          if terraform state list | grep -Fxq 'azurerm_resource_group.this'; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Terraform state contains no deployed environment. Run the 'deploy' workflow first; skipping apply-infra."
+          fi
+
+      - name: Terraform apply
+        if: steps.environment.outputs.exists == 'true'
         working-directory: infra
         run: |
           set -euo pipefail
@@ -150,7 +163,7 @@ jobs:
             -var "location=${LOCATION}"
 
       - name: Report leak state
-        if: steps.state.outputs.exists == 'true'
+        if: steps.environment.outputs.exists == 'true'
         working-directory: infra
         run: |
           echo "enable_slow_leak applied. Current payment-service revision will reflect the flag."
