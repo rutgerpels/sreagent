@@ -252,8 +252,9 @@ live in the application VNet and are reachable from both Container Apps and the
 runner. The workflow then builds and pushes the images and deploys the
 application. No one runs anything against the live environment by hand.
 
-**Expected outcome:** the workflow finishes green. Open its run summary to find
-the deployed environment's details:
+**Expected outcome:** both the `deploy` and `arm-incident` jobs finish green, and
+an incident Pull Request appears in GitHub. Open the run summary to find the
+deployed environment's details:
 
 | Output | Example |
 | --- | --- |
@@ -266,6 +267,12 @@ the deployed environment's details:
 > unmerged, in the **Pull requests** tab — the run summary links to it. When you
 > reach [Part 6](#part-6--run-the-incident), you just review and merge it. (To opt
 > out, run `deploy` with **Open incident PR** set to `false`.)
+>
+> If `arm-incident` reports that the flag is already `true`, `main` contains an
+> armed incident instead of the required healthy baseline. Set
+> `enable_slow_leak = false` in `infra/leak.auto.tfvars` through a Pull Request,
+> merge it, and rerun `deploy`. New workflow versions fail clearly in this state
+> instead of completing green without a Pull Request.
 
 2. The run summary also lists a small set of variables for the **deploy-apps**
    workflow (which ships future application-code changes). Set them once so that
@@ -452,6 +459,10 @@ the agent cannot change live resources even if asked.
 
 The policy to apply comes in **two shapes** — pick the one for how you apply it:
 
+> **If the portal reports unknown keys `_comment`, `permissions`, or both, you
+> opened the API file.** Clear the editor and paste the exact **Portal** JSON
+> below. Do not add comments or a `permissions` wrapper.
+>
 - **Portal (Method 1)** — the **Advanced permissions → JSON** tab wants a
   top-level object with just `allow` / `ask` / `deny` (paste
   [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)):
@@ -466,12 +477,13 @@ The policy to apply comes in **two shapes** — pick the one for how you apply i
 
 - **API (Method 2)** — the global-settings endpoint wants the same lists wrapped
   in a `permissions` object (see
-  [`agent/tool-access-policy.json`](../agent/tool-access-policy.json)):
+  [`agent/tool-access-policy.api.json`](../agent/tool-access-policy.api.json)):
 
   ```json
   {
     "permissions": {
       "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
+      "ask": [],
       "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
     }
   }
