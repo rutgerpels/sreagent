@@ -16,11 +16,15 @@ environment = "demo"
 # francecentral, koreacentral, australiaeast.
 location = "swedencentral"
 
-# Existing self-hosted runner network. Private endpoints are created in this VNet.
-runner_vnet_resource_group           = "agentrg"
-runner_vnet_name                     = "agent-vnet"
-runner_private_endpoint_subnet_name  = "private-endpoints"
-container_apps_subnet_address_prefix = "192.168.1.128/27"
+# Existing runner network plus address space for the regional app VNet Terraform
+# will create. The networks must not overlap. The runner subnet setting is used
+# only for the Terraform state private endpoint.
+runner_vnet_resource_group                  = "agentrg"
+runner_vnet_name                            = "agent-vnet"
+runner_private_endpoint_subnet_name         = "private-endpoints"
+app_vnet_address_space                      = "10.100.0.0/16"
+app_private_endpoint_subnet_address_prefix  = "10.100.0.0/27"
+container_apps_subnet_address_prefix        = "10.100.0.64/27"
 
 # Deploy Azure Managed Grafana (adds cost). true for the full demo experience.
 enable_grafana = true

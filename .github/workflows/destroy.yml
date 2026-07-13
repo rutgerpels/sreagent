@@ -79,7 +79,9 @@ jobs:
       TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
       TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
       TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
+      TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
+      TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
     steps:
       - name: Validate confirmation
         env:
@@ -159,7 +161,17 @@ jobs:
           set -euo pipefail
           # deploy_apps=true + a placeholder image_tag so the configuration matches
           # the deployed state; destroy removes everything tracked in state regardless.
-          APP_RG="$(terraform output -raw resource_group_name 2>/dev/null || true)"
+          STATE_RESOURCES="$(terraform state list)"
+          if grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_RESOURCES}"; then
+            APP_RG="$(terraform output -raw resource_group_name)"
+            LOCATION="$(terraform output -raw location)" || {
+              echo "::error::Existing environment location could not be read from Terraform state." >&2
+              exit 1
+            }
+          else
+            APP_RG=""
+            LOCATION="${TF_LOCATION}"
+          fi
 
           destroy() {
             terraform destroy -input=false -auto-approve \
@@ -167,7 +179,7 @@ jobs:
               -var 'image_tag=destroy' \
               -var "prefix=${TF_PREFIX}" \
               -var "environment=${TF_ENVIRONMENT}" \
-              -var "location=${TF_LOCATION}"
+              -var "location=${LOCATION}"
           }
 
           if destroy; then

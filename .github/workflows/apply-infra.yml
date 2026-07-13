@@ -60,7 +60,9 @@ jobs:
       TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
       TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
       TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
+      TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
+      TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -133,7 +135,8 @@ jobs:
         working-directory: infra
         run: |
           set -euo pipefail
-          if terraform state list | grep -Fxq 'azurerm_resource_group.this'; then
+          STATE_RESOURCES="$(terraform state list)"
+          if grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_RESOURCES}"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -151,8 +154,10 @@ jobs:
           # swedencentral while the env is in francecentral) would try to relocate
           # every resource -- a destroy/recreate of the whole environment. Always
           # reuse the region recorded in state.
-          LOCATION="$(terraform output -raw location 2>/dev/null || true)"
-          LOCATION="${LOCATION:-${TF_LOCATION}}"
+          LOCATION="$(terraform output -raw location)" || {
+            echo "::error::Existing environment location could not be read from Terraform state." >&2
+            exit 1
+          }
           echo "Applying in region: ${LOCATION}"
 
           terraform apply -input=false -auto-approve \
