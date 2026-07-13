@@ -91,7 +91,7 @@ $title = if ($Reset.IsPresent) {
 $why = if ($Reset.IsPresent) {
     'Remediates the ContosoPay memory-leak incident by turning the planted fault off. Merging this PR runs the `apply-infra` workflow, which `terraform apply`s the change and rolls a fresh payment-service revision (clearing leaked memory).'
 } else {
-    'Arms the ContosoPay demo incident. Merging this PR runs the `apply-infra` workflow, which `terraform apply`s the change and deploys the leak. payment-service memory then climbs over ~30-40 min until the Azure Monitor alert fires and the SRE Agent investigates.'
+    'Arms the ContosoPay demo incident. Merging this PR runs the `apply-infra` workflow, which `terraform apply`s the change and deploys the leak. payment-service memory then climbs for roughly 8-12 min until the Azure Monitor alert fires and the SRE Agent investigates.'
 }
 $body = @"
 ## What

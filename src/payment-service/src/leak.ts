@@ -13,33 +13,40 @@
 
 // Module-scoped sink that is intentionally never released while the flag is on.
 const leakedChunks: Buffer[] = [];
+let activeChunkBytes = 0;
 
 const flagOn = (): boolean => (process.env.ENABLE_SLOW_LEAK ?? 'false').toLowerCase() === 'true';
 
-const chunkBytes = (): number => {
-  const kb = Number.parseInt(process.env.LEAK_CHUNK_KB ?? '256', 10);
-  return (Number.isFinite(kb) && kb > 0 ? kb : 256) * 1024;
+const configuredChunkBytes = (): number => {
+  const kb = Number.parseInt(process.env.LEAK_CHUNK_KB ?? '1024', 10);
+  return (Number.isFinite(kb) && kb > 0 ? kb : 1024) * 1024;
 };
 
-/** Leak a chunk per processed payment when the flag is on. */
-export function leakPerRequest(): void {
-  if (!flagOn()) {
-    return;
+const calibratedChunkBytes = (intervalMs: number): number => {
+  const threshold = Number.parseInt(process.env.MEMORY_ALERT_THRESHOLD_BYTES ?? '', 10);
+  const targetSeconds = Number.parseInt(process.env.LEAK_TARGET_CROSSING_SECONDS ?? '360', 10);
+  if (!Number.isFinite(threshold) || threshold <= 0 || !Number.isFinite(targetSeconds) || targetSeconds <= 0) {
+    return configuredChunkBytes();
   }
-  leakedChunks.push(Buffer.alloc(chunkBytes(), 1));
-}
+
+  const bytesToThreshold = Math.max(threshold - process.memoryUsage().rss, 0);
+  const ticksToThreshold = Math.max(Math.floor((targetSeconds * 1000) / intervalMs), 1);
+  return Math.max(Math.ceil(bytesToThreshold / ticksToThreshold), 64 * 1024);
+};
 
 /**
- * Start a steady background leak so memory climbs over ~30–40 minutes even when
- * request volume is low. No-op while the flag is off. Returns a stop handle.
+ * Start a deterministic background leak so the alert fires in roughly 8–12
+ * minutes regardless of browser traffic or normal startup-memory variation.
  */
 export function startBackgroundLeak(): NodeJS.Timeout {
-  const intervalMs = Number.parseInt(process.env.LEAK_INTERVAL_MS ?? '5000', 10);
+  const intervalMs = Number.parseInt(process.env.LEAK_INTERVAL_MS ?? '2000', 10);
+  const effectiveIntervalMs = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 2000;
+  activeChunkBytes = calibratedChunkBytes(effectiveIntervalMs);
   const timer = setInterval(() => {
     if (flagOn()) {
-      leakedChunks.push(Buffer.alloc(chunkBytes(), 1));
+      leakedChunks.push(Buffer.alloc(activeChunkBytes, 1));
     }
-  }, Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 5000);
+  }, effectiveIntervalMs);
   // Do not keep the event loop alive solely for the leak timer.
   timer.unref();
   return timer;
@@ -49,6 +56,6 @@ export function leakStats(): { enabled: boolean; chunks: number; approxBytes: nu
   return {
     enabled: flagOn(),
     chunks: leakedChunks.length,
-    approxBytes: leakedChunks.length * chunkBytes(),
+    approxBytes: leakedChunks.length * activeChunkBytes,
   };
 }

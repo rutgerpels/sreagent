@@ -774,9 +774,10 @@ and switches the fault on. No one edits the live service by hand.
 ### 6b. Watch the memory climb and the alert fire
 
 Open **Application Insights** or **Grafana** and watch the payment-service memory
-trend upward over roughly 30–40 minutes. When it crosses the threshold, the
-**Azure Monitor alert** fires and the agent opens an investigation within about a
-minute.
+trend upward over roughly 8–12 minutes. The alert evaluates the five-minute
+average, so an ordinary one-sample spike does not fire it. When the average
+crosses the threshold, the **Azure Monitor alert** fires and the agent opens an
+investigation within about a minute.
 
 ### 6c. Watch the investigation and root cause
 

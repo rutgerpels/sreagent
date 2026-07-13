@@ -2,7 +2,7 @@
 import './telemetry';
 
 import express, { Request, Response } from 'express';
-import { leakPerRequest, startBackgroundLeak, leakStats } from './leak';
+import { startBackgroundLeak, leakStats } from './leak';
 
 const app = express();
 app.use(express.json());
@@ -22,9 +22,6 @@ app.get('/ready', (_req: Request, res: Response) => {
 app.post('/pay', (req: Request, res: Response) => {
   const amount = Number(req.body?.amount ?? 0);
   const currency = String(req.body?.currency ?? 'EUR');
-
-  // Planted fault: leak a chunk per processed payment when the flag is on.
-  leakPerRequest();
 
   // Simulate a tiny bit of processing work.
   const authCode = Math.random().toString(36).slice(2, 10).toUpperCase();

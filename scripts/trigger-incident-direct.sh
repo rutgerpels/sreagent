@@ -58,7 +58,7 @@ az containerapp update \
     --set-env-vars "ENABLE_SLOW_LEAK=${DESIRED}" >/dev/null
 
 if [[ "${DESIRED}" == "true" ]]; then
-    echo "==> Incident armed. payment-service memory will climb over ~30-40 min."
+    echo "==> Incident armed. The memory alert should fire in roughly 8-12 min."
     echo "    Watch App Insights / the memory alert, then let the SRE Agent investigate and mitigate."
 else
     echo "==> Leak disabled. A new revision rolled out and memory reset."

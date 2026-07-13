@@ -33,9 +33,11 @@ resource "azurerm_monitor_metric_alert" "payment_memory" {
   criteria {
     metric_namespace = "Microsoft.App/containerApps"
     metric_name      = "WorkingSetBytes"
-    aggregation      = "Average"
-    operator         = "GreaterThan"
-    threshold        = var.memory_alert_threshold_bytes
+    # A five-minute average filters ordinary one-sample fluctuations while
+    # preserving correct behavior if payment-service scales to multiple replicas.
+    aggregation = "Average"
+    operator    = "GreaterThan"
+    threshold   = var.memory_alert_threshold_bytes
   }
 
   action {

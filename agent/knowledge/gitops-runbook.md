@@ -7,8 +7,9 @@
 ## Symptom
 
 `payment-service` (Azure Container App `ca-payment-<suffix>`) **working-set
-memory climbs steadily** over ~30–40 minutes and fires the Azure Monitor metric
-alert `alert-payment-memory-<suffix>` (severity 2 / Warning).
+memory climbs steadily** over roughly 8–12 minutes and its five-minute average
+fires the Azure Monitor metric alert `alert-payment-memory-<suffix>` (severity 2 /
+Warning).
 
 ## Root cause
 

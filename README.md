@@ -104,7 +104,7 @@ agent reference the guides link to for background and troubleshooting.
 # or: pwsh ./scripts/trigger-incident-direct.ps1
 ```
 
-Memory in `payment-service` climbs over ~30–40 minutes, the Azure Monitor alert fires, and the
+Memory in `payment-service` climbs for roughly 8–12 minutes, the Azure Monitor alert fires, and the
 SRE Agent (granted **Privileged** access) proposes a direct mitigation you approve in the agent UI.
 
 ### Scenario B — trigger via a Pull Request (GitOps)

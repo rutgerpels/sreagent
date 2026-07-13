@@ -159,8 +159,9 @@ Keep services tiny (Node.js/TypeScript or .NET minimal API — pick one and be c
 In `payment-service`, implement a memory leak that is:
 
 - **Gated by a feature flag** `ENABLE_SLOW_LEAK` (read from config/Key Vault), default `false`.
-- **Gradual** — e.g., an unbounded in-memory array/cache that grows per request, so memory climbs
-  over ~30–40 minutes, matching the "trend started before the alert" narrative.
+- **Gradual** — e.g., an unbounded in-memory array/cache driven by a deterministic
+  timer, so memory climbs over roughly 8–12 minutes while retaining enough trend
+  history for an explainable alert.
 - **Recoverable** — a revision restart clears it; raising the scale rule mitigates it. This gives the
   agent two legitimate mitigations to propose.
 - **Correlatable** — the demo ships in **two scenarios** for triggering/remediating the flip:
