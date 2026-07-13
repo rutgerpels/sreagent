@@ -67,7 +67,9 @@ jobs:
       TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
       TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
       TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '192.168.1.128/27' }}
+      TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
+      TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
+      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -216,11 +218,24 @@ jobs:
         working-directory: infra
         run: |
           set -euo pipefail
+          STATE_RESOURCES="$(terraform state list)"
+          if grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_RESOURCES}"; then
+            LOCATION="$(terraform output -raw location)" || {
+              echo "::error::Existing state has a resource group but its location output could not be read." >&2
+              exit 1
+            }
+          else
+            LOCATION="${TF_LOCATION}"
+          fi
+          echo "Deploying in region: ${LOCATION}"
+          # Subsequent steps must use the immutable location recorded in state.
+          echo "TF_LOCATION=${LOCATION}" >> "$GITHUB_ENV"
+
           terraform apply -input=false -auto-approve \
             -var 'deploy_apps=false' \
             -var "prefix=${TF_PREFIX}" \
             -var "environment=${TF_ENVIRONMENT}" \
-            -var "location=${TF_LOCATION}"
+            -var "location=${LOCATION}"
 
       - name: Build and push images
         working-directory: infra

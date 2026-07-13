@@ -39,15 +39,37 @@ variable "runner_vnet_name" {
 }
 
 variable "runner_private_endpoint_subnet_name" {
-  description = "Existing subnet used for private endpoints reachable by the runner."
+  description = "Existing runner-VNet subnet used to bootstrap the Terraform state Blob private endpoint."
   type        = string
   default     = "private-endpoints"
+}
+
+variable "app_vnet_address_space" {
+  description = "Address space for the regional application VNet. Must not overlap the runner VNet."
+  type        = string
+  default     = "10.100.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.app_vnet_address_space, 0))
+    error_message = "app_vnet_address_space must be a valid CIDR prefix."
+  }
+}
+
+variable "app_private_endpoint_subnet_address_prefix" {
+  description = "Subnet prefix for Key Vault and ACR private endpoints in the regional application VNet."
+  type        = string
+  default     = "10.100.0.0/27"
+
+  validation {
+    condition     = can(cidrhost(var.app_private_endpoint_subnet_address_prefix, 0))
+    error_message = "app_private_endpoint_subnet_address_prefix must be a valid CIDR prefix."
+  }
 }
 
 variable "container_apps_subnet_address_prefix" {
   description = "Dedicated /27-or-larger subnet prefix for the workload-profiles Container Apps environment."
   type        = string
-  default     = "192.168.1.128/27"
+  default     = "10.100.0.64/27"
 
   validation {
     condition = (

@@ -36,7 +36,9 @@ resource "time_sleep" "wait_app_dependencies" {
     azurerm_role_assignment.acr_pull,
     azurerm_role_assignment.kv_secrets,
     azurerm_private_dns_zone_virtual_network_link.acr,
+    azurerm_private_dns_zone_virtual_network_link.acr_app,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
+    azurerm_private_dns_zone_virtual_network_link.key_vault_app,
     azurerm_private_endpoint.acr,
     azurerm_private_endpoint.key_vault,
   ]

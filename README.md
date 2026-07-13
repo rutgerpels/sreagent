@@ -29,15 +29,19 @@ Internet ──TLS──► frontend (public, ACA external ingress)
    Azure Monitor alert ──► (SRE Agent scanner polls the Alerts API every ~1 min)
    Azure Managed Grafana ──► dashboards over App Insights / Log Analytics
 
-   GitHub PR ──merge──► self-hosted runner in Azure VNet
+   GitHub PR ──merge──► self-hosted runner VNet
+                              │ global VNet peering
+                              ▼
+                       regional application VNet
                               │ OIDC + private endpoints
                               ▼
                        Terraform / ACR / Key Vault
 ```
 
-Only **frontend** is publicly reachable. Application services use internal ingress, while Terraform
-state, Key Vault, and ACR are reached through private endpoints from the self-hosted runner VNet.
-Terraform state remains in an **LRS storage account** bootstrapped by the deploy workflow.
+Only **frontend** is publicly reachable. Application services use internal ingress. In the CI/CD
+path shown above, Terraform state is reached through a private endpoint in the runner VNet; Key
+Vault and ACR private endpoints live in the application VNet and are reachable over global VNet
+peering. Terraform state remains in an **LRS storage account** bootstrapped by the deploy workflow.
 
 ## Prerequisites
 

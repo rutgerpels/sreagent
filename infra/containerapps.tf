@@ -17,13 +17,6 @@ resource "azurerm_container_app_environment" "this" {
     name                  = "Consumption"
     workload_profile_type = "Consumption"
   }
-
-  lifecycle {
-    precondition {
-      condition     = lower(azurerm_resource_group.this.location) == lower(data.azurerm_virtual_network.runner.location)
-      error_message = "The Container Apps environment and runner VNet must be in the same Azure region."
-    }
-  }
 }
 
 locals {

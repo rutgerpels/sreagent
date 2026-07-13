@@ -217,7 +217,18 @@ runner network uses different names or address space:
 | `RUNNER_NETWORK_RG` | `agentrg` |
 | `RUNNER_VNET_NAME` | `agent-vnet` |
 | `RUNNER_PE_SUBNET_NAME` | `private-endpoints` |
-| `CONTAINER_APPS_SUBNET_PREFIX` | `192.168.1.128/27` |
+| `APP_VNET_ADDRESS_SPACE` | `10.100.0.0/16` |
+| `APP_PE_SUBNET_PREFIX` | `10.100.0.0/27` |
+| `CONTAINER_APPS_SUBNET_PREFIX` | `10.100.0.64/27` |
+
+The application address space and both subnet prefixes must not overlap the
+runner VNet. The deployment identity also needs permission to create the reverse
+VNet peering in `RUNNER_NETWORK_RG`; the subscription-scoped **Contributor**
+assignment above includes that permission.
+
+Migrating an existing environment from the former single-VNet layout replaces
+the Container Apps environment and its private endpoints. Plan for a one-time
+deployment outage; subsequent applies use the peered layout in place.
 
 ---
 
@@ -230,10 +241,15 @@ GitHub Actions workflow — no local Terraform or Docker.
    **Run workflow** (you can keep the default prefix, environment, and region, or
    override them).
 
+   For an existing environment, the workflow ignores a conflicting region input
+   and reuses the immutable region stored in Terraform state.
+
 **What is happening:** the `deploy` workflow runs on the self-hosted runner and
-signs in with the identity from Part 1. It creates the remote Terraform state storage
-and Blob private endpoint, applies the platform with private Key Vault and Premium
-ACR endpoints, builds and pushes the three application images, then deploys the
+signs in with the identity from Part 1. It creates the remote Terraform state
+storage and Blob private endpoint, then creates a regional application VNet with
+global peering to the runner VNet. Private Key Vault and Premium ACR endpoints
+live in the application VNet and are reachable from both Container Apps and the
+runner. The workflow then builds and pushes the images and deploys the
 application. No one runs anything against the live environment by hand.
 
 **Expected outcome:** the workflow finishes green. Open its run summary to find
