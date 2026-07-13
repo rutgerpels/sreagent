@@ -33,9 +33,12 @@ application reads its secrets from Key Vault using a managed identity.
 
 ## What the demo shows
 
-When you switch the planted fault on, the payment service's memory slowly climbs
-over roughly 30–40 minutes until it crosses a threshold and an **Azure Monitor
-alert fires**. The Azure SRE Agent picks up that alert, investigates the
+When you switch the planted fault on, the payment service's memory climbs
+predictably for roughly 8–12 minutes until its five-minute average crosses the
+threshold and an **Azure Monitor alert fires**. The averaging window filters
+ordinary transient spikes. Each leaking revision calibrates its allocation rate
+from its startup memory, keeping the timing stable across normal image and
+dependency changes. The Azure SRE Agent picks up that alert, investigates the
 telemetry, connects the memory growth to the change that caused it, and proposes
 a fix. You stay in control: the agent only acts after a human approves.
 
@@ -60,9 +63,8 @@ Both guides include everything you need: deploying the app, creating and
 connecting the SRE Agent, switching the fault on, watching the agent work, and
 resetting afterwards.
 
-> **Tip:** the memory leak builds gradually. Switch the fault on, then take a
-> short break or walk through the architecture while the alert builds. Come back
-> after the alert has fired to watch the agent investigate and remediate.
+> **Tip:** switch the fault on, then use the next few minutes to walk through the
+> architecture and alert design before the agent begins its investigation.
 
 ---
 

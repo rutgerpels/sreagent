@@ -122,6 +122,18 @@ variable "container_memory" {
   default     = "0.5Gi"
 }
 
+variable "payment_container_cpu" {
+  description = "vCPU for payment-service; paired with payment_container_memory."
+  type        = number
+  default     = 0.5
+}
+
+variable "payment_container_memory" {
+  description = "Memory for payment-service, including post-alert investigation headroom."
+  type        = string
+  default     = "1Gi"
+}
+
 variable "payment_max_replicas" {
   description = "Max replicas for payment-service (scale-out mitigation headroom)."
   type        = number
@@ -143,19 +155,25 @@ variable "enable_slow_leak" {
 variable "leak_interval_ms" {
   description = "Background leak interval (ms) when the leak flag is on."
   type        = number
-  default     = 5000
+  default     = 2000
 }
 
 variable "leak_chunk_kb" {
-  description = "Size (KB) of each leaked allocation when the leak flag is on."
+  description = "Fallback leaked allocation size (KB) if timing calibration is unavailable."
   type        = number
-  default     = 256
+  default     = 1024
+}
+
+variable "leak_target_crossing_seconds" {
+  description = "Target time for working-set memory to reach the alert threshold after the leak starts."
+  type        = number
+  default     = 360
 }
 
 variable "memory_alert_threshold_bytes" {
-  description = "Working-set memory threshold (bytes) that fires the Monitor alert."
+  description = "Five-minute average working-set threshold (bytes) that fires the Monitor alert."
   type        = number
-  default     = 350000000
+  default     = 390000000
 }
 
 variable "frontend_allowed_ips" {

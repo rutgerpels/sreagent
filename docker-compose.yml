@@ -7,8 +7,10 @@ services:
       SERVICE_NAME: payment-service
       PORT: "8080"
       ENABLE_SLOW_LEAK: "false"
-      LEAK_INTERVAL_MS: "5000"
-      LEAK_CHUNK_KB: "256"
+      LEAK_INTERVAL_MS: "2000"
+      LEAK_CHUNK_KB: "1024"
+      LEAK_TARGET_CROSSING_SECONDS: "360"
+      MEMORY_ALERT_THRESHOLD_BYTES: "390000000"
     ports:
       - "8082:8080"
 

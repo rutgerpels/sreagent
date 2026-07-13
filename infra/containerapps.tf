@@ -27,6 +27,8 @@ locals {
       external     = true
       min_replicas = 1
       max_replicas = 3
+      cpu          = var.container_cpu
+      memory       = var.container_memory
       env = [
         { name = "SERVICE_NAME", value = "frontend" },
         { name = "PORT", value = "8080" },
@@ -37,6 +39,8 @@ locals {
       external     = false
       min_replicas = 1
       max_replicas = 3
+      cpu          = var.container_cpu
+      memory       = var.container_memory
       env = [
         { name = "SERVICE_NAME", value = "checkout-api" },
         { name = "PORT", value = "8080" },
@@ -47,12 +51,16 @@ locals {
       external     = false
       min_replicas = 1
       max_replicas = var.payment_max_replicas
+      cpu          = var.payment_container_cpu
+      memory       = var.payment_container_memory
       env = [
         { name = "SERVICE_NAME", value = "payment-service" },
         { name = "PORT", value = "8080" },
         { name = "ENABLE_SLOW_LEAK", value = tostring(var.enable_slow_leak) },
         { name = "LEAK_INTERVAL_MS", value = tostring(var.leak_interval_ms) },
         { name = "LEAK_CHUNK_KB", value = tostring(var.leak_chunk_kb) },
+        { name = "LEAK_TARGET_CROSSING_SECONDS", value = tostring(var.leak_target_crossing_seconds) },
+        { name = "MEMORY_ALERT_THRESHOLD_BYTES", value = tostring(var.memory_alert_threshold_bytes) },
       ]
     }
   }
@@ -114,8 +122,8 @@ resource "azurerm_container_app" "app" {
     container {
       name   = each.key
       image  = "${azurerm_container_registry.this.login_server}/${each.key}:${var.image_tag}"
-      cpu    = var.container_cpu
-      memory = var.container_memory
+      cpu    = each.value.cpu
+      memory = each.value.memory
 
       dynamic "env" {
         for_each = each.value.env

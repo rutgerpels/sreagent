@@ -68,7 +68,7 @@ if [[ "${RESET}" == "true" ]]; then
     ACTION="disable"
 else
     TITLE="demo(payment-service): enable slow memory leak (enable_slow_leak=true)"
-    WHY="Arms the ContosoPay demo incident. Merging this PR runs the \`apply-infra\` workflow, which \`terraform apply\`s the change and deploys the leak. payment-service memory then climbs over ~30-40 min until the Azure Monitor alert fires and the SRE Agent investigates."
+    WHY="Arms the ContosoPay demo incident. Merging this PR runs the \`apply-infra\` workflow, which \`terraform apply\`s the change and deploys the leak. payment-service memory then climbs for roughly 8-12 min until the Azure Monitor alert fires and the SRE Agent investigates."
     ACTION="enable"
 fi
 

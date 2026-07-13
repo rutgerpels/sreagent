@@ -15,7 +15,7 @@
     For the realistic, change-managed GitOps flow (PR + CI, agent remediates via a
     PR) use scripts/trigger-incident-gitops.ps1 instead.
 
-    Memory then climbs over ~30-40 min, the Azure Monitor alert fires, and the SRE
+    Memory then climbs for roughly 8-12 min, the Azure Monitor alert fires, and the SRE
     Agent investigates.
 
 .PARAMETER Reset
@@ -92,6 +92,6 @@ if ($Reset.IsPresent) {
     Write-Host '==> Leak disabled. A new revision rolled out and memory reset.' -ForegroundColor Green
 }
 else {
-    Write-Host '==> Incident armed. payment-service memory will climb over ~30-40 min.' -ForegroundColor Green
+    Write-Host '==> Incident armed. The memory alert should fire in roughly 8-12 min.' -ForegroundColor Green
     Write-Host '    Watch App Insights / the memory alert, then let the SRE Agent investigate and mitigate.'
 }

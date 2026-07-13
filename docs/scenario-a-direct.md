@@ -210,11 +210,10 @@ payment-service's memory begins to climb.
 ### 5b. Watch the memory climb and the alert fire
 
 Open **Application Insights** (or the **Grafana** dashboard) for the demo and look
-at the payment-service's memory. Over roughly 30–40 minutes it trends steadily
-upward. When it crosses the threshold, the **Azure Monitor alert**
+at the payment-service's memory. Over roughly 8–12 minutes it trends steadily
+upward. The alert evaluates the five-minute average, so an ordinary one-sample
+spike does not fire it. When the average crosses the threshold, the **Azure Monitor alert**
 (`alert-payment-memory-<suffix>`) fires.
-
-This is a good moment to take a short break or walk through the architecture.
 
 **Expected outcome:** the alert moves to a fired state, and within about a minute
 the agent opens an investigation for it.
