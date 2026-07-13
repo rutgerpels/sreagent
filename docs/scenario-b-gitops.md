@@ -367,6 +367,12 @@ Requests.
 > permissions above. Also confirm the `gitops-remediation` subagent isn't
 > restricted to issue-only tools (leave its **Tools** selection empty to inherit
 > the branch/commit/PR tools — see Part 5b).
+>
+> Some agent builds create PRs through `git` and `gh` in `RunInTerminal` rather
+> than native connector tools. Part 5a therefore sets terminal tools to **Ask**
+> instead of denying them. Approve the individual repository commands when
+> prompted. If the terminal is globally denied, the agent can diagnose the
+> incident and create an issue but cannot produce the required code change.
 
 ### 4c. Grant read-only access to the demo resources
 
@@ -470,8 +476,8 @@ The policy to apply comes in **two shapes** — pick the one for how you apply i
   ```json
   {
     "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-    "ask": [],
-    "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+    "ask": ["RunInTerminal", "RunShellCommand"],
+    "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
   }
   ```
 
@@ -483,8 +489,8 @@ The policy to apply comes in **two shapes** — pick the one for how you apply i
   {
     "permissions": {
       "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-      "ask": [],
-      "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+      "ask": ["RunInTerminal", "RunShellCommand"],
+      "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
     }
   }
   ```
@@ -514,15 +520,16 @@ the contents with
 ```json
 {
   "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-  "ask": [],
-  "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+  "ask": ["RunInTerminal", "RunShellCommand"],
+  "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
 }
 ```
 
-This one paste sets the entire global policy — allow the read tools, deny the
-Azure/Kubernetes writes **and** the shell escape hatches — so you can skip the
-manual toggles below. (Remember: paste the un-wrapped form here, *not* the
-`permissions`-wrapped API form, or the box rejects it.)
+This one paste allows read diagnostics and requires approval for terminal
+commands, including the `git`/`gh` commands needed to create a Pull Request.
+Direct Azure/Kubernetes writes and Terraform apply/destroy remain denied.
+(Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
+form, or the box rejects it.)
 
 <details>
 <summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
@@ -539,27 +546,20 @@ Keep these **`On` / `Allow`** (safe, read-only):
 - `RunAzCliReadCommands`
 - `RunKubectlReadCommand`
 
-**Step 2 — neutralize the shell tools (Advanced permissions tab).**
-`RunInTerminal` is usually **locked `On`** in the grid (you *cannot* toggle it
-off), and `RunShellCommand` may not appear as a built-in at all — both behaviours
-are expected and vary by build. The grid toggle is not how you deny them: add
-them as **deny patterns** on the **Advanced permissions** tab instead. A global
-**deny** is evaluated before everything else, so it holds even for a
-locked-`On` tool:
-
-```
-RunInTerminal
-RunShellCommand
-```
-
-If you'd rather keep the shell available for read-only diagnostics, deny only the
-dangerous writes instead (the `bash(…)` alias expands to `RunInTerminal`,
-`RunShellCommand`, and the az CLI):
+**Step 2 — permit repository commands through approval.**
+Do **not** deny `RunInTerminal` or `RunShellCommand`; some builds need them to run
+`git` and `gh`. Set both tools to **Ask**, then approve the individual repository
+commands during remediation. Do not auto-allow broad `git *` or `gh *` patterns:
+aliases and extensions can execute other programs. Add targeted deny patterns
+for direct infrastructure changes. The `bash(…)` alias expands across the
+terminal and shell command tools:
 
 ```
 bash(az * create *)
 bash(az * update *)
 bash(az * delete *)
+bash(terraform * apply *)
+bash(terraform * destroy *)
 ```
 
 </details>
@@ -659,7 +659,8 @@ admin-only setting).
      -d '{
        "permissions": {
          "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-         "deny":  ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "RunInTerminal", "RunShellCommand"]
+         "ask": ["RunInTerminal", "RunShellCommand"],
+         "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
        }
      }'
    ```

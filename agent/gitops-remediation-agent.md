@@ -29,6 +29,12 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
    working-set memory is the planted slow memory leak, controlled by
    `enable_slow_leak` in `infra/leak.auto.tfvars`.
 3. Remediate via GitOps:
+   - Prefer the GitHub Connector's native branch, file-edit, commit, and Pull
+     Request tools.
+   - If native PR tools are unavailable, use the terminal only for individual
+     `git` and `gh` commands. Run one command per tool call; do not chain commands,
+     use pipes, or invoke `az`, `kubectl`, Terraform apply/destroy, or HTTP calls
+     to Azure management endpoints.
    - Create a new branch from `main`, e.g. `Bug/sre-disable-memory-leak`.
    - Edit `infra/leak.auto.tfvars` so the line reads exactly:
        enable_slow_leak = false
@@ -37,16 +43,16 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
    - In the PR description, summarise the root cause, the evidence (metric
      trend, correlated commit/PR), and note that merging triggers the
      `apply-infra` GitHub Actions workflow which `terraform apply`s the fix.
-4. Open a GitHub issue to track the incident if one does not already exist, and
-   link it to the PR. A tracking issue on its own is **not** a remediation — the
-   Pull Request in step 3 is mandatory; always open both.
+4. Only after the Pull Request has been opened successfully, open a GitHub issue
+   to track the incident if one does not already exist, and link it to the PR. Do
+   not create an issue first. A tracking issue on its own is **not** remediation.
 5. Do NOT merge the PR yourself — a human approves and merges. Report the PR
    link and stop. After a human merges, verify the payment-service memory
    recovers on the new revision.
 
-If you cannot open a PR (missing GitHub connector or permissions), do not fall
-back to a direct Azure change and do not treat the tracking issue as the fix —
-instead report the diagnosis and the exact PR you would have opened, state that
-the GitHub connector needs Contents + Pull requests write access, and ask a human
-to apply it.
+If you cannot open a PR, do not create an issue as a substitute and do not fall
+back to a direct Azure change. Report the blocked tool or permission precisely:
+the GitHub connector needs Contents + Pull requests write access, while a
+terminal fallback needs `git` and `gh` commands allowed by the global policy.
+Provide the exact branch, file change, title, and PR body a human should apply.
 ```

@@ -4,12 +4,22 @@
       "RunAzCliReadCommands",
       "RunKubectlReadCommand(kubectl get *)"
     ],
-    "ask": [],
+    "ask": [
+      "RunInTerminal",
+      "RunShellCommand"
+    ],
     "deny": [
       "RunAzCliWriteCommands",
       "RunKubectlWriteCommand",
-      "RunInTerminal",
-      "RunShellCommand"
+      "bash(az * create *)",
+      "bash(az * update *)",
+      "bash(az * delete *)",
+      "bash(az * set *)",
+      "bash(az * restart *)",
+      "bash(az * start *)",
+      "bash(az * stop *)",
+      "bash(terraform * apply *)",
+      "bash(terraform * destroy *)"
     ]
   }
 }

@@ -13,7 +13,7 @@ Apply them once, after the agent is created and connected (see
 
 | File | What it is | Where it goes |
 | --- | --- | --- |
-| [`tool-access-policy.portal.json`](tool-access-policy.portal.json) | **Portal-shaped hard enforcement.** Global Tool Access Policy that **denies** Azure CLI write commands and terminal escape hatches. | Paste into **Settings → Permissions → Advanced permissions → JSON**. This editor accepts only `allow`, `ask`, and `deny` at the root. |
+| [`tool-access-policy.portal.json`](tool-access-policy.portal.json) | **Portal-shaped hard enforcement.** Requires approval for terminal-based `git`/`gh` PR operations and denies direct Azure/Kubernetes/Terraform writes. | Paste into **Settings → Permissions → Advanced permissions → JSON**. This editor accepts only `allow`, `ask`, and `deny` at the root. |
 | [`tool-access-policy.api.json`](tool-access-policy.api.json) | **API-shaped hard enforcement.** The same policy wrapped in the `permissions` object required by the global-settings API. | Send as the request body to the agent settings API. Do **not** paste this file into the portal editor. |
 | [`gitops-remediation-agent.md`](gitops-remediation-agent.md) | **Behavioural steering.** The custom-agent system prompt that tells the agent to remediate via a PR against `infra/leak.auto.tfvars` instead of acting directly. | A **custom agent** (Builder → Custom agents → New). |
 | [`knowledge/gitops-runbook.md`](knowledge/gitops-runbook.md) | **Reference context.** A runbook the agent reads during investigations so it knows the exact GitOps fix for the planted leak. | A **knowledge file** (Builder → Knowledge → Add). |
