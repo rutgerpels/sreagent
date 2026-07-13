@@ -74,6 +74,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate healthy demo baseline
+        run: |
+          set -euo pipefail
+          LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
+          if [[ "${LEAK_STATE}" != "false" ]]; then
+            {
+              echo "## Invalid demo baseline"
+              echo ""
+              echo "\`infra/leak.auto.tfvars\` must contain \`enable_slow_leak = false\` before a full deploy."
+              echo "The incident is introduced later by the Pull Request created by \`arm-incident\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error file=infra/leak.auto.tfvars::Expected enable_slow_leak = false, found '${LEAK_STATE:-missing or invalid}'."
+            exit 1
+          fi
+
       - name: Azure login (OIDC)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
@@ -351,6 +366,17 @@ jobs:
           BRANCH="Feature/trigger-memory-leak-$(date -u +%Y%m%d%H%M%S)"
           chmod +x ./scripts/trigger-incident-gitops.sh
           ./scripts/trigger-incident-gitops.sh --base "${BASE_BRANCH}" --branch "${BRANCH}" --no-pr
+
+          if ! git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null; then
+            {
+              echo "## Demo incident PR was not created"
+              echo ""
+              echo "The trigger produced no incident branch. Confirm that"
+              echo "\`infra/leak.auto.tfvars\` on \`${BASE_BRANCH}\` contains \`enable_slow_leak = false\`, then rerun \`deploy\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Incident branch '${BRANCH}' was not pushed; no Pull Request can be created."
+            exit 1
+          fi
 
           TITLE="demo(payment-service): enable slow memory leak (enable_slow_leak=true)"
           BODY="Arms the ContosoPay demo incident (Scenario B). Merging this PR runs the \`apply-infra\` workflow, which \`terraform apply\`s \`enable_slow_leak = true\` so payment-service memory climbs until the Azure Monitor alert fires."
