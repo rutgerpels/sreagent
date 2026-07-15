@@ -15,7 +15,7 @@ ContosoPay is a checkout application made of three small services running on
 **Azure Container Apps**:
 
 - **frontend** — the public web page where a customer places an order. This is
-  the only service reachable from the internet.
+  the only public application service.
 - **checkout-api** — receives the order from the frontend. Internal only.
 - **payment-service** — processes the payment. Internal only. This service
   contains a **deliberately planted, switchable fault**: a slow memory leak that
@@ -28,6 +28,12 @@ an Azure Managed Grafana dashboard.
 
 Everything is built with Terraform. No secrets are stored in the code; the
 application reads its secrets from Key Vault using a managed identity.
+
+Scenario B can also deploy a narrow remediation MCP broker. Its HTTPS endpoint is
+public so the managed SRE Agent can reach it, but Microsoft Entra authentication
+and an exact managed-identity check protect it. It can create the fixed
+remediation issue only; GitHub Actions remains the component that writes code and
+opens the PR.
 
 ---
 

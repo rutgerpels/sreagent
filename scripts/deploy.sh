@@ -6,8 +6,8 @@
 #   1. Validate prerequisites (az, terraform, docker, an az login).
 #   2. terraform init.
 #   3. terraform apply (phase 1): platform only, no apps (images don't exist yet).
-#   4. Build + push the three container images to ACR.
-#   5. terraform apply (phase 2): the three Container Apps + alert, on the new tag.
+#   4. Build + push the three app images and the optional MCP broker to ACR.
+#   5. terraform apply (phase 2): Container Apps + alert, on the new tag.
 #   6. Print the public frontend URL and SRE Agent wiring next-steps.
 #
 # No secrets are handled here. App secrets live in Key Vault, read via managed
@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INFRA_DIR="${REPO_ROOT}/infra"
 readonly SCRIPT_DIR REPO_ROOT INFRA_DIR
-SERVICES=("frontend" "checkout-api" "payment-service")
+SERVICES=("frontend" "checkout-api" "payment-service" "sre-remediation-mcp")
 
 usage() {
     echo "Usage: $0 [-s SUBSCRIPTION] [-t IMAGE_TAG] [--skip-build] [--prefix P] [--env E] [--location L]" >&2
@@ -118,9 +118,24 @@ terraform -chdir="${INFRA_DIR}" init -input=false -migrate-state -force-copy \
     -backend-config="container_name=${STATE_CONTAINER}" \
     -backend-config="key=${STATE_KEY}"
 
+# Preserve the immutable application resource-group location on reruns.
+EXISTING_RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name 2>/dev/null | tr -d '\r' || true)"
+if [[ -n "${EXISTING_RESOURCE_GROUP}" ]]; then
+    EXISTING_LOCATION="$(az group show --name "${EXISTING_RESOURCE_GROUP}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
+    if [[ -n "${EXISTING_LOCATION}" && "${EXISTING_LOCATION,,}" != "${LOCATION,,}" ]]; then
+        echo "WARNING: ignoring requested location '${LOCATION}'; existing resource group '${EXISTING_RESOURCE_GROUP}' is in '${EXISTING_LOCATION}'." >&2
+        LOCATION="${EXISTING_LOCATION}"
+    fi
+fi
+
 echo "==> terraform apply (phase 1: platform, no apps yet)"
-terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
-    -var 'deploy_apps=false' -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
+STATE_RESOURCES="$(terraform -chdir="${INFRA_DIR}" state list 2>/dev/null || true)"
+if ! grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}"; then
+    terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
+        -var 'deploy_apps=false' -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
+else
+    echo "    Existing app deployment detected; preserving running revisions."
+fi
 
 ACR_NAME="$(terraform -chdir="${INFRA_DIR}" output -raw acr_name)"
 ACR_LOGIN_SERVER="$(terraform -chdir="${INFRA_DIR}" output -raw acr_login_server)"
@@ -149,6 +164,7 @@ terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
 FRONTEND_URL="$(terraform -chdir="${INFRA_DIR}" output -raw frontend_url)"
 RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name)"
 GRAFANA="$(terraform -chdir="${INFRA_DIR}" output -raw grafana_endpoint 2>/dev/null || true)"
+BROKER_ENDPOINT="$(terraform -chdir="${INFRA_DIR}" output -raw sre_remediation_broker_endpoint_url 2>/dev/null || true)"
 
 echo ""
 echo "============================================================"
@@ -157,6 +173,7 @@ echo "============================================================"
 echo "  Frontend URL : ${FRONTEND_URL}"
 echo "  Resource grp : ${RESOURCE_GROUP}"
 [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "  Grafana      : ${GRAFANA}"
+[[ -n "${BROKER_ENDPOINT}" && "${BROKER_ENDPOINT}" != "null" ]] && echo "  MCP broker   : ${BROKER_ENDPOINT}"
 echo ""
 echo " Remote Terraform state (set as GitHub Actions *variables* for apply-infra.yml):"
 echo "  TFSTATE_RG        : ${STATE_RG}"

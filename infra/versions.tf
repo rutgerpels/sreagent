@@ -7,9 +7,8 @@ terraform {
       version = "~> 4.0"
     }
     azapi = {
-      # Used only for the optional Microsoft.App/agents (SRE Agent) resources,
-      # which the azurerm provider does not yet expose. Gated behind
-      # var.enable_sre_agents (default false), so it is a no-op otherwise.
+      # Used for optional Microsoft.App/agents and the Container Apps built-in
+      # auth child resource, neither of which azurerm currently exposes.
       source  = "azure/azapi"
       version = "~> 2.0"
     }

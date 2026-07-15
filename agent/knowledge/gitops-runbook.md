@@ -29,9 +29,9 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
 
 ## Correct remediation (GitOps only — do NOT touch Azure directly)
 
-1. Create a GitHub issue with the exact title
-   `[SRE] Remediate ContosoPay slow memory leak`, label `sre-remediation`, and
-   body marker `<!-- sre-remediation:payment-slow-leak -->`.
+1. Call `create_slow_leak_remediation_issue`. The managed-identity MCP broker
+   creates only the fixed issue title, label, and body marker. It accepts no
+   repository content from the agent.
 2. The issue triggers `.github/workflows/sre-remediation-pr.yml`. The workflow
    creates a branch and changes only `infra/leak.auto.tfvars`:
 
@@ -41,12 +41,14 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
 
 3. The workflow commits and opens an unmerged Pull Request into `main` with its
    short-lived `GITHUB_TOKEN`.
-4. A human reviews and merges. Merging runs `.github/workflows/apply-infra.yml`,
+4. Call `get_slow_leak_remediation_status` with the returned issue number. It
+   returns only trusted workflow status markers, never arbitrary comment text.
+5. A human reviews and merges. Merging runs `.github/workflows/apply-infra.yml`,
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
 
-Never use generic workflow dispatch, terminal `git`/`gh`, GitHub MCP, a PAT, or
-direct GitHub API calls for this remediation.
+Never use generic workflow dispatch, terminal `git`/`gh`, the PAT-based GitHub
+MCP connector, or direct GitHub API calls for this remediation.
 
 ## Why not `az containerapp update`?
 

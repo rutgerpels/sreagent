@@ -1,7 +1,8 @@
 ###############################################################################
-# Container Apps environment + the three ContosoPay apps.
-# Only `frontend` has external ingress (R4). checkout-api and payment-service
-# are internal-only. TLS enforced (allow_insecure_connections = false).
+# Container Apps environment + ContosoPay apps and optional remediation broker.
+# `frontend` has external ingress (R4); the optional SRE remediation broker is
+# the sole exception and is public only for the managed SRE Agent, protected by
+# Microsoft Entra auth. Other apps are internal. TLS is enforced everywhere.
 ###############################################################################
 
 resource "azurerm_container_app_environment" "this" {
@@ -171,4 +172,160 @@ resource "azurerm_container_app" "app" {
     azurerm_key_vault_secret.appinsights_connection,
     time_sleep.wait_app_dependencies,
   ]
+}
+
+###############################################################################
+# Optional public Streamable-HTTP remediation broker (R4 exception). It reuses
+# the VNet-integrated environment but requires external ingress because Azure
+# SRE Agent is managed. Easy Auth rejects unauthenticated traffic; the service
+# also verifies x-ms-client-principal-id against the exact Scenario B UAMI.
+###############################################################################
+
+resource "azurerm_container_app" "sre_remediation_broker" {
+  count = var.deploy_apps && var.enable_sre_remediation_broker ? 1 : 0
+
+  name                         = "ca-sre-remediation-${local.suffix}"
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  resource_group_name          = azurerm_resource_group.this.name
+  revision_mode                = "Single"
+  tags                         = local.tags
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.sre_remediation_broker[0].id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.this.login_server
+    identity = azurerm_user_assigned_identity.sre_remediation_broker[0].id
+  }
+
+  ingress {
+    external_enabled           = true
+    target_port                = 8080
+    transport                  = "auto"
+    allow_insecure_connections = false
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  template {
+    min_replicas = 1
+    max_replicas = 1
+
+    container {
+      name   = "sre-remediation-mcp"
+      image  = "${azurerm_container_registry.this.login_server}/sre-remediation-mcp:${var.image_tag}"
+      cpu    = var.container_cpu
+      memory = var.container_memory
+
+      env {
+        name  = "PORT"
+        value = "8080"
+      }
+      env {
+        name  = "ALLOWED_CALLER_PRINCIPAL_ID"
+        value = local.sre_remediation_allowed_caller_principal_id
+      }
+      env {
+        name  = "KEY_VAULT_URL"
+        value = azurerm_key_vault.this.vault_uri
+      }
+      env {
+        name  = "GITHUB_APP_PRIVATE_KEY_SECRET_NAME"
+        value = var.sre_remediation_github_app_private_key_secret_name
+      }
+      env {
+        name  = "GITHUB_APP_ID"
+        value = var.sre_remediation_github_app_id
+      }
+      env {
+        name  = "GITHUB_APP_INSTALLATION_ID"
+        value = var.sre_remediation_github_app_installation_id
+      }
+      env {
+        name  = "GITHUB_APP_BOT_LOGIN"
+        value = var.sre_remediation_github_app_bot_login
+      }
+      env {
+        name  = "GITHUB_REPOSITORY_OWNER"
+        value = var.sre_remediation_github_repository_owner
+      }
+      env {
+        name  = "GITHUB_REPOSITORY_NAME"
+        value = var.sre_remediation_github_repository_name
+      }
+
+      # Select the sole user-assigned identity explicitly for DefaultAzureCredential.
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.sre_remediation_broker[0].client_id
+      }
+
+      liveness_probe {
+        transport        = "HTTP"
+        port             = 8080
+        path             = "/health"
+        initial_delay    = 10
+        interval_seconds = 30
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health"
+        interval_seconds        = 15
+        success_count_threshold = 1
+        failure_count_threshold = 3
+      }
+    }
+  }
+
+  depends_on = [
+    time_sleep.wait_sre_remediation_broker_dependencies,
+  ]
+}
+
+resource "azapi_resource" "sre_remediation_broker_auth" {
+  count = var.deploy_apps && var.enable_sre_remediation_broker ? 1 : 0
+
+  type      = "Microsoft.App/containerApps/authConfigs@2024-03-01"
+  name      = "current"
+  parent_id = azurerm_container_app.sre_remediation_broker[0].id
+
+  # The body follows the published Container Apps authConfig resource schema.
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      platform = {
+        enabled = true
+      }
+      globalValidation = {
+        unauthenticatedClientAction = "Return401"
+        # ACA health probes do not carry Entra credentials. This endpoint returns
+        # only a static liveness value and is the sole unauthenticated path.
+        excludedPaths = ["/health"]
+      }
+      httpSettings = {
+        requireHttps = true
+      }
+      identityProviders = {
+        azureActiveDirectory = {
+          enabled           = true
+          isAutoProvisioned = false
+          registration = {
+            clientId     = var.sre_remediation_entra_api_client_id
+            openIdIssuer = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+          }
+          validation = {
+            allowedAudiences = [var.sre_remediation_entra_token_audience]
+          }
+        }
+      }
+    }
+  }
 }

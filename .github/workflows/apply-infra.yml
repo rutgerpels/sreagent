@@ -63,6 +63,17 @@ jobs:
       TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
       TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
       TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
+      TF_VAR_enable_sre_remediation_broker: ${{ vars.ENABLE_SRE_REMEDIATION_BROKER || 'false' }}
+      TF_VAR_sre_remediation_allowed_caller_principal_id: ${{ vars.SRE_REMEDIATION_CALLER_PRINCIPAL_ID }}
+      TF_VAR_sre_remediation_entra_api_client_id: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
+      TF_VAR_sre_remediation_entra_token_audience: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
+      TF_VAR_sre_remediation_entra_token_scope: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
+      TF_VAR_sre_remediation_github_app_id: ${{ vars.SRE_GITHUB_APP_ID }}
+      TF_VAR_sre_remediation_github_app_installation_id: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
+      TF_VAR_sre_remediation_github_app_bot_login: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
+      TF_VAR_sre_remediation_github_repository_owner: ${{ github.repository_owner }}
+      TF_VAR_sre_remediation_github_repository_name: ${{ github.event.repository.name }}
+      TF_VAR_sre_remediation_github_app_private_key_secret_name: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_SECRET_NAME || 'github-app-private-key' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

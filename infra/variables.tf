@@ -95,17 +95,17 @@ variable "enable_grafana" {
 
 variable "deploy_apps" {
   description = <<-EOT
-    Whether to create the three Container Apps. The deploy script applies once
-    with this false (to create the ACR/Key Vault/identities/env), pushes the
-    images, then applies again with this true. Defaults to true so a normal
-    re-apply is idempotent.
+    Whether to create the application Container Apps (including the optional
+    broker when enabled). The deploy script applies once with this false to
+    create the platform/identities, pushes images, then applies again with this
+    true. Defaults to true so a normal re-apply is idempotent.
   EOT
   type        = bool
   default     = true
 }
 
 variable "image_tag" {
-  description = "Container image tag pulled from ACR for the three apps."
+  description = "Container image tag pulled from ACR for application images, including the optional broker."
   type        = string
   default     = "latest"
 }
@@ -180,6 +180,78 @@ variable "frontend_allowed_ips" {
   description = "Optional CIDR allow-list for the public frontend ingress. Empty = allow all."
   type        = list(string)
   default     = []
+}
+
+###############################################################################
+# Optional: Entra-protected SRE remediation MCP broker for Scenario B.
+# The GitHub App private key is bootstrapped into Key Vault out of band and is
+# deliberately never accepted by Terraform.
+###############################################################################
+
+variable "enable_sre_remediation_broker" {
+  description = "Provision the SRE remediation broker identity/RBAC and, when deploy_apps is true, its Container App."
+  type        = bool
+  default     = false
+}
+
+variable "sre_remediation_allowed_caller_principal_id" {
+  description = "Exact Scenario B SRE Agent UAMI object/principal ID allowed by the broker. Derived when that agent is provisioned here; otherwise required when the broker is enabled."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_entra_api_client_id" {
+  description = "Client ID of the dedicated Microsoft Entra API application protecting the broker. This is nonsecret metadata."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_entra_token_audience" {
+  description = "Allowed access-token audience for the broker API. When enabled, use api://<sre_remediation_entra_api_client_id>."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_entra_token_scope" {
+  description = "Client-credentials token scope for callers. When enabled, use <sre_remediation_entra_token_audience>/.default."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_app_id" {
+  description = "GitHub App numeric ID used by the broker. Nonsecret metadata; required when the broker is enabled."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_app_installation_id" {
+  description = "GitHub App numeric installation ID used by the broker. Nonsecret metadata; required when the broker is enabled."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_app_bot_login" {
+  description = "GitHub App bot login that must author broker-created remediation issues, including the [bot] suffix."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_repository_owner" {
+  description = "GitHub repository owner on which the broker may operate. Required when the broker is enabled."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_repository_name" {
+  description = "GitHub repository name on which the broker may operate. Required when the broker is enabled."
+  type        = string
+  default     = null
+}
+
+variable "sre_remediation_github_app_private_key_secret_name" {
+  description = "Name of the existing Key Vault secret containing the out-of-band GitHub App private key. Terraform never creates or reads its value."
+  type        = string
+  default     = "github-app-private-key"
 }
 
 ###############################################################################

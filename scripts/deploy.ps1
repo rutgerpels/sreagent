@@ -8,8 +8,8 @@
       2. terraform init.
       3. terraform apply (phase 1) creating ACR/Key Vault/identities/observability/
          Container Apps environment WITHOUT the apps (images do not exist yet).
-      4. Builds and pushes the three container images to ACR.
-      5. terraform apply (phase 2) creating the three Container Apps + alert,
+      4. Builds and pushes the three app images and optional MCP broker to ACR.
+      5. terraform apply (phase 2) creating the Container Apps + alert,
          pointing at the freshly pushed image tag.
       6. Prints the public frontend URL and SRE Agent wiring next-steps.
 
@@ -66,7 +66,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $infraDir = Join-Path $repoRoot 'infra'
-$services = @('frontend', 'checkout-api', 'payment-service')
+$services = @('frontend', 'checkout-api', 'payment-service', 'sre-remediation-mcp')
 
 function Assert-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -176,12 +176,26 @@ Invoke-Checked -Name 'terraform init' {
         -backend-config="key=$($backend.Key)"
 }
 
+# Preserve the immutable application resource-group location on reruns.
+$existingResourceGroup = terraform -chdir="$infraDir" output -raw resource_group_name 2>$null
+if ($existingResourceGroup) {
+    $existingLocation = az group show --name $existingResourceGroup --query location --output tsv 2>$null
+    if ($existingLocation -and $existingLocation -ine $Location) {
+        Write-Warning "Ignoring requested location '$Location'; existing resource group '$existingResourceGroup' is in '$existingLocation'."
+        $Location = $existingLocation
+    }
+}
+
 Write-Host '==> terraform apply (phase 1: platform, no apps yet)' -ForegroundColor Cyan
-if ($PSCmdlet.ShouldProcess('infra', 'terraform apply phase 1')) {
+$stateResources = terraform -chdir="$infraDir" state list 2>$null
+$existingAppDeployment = $stateResources | Where-Object { $_ -match '^azurerm_container_app\.app\[' }
+if (-not $existingAppDeployment -and $PSCmdlet.ShouldProcess('infra', 'terraform apply phase 1')) {
     Invoke-Checked -Name 'terraform apply (phase 1)' {
         terraform -chdir="$infraDir" apply -input=false -auto-approve `
             -var 'deploy_apps=false' -var "prefix=$Prefix" -var "environment=$Environment" -var "location=$Location"
     }
+} elseif ($existingAppDeployment) {
+    Write-Host '    Existing app deployment detected; preserving running revisions.'
 }
 
 
@@ -216,6 +230,7 @@ if ($PSCmdlet.ShouldProcess('infra', 'terraform apply phase 2')) {
 $frontendUrl = terraform -chdir="$infraDir" output -raw frontend_url
 $resourceGroup = terraform -chdir="$infraDir" output -raw resource_group_name
 $grafana = terraform -chdir="$infraDir" output -raw grafana_endpoint 2>$null
+$brokerEndpoint = terraform -chdir="$infraDir" output -raw sre_remediation_broker_endpoint_url 2>$null
 
 Write-Host ''
 Write-Host '============================================================' -ForegroundColor Green
@@ -224,6 +239,7 @@ Write-Host '============================================================' -Foreg
 Write-Host "  Frontend URL : $frontendUrl"
 Write-Host "  Resource grp : $resourceGroup"
 if ($grafana) { Write-Host "  Grafana      : $grafana" }
+if ($brokerEndpoint -and $brokerEndpoint -ne 'null') { Write-Host "  MCP broker   : $brokerEndpoint" }
 Write-Host ''
 Write-Host ' Remote Terraform state (set these as GitHub Actions *variables*' -ForegroundColor Yellow
 Write-Host ' for apply-infra.yml):' -ForegroundColor Yellow
