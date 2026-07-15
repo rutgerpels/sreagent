@@ -12,10 +12,10 @@ on any agent step, see the [Azure SRE Agent reference](sre-agent-setup.md).
 
 **The story this scenario tells:** infrastructure and application both ship
 through pipelines. A change enters as a Pull Request, CI deploys it, memory starts
-leaking, an alert fires, and the SRE Agent — which is **read-only** on Azure —
-investigates, finds the Pull Request that caused it, and remediates by **opening a
-Pull Request** of its own. A human reviews and merges that PR, and the pipeline
-deploys the fix.
+leaking, an alert fires, and the SRE Agent — which has **Reader-level workload
+access** — investigates, finds the Pull Request that caused it, and remediates by
+**opening a Pull Request** of its own. A human reviews and merges that PR, and
+the pipeline deploys the fix.
 
 You will work through seven parts:
 
@@ -38,7 +38,7 @@ especially for the SRE Agent. Three categories:
 | --- | --- | --- |
 | **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
 | **One-time bootstrap seed (cannot be GitOps)** | The private Linux runner and its VNet, the identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: the runner and identity must exist before any pipeline can run. The first deploy creates the remote state account and its private endpoint automatically. |
-| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub sign-in for Code Access and the Connector, the tool access policy, the subagent (custom agent) and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
+| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub OAuth sign-in for Code Access and issue tools, the tool access policy, the subagent (custom agent) and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
 
 So for the SRE Agent specifically: **the agent resource, its permissions, and its
 connection to Azure Monitor can be Infrastructure as Code** (see
@@ -327,11 +327,28 @@ environment.
 ## Part 4 — Connect the agent
 
 The agent's setup page shows an **Add context** screen with four cards — **Code**,
-**Logs**, **Azure resources**, and **Incidents**. Connect **all four**: each one
-the agent can see sharpens its root-cause correlation, and for this scenario the
-Logs card in particular is what ties the App Insights memory trend back to the
-Pull Request. The steps below cover every card, the optional GitHub MCP tool
-connection used to author the remediation, and Azure Monitor wiring.
+**Logs**, **Azure resources**, and **Incidents**. Connect **all four**. Scenario B
+uses the GitHub OAuth connector only to create a specially labeled remediation
+issue. That issue triggers a fixed repository-owned workflow, which creates the
+remediation branch and Pull Request with GitHub's short-lived `GITHUB_TOKEN`.
+
+> **No PAT, GitHub MCP server, GitHub App, or additional Key Vault setup is
+> required for this scenario.** The deployment already creates the Key Vault
+> needed by the application, but GitHub authentication does not belong there in
+> this design. Keeping PR authoring inside GitHub Actions avoids another
+> long-lived credential and avoids exposing the deployment's private Key Vault
+> to the managed SRE Agent service.
+
+Before continuing, open the repository's **Actions** tab and confirm the
+**sre-remediation-pr** workflow is listed. Issue events use workflow definitions
+from the default branch, so merge the repository changes containing
+`.github/workflows/sre-remediation-pr.yml` first.
+
+If you followed an older version of this guide, remove the `GitHubMCP` connector
+from **Builder → Connectors** and revoke its PAT in GitHub. If you only opened
+the **Bring your own GitHub App** dialog without completing it, select
+**Cancel**—no GitHub App or Key Vault key is needed below. Keep the existing
+Code Access OAuth connection.
 
 ### 4a. Connect your source code
 
@@ -340,87 +357,72 @@ connection used to author the remediation, and Azure Monitor wiring.
    (`<your-org>/<your-repo>`).
 
 **Expected outcome:** the **Code** card shows the repository and begins indexing.
-This gives the agent source context for investigations. Current agent builds also
-create a GitHub OAuth connector automatically if one does not already exist and
-can open a Pull Request from a source branch that already contains the change.
+This gives the agent source context for investigations.
 
-### 4b. Add GitHub MCP authoring tools
+### 4b. Enable the GitHub issue connector
 
-**What this adds:** Code Access from 4a indexes the repository and can open a
-Pull Request from an *existing* source branch. This scenario asks the agent to
-author the fix itself: create a branch, edit `infra/leak.auto.tfvars`, commit the
-change, and then open the Pull Request. GitHub MCP supplies that broader tool
-catalog.
+**What this adds:** the agent creates one tightly defined remediation issue.
+Opening that issue triggers `.github/workflows/sre-remediation-pr.yml`, which
+sets `enable_slow_leak = false` on a new branch and opens an unmerged Pull
+Request. The agent cannot dispatch arbitrary workflows, never receives a Git
+credential, and never runs `git push`.
 
-> **Do not add a duplicate connector just to repeat the sign-in from 4a.** In
-> **Builder → Connectors**, first check whether the tools available through the
-> automatically created GitHub OAuth connector can create a branch and update a
-> file. If they can, keep that connection and continue to Part 4c. If they only
-> provide repository context or PR operations, add GitHub MCP below. The PAT in
-> the MCP wizard is a separate credential from the OAuth session used during
-> onboarding, even when both represent the same GitHub user.
+1. Open **Builder → Connectors**.
+2. Look for the GitHub OAuth connection created during 4a. If it is present and
+   **Connected**, edit it. Otherwise select **Add connector → GitHub OAuth
+   connector → OAuth**, sign in with the same GitHub account, and save.
+3. In the connector's tool selection, enable:
+   - `CreateGithubIssue`;
+   - `FetchGithubIssue`.
 
-The current Builder wizard looks like the **Set up GitHub connector** dialog
-with **Streamable-HTTP**, a URL, and a PAT/API-key field:
+   Do not enable workflow dispatch, repository administration, deletion,
+   secret-management, or Pull Request merge tools.
+4. In GitHub, open the repository's **Settings → Actions → General → Workflow
+   permissions**:
+   - select **Read and write permissions**; and
+   - enable **Allow GitHub Actions to create and approve pull requests**.
 
-1. Open **Builder → Connectors → Add connector**, select the GitHub MCP/server
-   option, and enter:
+   The workflow opens a PR but never approves or merges it.
+5. In GitHub, open **Issues → Labels → New label** and create:
+   - **Name:** `sre-remediation`
+   - **Description:** `Approved trigger for the fixed SRE remediation workflow`
+6. Return to **Builder → Connectors** and confirm the GitHub OAuth connector is
+   **Connected** and the two issue tools are selected.
 
-   | Field | Value |
-   | --- | --- |
-   | **Name** | `GitHubMCP` |
-   | **Connection type** | **Streamable-HTTP** |
-   | **URL** | `https://api.githubcopilot.com/mcp/` |
-   | **Authentication method** | **Bearer token** |
-   | **Personal access token (PAT) or API key** | A fine-grained PAT restricted to this demo repository |
+The workflow runs only when all of these conditions match:
 
-2. Give the PAT only the repository permissions needed by this scenario:
-   - **Metadata: Read** — discover the repository.
-   - **Contents: Read/Write** — create the fix branch and commit the file change.
-   - **Pull requests: Read/Write** — open the remediation PR.
-   - **Issues: Read/Write** — create the optional linked incident issue.
-3. Continue to **Review + test connection** and confirm the connector reaches
-   GitHub.
-4. In **Select tools**, select these GitHub MCP tools:
-   - `get_file_contents`
-   - `create_branch`
-   - `create_or_update_file`
-   - `create_pull_request`
-   - `create_issue` (optional, for the linked incident issue)
+- exact title: `[SRE] Remediate ContosoPay slow memory leak`;
+- label: `sre-remediation`;
+- body marker: `<!-- sre-remediation:payment-slow-leak -->`; and
+- issue author is the repository owner, an organisation member, or collaborator.
 
-   Do not select unrelated administration, organization, repository-deletion, or
-   Pull Request merge tools.
+**Expected outcome:** the agent can create and read the narrowly defined trigger
+issue. GitHub Actions performs branch creation, the commit, and PR creation with
+a short-lived `GITHUB_TOKEN`.
 
-**Expected outcome:** the agent can now create branches, issues, and Pull
-Requests.
+> If `CreateGithubIssue` is unavailable, reopen the native GitHub OAuth connector
+> and reauthenticate. Do not add GitHub MCP, paste a PAT, or give the agent
+> terminal access. Use the manual reset script in Part 7 if the connector remains
+> unavailable.
 
-> **Troubleshooting — the agent opens an *issue* but no *PR*.** Issue creation
-> only needs **Issues: Read/Write**, but a Pull Request also needs **Contents:
-> Read/Write** (to push the branch) and **Pull requests: Read/Write**. If you see
-> an issue appear with no accompanying PR, the MCP PAT is missing one of those
-> two permissions or the required branch/file/PR tools were not selected. Edit
-> `GitHubMCP` under **Builder → Connectors**, then confirm the
-> `gitops-remediation` subagent inherits those tools (see Part 5b).
->
-> **A dummy-token or `git push` failure is not a PAT-scope diagnostic.** The MCP
-> connector keeps its PAT inside authenticated MCP tool calls; it does not proxy
-> that PAT into `RunInTerminal`, `git`, `gh`, environment variables, or Git
-> credential helpers. Do not search for the token or retry the push. Confirm the
-> four required MCP tools are selected and inherited, then retry with the
-> `gitops-remediation` subagent instructions from Part 5b.
-
-### 4c. Grant read-only access to the demo resources
+### 4c. Grant Reader-level workload access
 
 **What you will do:** let the agent investigate the demo resource group without
-the ability to change it — that is the point of this scenario.
+workload contributor roles — that is the point of this scenario.
 
 1. On the setup page, find the **Azure Resources** card and select **+**.
 2. Choose **Resource groups** and select **`rg-contosopay-demo-<suffix>`**.
-3. Grant it **Reader** access **and** **Monitoring Contributor** (so the alert
-   scanner can read fired alerts). Do **not** grant write access.
+3. Select the **Reader** permission level. Azure SRE Agent assigns its core
+   monitoring roles automatically, including **Monitoring Contributor** at
+   subscription scope so it can acknowledge and close alerts. Do not select the
+   **Privileged** permission level. See
+   [Agent permissions in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/permissions)
+   for the current role list and scopes.
 
 **Expected outcome:** the **Azure Resources** card lists the demo resource group
-with read-only access.
+with Reader-level workload access. Monitoring Contributor can change alert
+lifecycle and monitoring settings, so the required tool policy in Part 5a
+provides the second boundary against direct Azure mutations.
 
 ### 4d. Add logs context (App Insights / Log Analytics)
 
@@ -462,9 +464,9 @@ polling for fired alerts.
 
 ## Part 5 — Apply the GitOps guardrails
 
-These steps make the agent behave the GitOps way: physically unable to change
-Azure, and steered toward fixing incidents through Pull Requests. The supporting
-files live in the [`agent/`](../agent/) folder of this repository.
+These steps make the agent behave the GitOps way: no workload contributor roles,
+direct Azure mutation tools denied, and remediation routed through a Pull
+Request. The supporting files live in the [`agent/`](../agent/) folder.
 
 > **Refresh the agent after the setup wizard first.** When you finish the
 > onboarding wizard and land inside the agent, the backend can take a few minutes
@@ -473,24 +475,24 @@ files live in the [`agent/`](../agent/) folder of this repository.
 > without an If-Match ETag."* Do a **hard refresh (Ctrl+F5)** once you're inside
 > the agent before starting Part 5 — it clears most first-run save issues.
 
-### 5a. Block direct Azure changes (tool access policy) — *optional hardening*
+### 5a. Block direct Azure changes (required tool access policy)
 
 **What you will do:** apply a global policy that denies Azure write commands, so
 the agent cannot change live resources even if asked.
 
-> **This step is defense-in-depth, not required — feel free to skip it.** The
-> primary write-block is already in place from **Part 4c** (the agent's permission
-> level is **Reader**, so it holds no Azure *write* RBAC) plus the **Review** run
-> mode (every action waits for approval). The tool access policy below is a second,
-> independent guardrail and does **not** change how the demo behaves.
+> **Do not skip this step.** Reader-level agents still receive Monitoring
+> Contributor for the Azure Monitor alert lifecycle, and an administrator can
+> authorize temporary on-behalf-of elevation. The policy below is therefore the
+> explicit GitOps boundary that denies direct Azure, Kubernetes, Terraform, and
+> terminal mutation paths.
 >
 > The API method needs a *user* token for the SRE Agent audience. In many tenants
 > **Azure Cloud Shell cannot get one** — its Managed Identity rejects the custom
 > audience, and the `az login --scope …/.default` fallback uses the device-code
 > flow, which **Conditional Access / MFA policies often block** (*"Your sign-in was
 > successful but does not meet the criteria to access this resource"*). If you hit
-> either, **just skip this step** — Reader + Review already covers you. Only pursue
-> the API from a machine with an unrestricted interactive `az login`.
+> either, use the portal method below instead. Do not proceed with Scenario B
+> until the policy saves successfully.
 
 > **Two different "Settings" — don't confuse them.** The **Settings → Azure
 > Settings / Managed Resources** page (Basics, Managed Resources, Azure Settings,
@@ -561,8 +563,8 @@ the contents with
 ```
 
 This one paste allows read diagnostics and denies terminal/shell fallback plus
-direct Azure/Kubernetes writes and Terraform apply/destroy. Pull Request
-authoring remains available through the authenticated GitHub MCP tools.
+direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation
+remains available through the connector's issue tools.
 (Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
 form, or the box rejects it.)
 
@@ -582,10 +584,10 @@ Keep these **`On` / `Allow`** (safe, read-only):
 - `RunKubectlReadCommand`
 
 **Step 2 — turn off terminal fallback.**
-Set `RunInTerminal` and `RunShellCommand` to **Off**. GitHub MCP credentials are
-not injected into either tool, so terminal `git push` cannot use the connector's
-PAT. The remediation uses `get_file_contents`, `create_branch`,
-`create_or_update_file`, and `create_pull_request` instead.
+Set `RunInTerminal` and `RunShellCommand` to **Off**. The agent does not need
+either tool: it creates the constrained remediation issue, and the triggered
+workflow performs its fixed repository change with GitHub's short-lived
+`GITHUB_TOKEN`.
 
 Keep the targeted deny patterns for direct infrastructure changes too:
 
@@ -615,12 +617,10 @@ That's it — no token, no MFA.
 > 3. Last resort: apply via **Method 2 (API)** below, which does GET-then-PUT
 >    with `If-Match` explicitly.
 
-> **You are already safe without any of Step 1–2.** The real guarantee is the
-> **Reader** RBAC from **Part 4c** — with no Azure *write* role, the agent
-> physically cannot change Azure regardless of which tools are `On`. Part 5a is
-> defense-in-depth. If your build locks `RunInTerminal` on, the subagent prompt
-> still prohibits its use for remediation; do not approve terminal GitHub
-> operations.
+> **Do not continue while the policy is unsaved.** Reader-level agents retain
+> Monitoring Contributor for alert lifecycle operations and can request
+> administrator-authorized OBO elevation. The prompt is behavioral guidance, not
+> an enforcement boundary.
 
 > Older builds expose this same global policy under **Capabilities → Tools**
 > instead of **Settings → Permissions**. The tabs and toggles are equivalent.
@@ -631,7 +631,8 @@ Only needed if the Tools UI is unavailable. This path requires a *user* token fo
 the SRE Agent audience, which **Cloud Shell often cannot obtain** (its Managed
 Identity rejects the audience, and the `az login` device-code fallback is
 frequently blocked by Conditional Access/MFA). If you hit that, use Method 1 or
-skip 5a entirely.
+ask your SRE Agent administrator to apply the policy. Do not continue Scenario B
+without it.
 
 You will use **Azure Cloud Shell** — a browser terminal that already has the
 Azure CLI installed and is already signed in as you, so there is nothing to set
@@ -689,9 +690,20 @@ admin-only setting).
 4. **Apply the policy** with a `PUT` request:
 
    ```bash
+   SETTINGS_URL="$AGENT_ENDPOINT/api/v2/agent/settings/global"
+   HEADERS=$(mktemp)
+   trap 'rm -f "$HEADERS"' EXIT
+
+   curl -fsS -D "$HEADERS" -o /dev/null \
+     -H "Authorization: Bearer ${TOKEN}" \
+     "$SETTINGS_URL"
+   ETAG=$(awk 'tolower($1) == "etag:" { gsub("\r", "", $2); print $2 }' "$HEADERS")
+   : "${ETAG:?The settings response did not include an ETag}"
+
    curl -X PUT "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
-     -H "Authorization: Bearer $TOKEN" \
+     -H "Authorization: Bearer ${TOKEN}" \
      -H "Content-Type: application/json" \
+     -H "If-Match: $ETAG" \
      -d '{
        "permissions": {
          "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
@@ -707,7 +719,7 @@ admin-only setting).
 
    ```bash
    curl -s "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
-     -H "Authorization: Bearer $TOKEN" | jq .
+     -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
    You should see your `allow` and `deny` lists in the response.
@@ -722,9 +734,9 @@ admin-only setting).
 See [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
 for the full API reference.
 
-**What is happening:** combined with the Reader access from Part 4c, the agent now
-has neither the permission nor the tooling to write to Azure — two independent
-guardrails.
+**What is happening:** Scenario B has no workload contributor role, and the
+global policy denies direct Azure mutation tools even though the agent retains
+its core monitoring roles.
 
 ### 5b. Add the GitOps behaviour (subagent)
 
@@ -738,13 +750,11 @@ guardrails.
    end) into the **Instructions** field. Do **not** include the file's markdown
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
-3. **Tools:** the subagent inherits all global tools by default (the panel says
-   *"inherits N global tools"*). **Easiest: leave the Tools selection empty** so
-   the subagent inherits Code Access (Part 4a) and the GitHub MCP tools selected
-   in Part 4b. Only pick tools here if you want to *restrict* the subagent —
-   selecting any tool **overrides** the inherited defaults. If you do restrict
-   it, include `get_file_contents`, `create_branch`, `create_or_update_file`, and
-   `create_pull_request`. Save when done.
+3. **Tools:** explicitly select Code Access repository read, Azure read tools,
+   `CreateGithubIssue`, and `FetchGithubIssue`. Do not leave the selection empty:
+   inherited global tools could broaden the subagent's capabilities. Do not
+   select workflow-dispatch, terminal, repository-administration, direct Pull
+   Request authoring, or Pull Request merge tools. Save when done.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -825,9 +835,10 @@ fault, not just a generic alert.
 
 ### 6d. Review and merge the agent's fix
 
-Because the agent cannot change Azure directly, it remediates by **opening a Pull
-Request** that sets `enable_slow_leak = false`, with the root cause and supporting
-evidence in the description.
+Because the agent cannot change Azure directly, it opens the narrowly defined
+`sre-remediation` trigger issue. The workflow creates a branch, commits the
+one-line change to set `enable_slow_leak = false`, opens an unmerged Pull Request
+using the run's short-lived `GITHUB_TOKEN`, and comments the PR URL on the issue.
 
 Open that Pull Request, review it, and **merge it** — this is the human approval
 gate. Merging runs `apply-infra` again, which deploys the fix; a fresh

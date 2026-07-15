@@ -6,10 +6,11 @@ scenario guides walk you through everything in order; come here when you want
 more background on a step, on the available options, or when something does not
 behave as expected.
 
-The Azure SRE Agent is a **managed Azure service**. You create it in the Azure
-SRE Agent portal at <https://sre.azure.com>; it is intentionally separate from
-the Terraform that deploys ContosoPay, because the agent is the *consumer* of
-the environment rather than part of it.
+The Azure SRE Agent is a **managed Azure service**. The default setup creates it
+in the Azure SRE Agent portal at <https://sre.azure.com>. Optionally,
+`infra/agents.tf` provisions the agent resource and Azure RBAC with
+`enable_sre_agents = true`; connector, policy, and Builder configuration remain
+portal steps.
 
 > Microsoft documentation:
 > [Create and set up Azure SRE Agent](https://learn.microsoft.com/en-us/azure/sre-agent/create-and-set-up)
@@ -53,18 +54,20 @@ The agent acts through its **managed identity**. Two kinds of access matter:
 
 | Access level | Meaning | Used by |
 | --- | --- | --- |
-| **Reader** (`Low`) | The agent can read configuration, metrics, and logs, but cannot change anything. | Scenario B |
+| **Reader** (`Low`) | Reader-level workload diagnostics; core monitoring roles still manage the alert lifecycle. | Scenario B |
 | **Privileged** (`High`) | The agent can also perform changes, such as restarting a revision or updating a setting. | Scenario A |
 
-**Monitoring Contributor on the demo resource group** — required by **both**
-scenarios. The agent discovers incidents by polling the Azure Monitor Alerts API
-roughly once a minute for fired alerts in the scopes its identity can read.
-Monitoring Contributor is what allows it to read those alerts. (The agent does
-not subscribe to the alert's action group; the action group is only used if you
-also want to notify a person by email or webhook.)
+**Monitoring Contributor at subscription scope** — assigned by Azure SRE Agent
+for both permission levels so it can acknowledge and close Azure Monitor alerts
+and update monitoring settings. Scenario B therefore combines the Reader
+permission level with the required global tool policy that denies direct Azure
+mutation paths. (The agent does not subscribe to the alert's action group; the
+action group is only used if you also want to notify a person by email or
+webhook.)
 
-Always scope these grants to the **single demo resource group**, never the whole
-subscription.
+Workload roles are scoped to the **single demo resource group**. Monitoring
+Contributor is the intentional exception: Azure SRE Agent requires it at
+subscription scope for the Azure Monitor alert lifecycle.
 
 ---
 
@@ -79,11 +82,12 @@ code. Current builds automatically create the corresponding GitHub OAuth
 connector if one does not already exist and can open a Pull Request from an
 existing source branch.
 
-Scenario B asks the agent to create the source branch and commit the remediation
-too. If the automatically created connector does not expose branch and file
-authoring tools, Part 4b adds the GitHub MCP server with a repository-scoped PAT.
-It does not add more code indexing; it adds the write-capable tool catalog needed
-to author the change.
+Scenario B does not give the agent a PAT or terminal Git access. The GitHub OAuth
+connector creates a specially labeled remediation issue, which triggers the
+repository-owned `sre-remediation-pr` workflow. GitHub Actions creates the
+branch, one-file commit, and unmerged Pull Request with the run's short-lived
+`GITHUB_TOKEN`. No additional Azure resource or Key Vault credential is required
+for GitHub remediation.
 
 ---
 
@@ -128,7 +132,7 @@ GitHub sign-in and response plan in the portal.
 | --- | --- |
 | The agent portal will not load or the sign-in loops | A corporate firewall is blocking `sre.azure.com` or `*.azuresre.ai`. Allowlist both. |
 | "Insufficient privileges" when granting resource access | You need **Owner** or **User Access Administrator** on the subscription or resource group. Ask an administrator, or activate the role just-in-time with PIM. |
-| The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) **and** that the agent's identity has **Monitoring Contributor** on the demo resource group (§3). Reader alone is not enough for the alert scanner. |
+| The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
 | There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
 | The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
 
@@ -136,14 +140,11 @@ GitHub sign-in and response plan in the portal.
 
 ## 8. Removing the agent
 
-The agent and its resource group are not managed by this repository's Terraform,
-so remove them separately when you are finished:
-
-```bash
-az group delete --name rg-sre-agent --yes
-```
-
-Each scenario guide covers tearing down the ContosoPay environment itself.
+If Terraform created the agent (`enable_sre_agents = true`), the normal
+repository teardown removes it with the rest of the Terraform-managed
+environment. If you created the agent in the portal, delete that agent in the
+portal separately. Each scenario guide covers tearing down the ContosoPay
+environment itself.
 
 ---
 

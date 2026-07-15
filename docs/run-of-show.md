@@ -55,7 +55,7 @@ that guide from top to bottom.
 | --- | --- | --- |
 | **How the incident starts** | You run a small script that switches the fault on directly on the running service. | The **incident Pull Request is pre-opened by the deploy workflow**; you merge it (or run a script to open one) and CI/CD deploys the change. |
 | **How it is deployed** | One command from your machine (`scripts/deploy.*`). | Entirely through **GitHub Actions** — no local Terraform or Docker. |
-| **What the agent may do** | The agent has **write access** to the demo resources and **fixes them directly** after you approve. | The agent is **read-only** on Azure and fixes the incident by **opening a Pull Request** that a person reviews and merges. |
+| **What the agent may do** | The agent has **write access** to the demo resources and **fixes them directly** after you approve. | The agent has **Reader-level workload access** and fixes the incident by **opening a Pull Request** that a person reviews and merges. |
 | **Best for** | A fast, self-contained "watch the agent fix it" story. | A realistic DevOps / change-management story where every change ships as reviewed code. |
 | **Follow this guide** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) |
 

@@ -4,8 +4,9 @@
 **Builder → Agent Canvas → + Create subagent** (older builds: *Custom agents →
 New*), name it `gitops-remediation`, and paste **only the fenced block below**
 (the text between the ` ```text ` markers) into the **Instructions** field.
-Leave the subagent's tool selection empty so it inherits GitHub MCP and Code
-Access; route the demo's incident response plan to it in **Review** mode
+Explicitly select Code Access repository read, Azure read tools,
+`CreateGithubIssue`, and `FetchGithubIssue` only; route the demo's incident
+response plan to it in **Review** mode
 (see `../docs/scenario-b-gitops.md`, Part 5).
 
 > The repository owner/name is read live from your GitHub connection — leave the
@@ -29,33 +30,25 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
    working-set memory is the planted slow memory leak, controlled by
    `enable_slow_leak` in `infra/leak.auto.tfvars`.
 3. Remediate via GitOps:
-   - Use GitHub MCP tools only. Connector credentials are scoped to MCP calls and
-     are not available to terminal `git`, `gh`, environment variables, credential
-     helpers, or HTTP requests. Never inspect the environment for a token, use a
-     placeholder/dummy token, or attempt `git push`.
-   - Call `get_file_contents` to read `infra/leak.auto.tfvars` from `main`.
-   - Call `create_branch` to create a branch from `main`, e.g.
-     `Bug/sre-disable-memory-leak`.
-   - Call `create_or_update_file` on that branch so the line reads exactly:
-       enable_slow_leak = false
-     Use a clear commit message.
-   - Call `create_pull_request` to open a Pull Request into `main` titled
-     "fix(payment-service): disable slow memory leak (enable_slow_leak=false)".
-   - In the PR description, summarise the root cause, the evidence (metric
-     trend, correlated commit/PR), and note that merging triggers the
-     `apply-infra` GitHub Actions workflow which `terraform apply`s the fix.
-4. Only after the Pull Request has been opened successfully, open a GitHub issue
-   to track the incident if one does not already exist, and link it to the PR. Do
-   not create an issue first. A tracking issue on its own is **not** remediation.
-5. Do NOT merge the PR yourself — a human approves and merges. Report the PR
-   link and stop. After a human merges, verify the payment-service memory
-   recovers on the new revision.
+   - Use `CreateGithubIssue` to open one issue in the connected repository with:
+     title: [SRE] Remediate ContosoPay slow memory leak
+     label: sre-remediation
+     body containing this exact marker:
+     <!-- sre-remediation:payment-slow-leak -->
+     Include the root-cause evidence below the marker.
+   - The repository workflow validates the title, label, marker, and author, then
+     creates the branch, one-file commit, and unmerged Pull Request.
+   - Use `FetchGithubIssue` to wait for the workflow's comment containing the
+     remediation PR URL.
+   - Never use a terminal, `git`, `gh`, GitHub MCP, a PAT, environment-variable
+     discovery, credential helpers, direct GitHub API calls, or a generic
+     workflow-dispatch tool. The workflow uses its short-lived `GITHUB_TOKEN`.
+4. Do NOT merge or approve the PR. A human reviews and merges it. Report the
+   trigger issue and remediation PR, then stop. After a human merges, verify the
+   payment-service memory recovers on the new revision.
 
-If you cannot open a PR, do not create an issue as a substitute and do not fall
-back to a direct Azure change. Report the blocked tool or permission precisely:
-identify which of `get_file_contents`, `create_branch`, `create_or_update_file`,
-or `create_pull_request` is unavailable or failed. The GitHub MCP PAT needs
-Metadata read, Contents read/write, and Pull requests read/write access. Do not
-attempt another authentication method. Provide the exact branch, file change,
-title, and PR body a human should apply.
+If issue creation fails or the workflow does not comment a PR URL, do not fall
+back to another authentication method or a direct Azure change. Report the
+missing connector tool or failed trigger precisely. Tell the operator to use the
+reset procedure in Scenario B Part 7.
 ```
