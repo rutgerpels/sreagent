@@ -4,11 +4,10 @@
       "RunAzCliReadCommands",
       "RunKubectlReadCommand(kubectl get *)"
     ],
-    "ask": [
-      "RunInTerminal",
-      "RunShellCommand"
-    ],
+    "ask": [],
     "deny": [
+      "RunInTerminal",
+      "RunShellCommand",
       "RunAzCliWriteCommands",
       "RunKubectlWriteCommand",
       "bash(az * create *)",

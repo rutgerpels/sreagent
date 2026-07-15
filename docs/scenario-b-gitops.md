@@ -330,31 +330,66 @@ The agent's setup page shows an **Add context** screen with four cards — **Cod
 **Logs**, **Azure resources**, and **Incidents**. Connect **all four**: each one
 the agent can see sharpens its root-cause correlation, and for this scenario the
 Logs card in particular is what ties the App Insights memory trend back to the
-Pull Request. The steps below cover every card (plus the separate GitHub
-Connector and Azure Monitor wiring).
+Pull Request. The steps below cover every card, the optional GitHub MCP tool
+connection used to author the remediation, and Azure Monitor wiring.
 
-### 4a. Connect your source code (read)
+### 4a. Connect your source code
 
 1. On the agent setup page, find the **Code** card and select **+**.
 2. Choose **GitHub**, sign in, and select this demo's repository
    (`<your-org>/<your-repo>`).
 
 **Expected outcome:** the **Code** card shows the repository and begins indexing.
-This lets the agent *read* the code and find the Pull Request behind an incident.
+This gives the agent source context for investigations. Current agent builds also
+create a GitHub OAuth connector automatically if one does not already exist and
+can open a Pull Request from a source branch that already contains the change.
 
-### 4b. Add the GitHub Connector (write)
+### 4b. Add GitHub MCP authoring tools
 
-**What you will do:** allow the agent to *open* Pull Requests as its remediation.
-This is a separate connection from Code Access.
+**What this adds:** Code Access from 4a indexes the repository and can open a
+Pull Request from an *existing* source branch. This scenario asks the agent to
+author the fix itself: create a branch, edit `infra/leak.auto.tfvars`, commit the
+change, and then open the Pull Request. GitHub MCP supplies that broader tool
+catalog.
 
-1. Open **Builder → Connectors → Add connector → GitHub**.
-2. Sign in with an identity (GitHub App or PAT) that has **all three** of these
-   permissions on your repository — opening a Pull Request needs the agent to
-   push a branch *and* create the PR, so **Contents** write is required, not just
-   Pull requests:
+> **Do not add a duplicate connector just to repeat the sign-in from 4a.** In
+> **Builder → Connectors**, first check whether the tools available through the
+> automatically created GitHub OAuth connector can create a branch and update a
+> file. If they can, keep that connection and continue to Part 4c. If they only
+> provide repository context or PR operations, add GitHub MCP below. The PAT in
+> the MCP wizard is a separate credential from the OAuth session used during
+> onboarding, even when both represent the same GitHub user.
+
+The current Builder wizard looks like the **Set up GitHub connector** dialog
+with **Streamable-HTTP**, a URL, and a PAT/API-key field:
+
+1. Open **Builder → Connectors → Add connector**, select the GitHub MCP/server
+   option, and enter:
+
+   | Field | Value |
+   | --- | --- |
+   | **Name** | `GitHubMCP` |
+   | **Connection type** | **Streamable-HTTP** |
+   | **URL** | `https://api.githubcopilot.com/mcp/` |
+   | **Authentication method** | **Bearer token** |
+   | **Personal access token (PAT) or API key** | A fine-grained PAT restricted to this demo repository |
+
+2. Give the PAT only the repository permissions needed by this scenario:
+   - **Metadata: Read** — discover the repository.
    - **Contents: Read/Write** — create the fix branch and commit the file change.
    - **Pull requests: Read/Write** — open the remediation PR.
-   - **Issues: Read/Write** — open the tracking issue.
+   - **Issues: Read/Write** — create the optional linked incident issue.
+3. Continue to **Review + test connection** and confirm the connector reaches
+   GitHub.
+4. In **Select tools**, select these GitHub MCP tools:
+   - `get_file_contents`
+   - `create_branch`
+   - `create_or_update_file`
+   - `create_pull_request`
+   - `create_issue` (optional, for the linked incident issue)
+
+   Do not select unrelated administration, organization, repository-deletion, or
+   Pull Request merge tools.
 
 **Expected outcome:** the agent can now create branches, issues, and Pull
 Requests.
@@ -362,17 +397,17 @@ Requests.
 > **Troubleshooting — the agent opens an *issue* but no *PR*.** Issue creation
 > only needs **Issues: Read/Write**, but a Pull Request also needs **Contents:
 > Read/Write** (to push the branch) and **Pull requests: Read/Write**. If you see
-> an issue appear with no accompanying PR, the connector identity is missing one
-> of those two — reconnect it in **Builder → Connectors → GitHub** with all three
-> permissions above. Also confirm the `gitops-remediation` subagent isn't
-> restricted to issue-only tools (leave its **Tools** selection empty to inherit
-> the branch/commit/PR tools — see Part 5b).
+> an issue appear with no accompanying PR, the MCP PAT is missing one of those
+> two permissions or the required branch/file/PR tools were not selected. Edit
+> `GitHubMCP` under **Builder → Connectors**, then confirm the
+> `gitops-remediation` subagent inherits those tools (see Part 5b).
 >
-> Some agent builds create PRs through `git` and `gh` in `RunInTerminal` rather
-> than native connector tools. Part 5a therefore sets terminal tools to **Ask**
-> instead of denying them. Approve the individual repository commands when
-> prompted. If the terminal is globally denied, the agent can diagnose the
-> incident and create an issue but cannot produce the required code change.
+> **A dummy-token or `git push` failure is not a PAT-scope diagnostic.** The MCP
+> connector keeps its PAT inside authenticated MCP tool calls; it does not proxy
+> that PAT into `RunInTerminal`, `git`, `gh`, environment variables, or Git
+> credential helpers. Do not search for the token or retry the push. Confirm the
+> four required MCP tools are selected and inherited, then retry with the
+> `gitops-remediation` subagent instructions from Part 5b.
 
 ### 4c. Grant read-only access to the demo resources
 
@@ -476,8 +511,8 @@ The policy to apply comes in **two shapes** — pick the one for how you apply i
   ```json
   {
     "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-    "ask": ["RunInTerminal", "RunShellCommand"],
-    "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
+    "ask": [],
+    "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
   }
   ```
 
@@ -489,8 +524,8 @@ The policy to apply comes in **two shapes** — pick the one for how you apply i
   {
     "permissions": {
       "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-      "ask": ["RunInTerminal", "RunShellCommand"],
-      "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
+      "ask": [],
+      "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
     }
   }
   ```
@@ -520,14 +555,14 @@ the contents with
 ```json
 {
   "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-  "ask": ["RunInTerminal", "RunShellCommand"],
-  "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
+  "ask": [],
+  "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
 }
 ```
 
-This one paste allows read diagnostics and requires approval for terminal
-commands, including the `git`/`gh` commands needed to create a Pull Request.
-Direct Azure/Kubernetes writes and Terraform apply/destroy remain denied.
+This one paste allows read diagnostics and denies terminal/shell fallback plus
+direct Azure/Kubernetes writes and Terraform apply/destroy. Pull Request
+authoring remains available through the authenticated GitHub MCP tools.
 (Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
 form, or the box rejects it.)
 
@@ -546,13 +581,13 @@ Keep these **`On` / `Allow`** (safe, read-only):
 - `RunAzCliReadCommands`
 - `RunKubectlReadCommand`
 
-**Step 2 — permit repository commands through approval.**
-Do **not** deny `RunInTerminal` or `RunShellCommand`; some builds need them to run
-`git` and `gh`. Set both tools to **Ask**, then approve the individual repository
-commands during remediation. Do not auto-allow broad `git *` or `gh *` patterns:
-aliases and extensions can execute other programs. Add targeted deny patterns
-for direct infrastructure changes. The `bash(…)` alias expands across the
-terminal and shell command tools:
+**Step 2 — turn off terminal fallback.**
+Set `RunInTerminal` and `RunShellCommand` to **Off**. GitHub MCP credentials are
+not injected into either tool, so terminal `git push` cannot use the connector's
+PAT. The remediation uses `get_file_contents`, `create_branch`,
+`create_or_update_file`, and `create_pull_request` instead.
+
+Keep the targeted deny patterns for direct infrastructure changes too:
 
 ```
 bash(az * create *)
@@ -583,8 +618,9 @@ That's it — no token, no MFA.
 > **You are already safe without any of Step 1–2.** The real guarantee is the
 > **Reader** RBAC from **Part 4c** — with no Azure *write* role, the agent
 > physically cannot change Azure regardless of which tools are `On`. Part 5a is
-> defense-in-depth, so a locked-`On` `RunInTerminal` (or a missing
-> `RunShellCommand`) does **not** compromise the GitOps boundary.
+> defense-in-depth. If your build locks `RunInTerminal` on, the subagent prompt
+> still prohibits its use for remediation; do not approve terminal GitHub
+> operations.
 
 > Older builds expose this same global policy under **Capabilities → Tools**
 > instead of **Settings → Permissions**. The tabs and toggles are equivalent.
@@ -659,8 +695,8 @@ admin-only setting).
      -d '{
        "permissions": {
          "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-         "ask": ["RunInTerminal", "RunShellCommand"],
-         "deny": ["RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
+         "ask": [],
+         "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
        }
      }'
    ```
@@ -703,13 +739,12 @@ guardrails.
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
 3. **Tools:** the subagent inherits all global tools by default (the panel says
-   *"inherits N global tools"*). There is no single "GitHub Connector" toggle
-   anymore — GitHub shows up as individual **DevOps** tools when you search
-   `github` (e.g. `CreateGithubPullRequest`, `CreateGithubIssue`,
-   `FetchGithubIssue`). **Easiest: leave the Tools selection empty** so the
-   subagent inherits the GitHub Connector (from Part 4b) and Code Access
-   (Part 4a). Only pick tools here if you want to *restrict* the subagent —
-   selecting any tool **overrides** the inherited defaults. Save when done.
+   *"inherits N global tools"*). **Easiest: leave the Tools selection empty** so
+   the subagent inherits Code Access (Part 4a) and the GitHub MCP tools selected
+   in Part 4b. Only pick tools here if you want to *restrict* the subagent —
+   selecting any tool **overrides** the inherited defaults. If you do restrict
+   it, include `get_file_contents`, `create_branch`, `create_or_update_file`, and
+   `create_pull_request`. Save when done.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.

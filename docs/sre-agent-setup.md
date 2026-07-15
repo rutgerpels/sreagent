@@ -70,15 +70,20 @@ subscription.
 
 ## 4. Connecting your source code (GitHub Code Access)
 
-Code Access lets the agent **read** the repository so it can connect an incident
-to the change that caused it. In the agent portal, open the **Code** card on the
-setup page, choose **GitHub**, sign in, and select this demo's repository
-(`<your-org>/<your-repo>`). When the card shows the repository with a green check, the agent has
-begun indexing the code.
+Code Access lets the agent index the repository so it can connect an incident to
+the change that caused it. In the agent portal, open the **Code** card on the
+setup page (or **Builder → Knowledge base → Add repository**), choose **GitHub**,
+sign in, and select this demo's repository (`<your-org>/<your-repo>`). When the
+card shows the repository with a green check, the agent has begun indexing the
+code. Current builds automatically create the corresponding GitHub OAuth
+connector if one does not already exist and can open a Pull Request from an
+existing source branch.
 
-Scenario B additionally uses a GitHub **Connector** (with write permission) so
-the agent can *open* Pull Requests. That is a separate connection and is covered
-in the Scenario B guide.
+Scenario B asks the agent to create the source branch and commit the remediation
+too. If the automatically created connector does not expose branch and file
+authoring tools, Part 4b adds the GitHub MCP server with a repository-scoped PAT.
+It does not add more code indexing; it adds the write-capable tool catalog needed
+to author the change.
 
 ---
 

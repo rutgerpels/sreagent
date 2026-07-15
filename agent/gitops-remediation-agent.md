@@ -4,8 +4,8 @@
 **Builder → Agent Canvas → + Create subagent** (older builds: *Custom agents →
 New*), name it `gitops-remediation`, and paste **only the fenced block below**
 (the text between the ` ```text ` markers) into the **Instructions** field.
-Leave the subagent's tool selection empty so it inherits the GitHub Connector and
-Code Access; route the demo's incident response plan to it in **Review** mode
+Leave the subagent's tool selection empty so it inherits GitHub MCP and Code
+Access; route the demo's incident response plan to it in **Review** mode
 (see `../docs/scenario-b-gitops.md`, Part 5).
 
 > The repository owner/name is read live from your GitHub connection — leave the
@@ -29,16 +29,17 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
    working-set memory is the planted slow memory leak, controlled by
    `enable_slow_leak` in `infra/leak.auto.tfvars`.
 3. Remediate via GitOps:
-   - Prefer the GitHub Connector's native branch, file-edit, commit, and Pull
-     Request tools.
-   - If native PR tools are unavailable, use the terminal only for individual
-     `git` and `gh` commands. Run one command per tool call; do not chain commands,
-     use pipes, or invoke `az`, `kubectl`, Terraform apply/destroy, or HTTP calls
-     to Azure management endpoints.
-   - Create a new branch from `main`, e.g. `Bug/sre-disable-memory-leak`.
-   - Edit `infra/leak.auto.tfvars` so the line reads exactly:
+   - Use GitHub MCP tools only. Connector credentials are scoped to MCP calls and
+     are not available to terminal `git`, `gh`, environment variables, credential
+     helpers, or HTTP requests. Never inspect the environment for a token, use a
+     placeholder/dummy token, or attempt `git push`.
+   - Call `get_file_contents` to read `infra/leak.auto.tfvars` from `main`.
+   - Call `create_branch` to create a branch from `main`, e.g.
+     `Bug/sre-disable-memory-leak`.
+   - Call `create_or_update_file` on that branch so the line reads exactly:
        enable_slow_leak = false
-   - Commit with a clear message and open a Pull Request into `main` titled
+     Use a clear commit message.
+   - Call `create_pull_request` to open a Pull Request into `main` titled
      "fix(payment-service): disable slow memory leak (enable_slow_leak=false)".
    - In the PR description, summarise the root cause, the evidence (metric
      trend, correlated commit/PR), and note that merging triggers the
@@ -52,7 +53,9 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
 
 If you cannot open a PR, do not create an issue as a substitute and do not fall
 back to a direct Azure change. Report the blocked tool or permission precisely:
-the GitHub connector needs Contents + Pull requests write access, while a
-terminal fallback needs `git` and `gh` commands allowed by the global policy.
-Provide the exact branch, file change, title, and PR body a human should apply.
+identify which of `get_file_contents`, `create_branch`, `create_or_update_file`,
+or `create_pull_request` is unavailable or failed. The GitHub MCP PAT needs
+Metadata read, Contents read/write, and Pull requests read/write access. Do not
+attempt another authentication method. Provide the exact branch, file change,
+title, and PR body a human should apply.
 ```
