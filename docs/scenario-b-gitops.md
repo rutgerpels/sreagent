@@ -327,48 +327,82 @@ environment.
 
 ## Part 4 — Connect the agent
 
-Scenario B uses two separate GitHub connections for two different jobs:
+Scenario B has three GitHub connection options. Use **Option 1** unless you
+explicitly want the quicker PAT shortcut or the hardened broker pattern.
 
 | Connection | Purpose | Authentication |
 | --- | --- | --- |
-| **Builder → Code Access** | Index and read the repository during investigation. | Your interactive GitHub OAuth sign-in from onboarding. |
-| **Recommended: Builder → Connectors → custom MCP server** | Invoke two tightly constrained remediation tools. | The SRE Agent's managed identity obtains an Entra token for the broker. The broker uses a repository-scoped GitHub App installation token that expires after one hour. |
-| **Demo shortcut: Builder → Connectors → GitHub MCP** | Let the agent create the branch, file edit, and Pull Request directly. | A short-lived fine-grained GitHub PAT pasted into the connector wizard. |
+| **Option 1 — recommended: Builder → Code Access → Bring your own GitHub App** | Connect the repository with app-based GitHub access so operations are attributed to the GitHub App, not a user. | GitHub App private key stored in Key Vault and read by the SRE Agent managed identity. |
+| **Option 2 — demo shortcut: Builder → Connectors → GitHub MCP** | Let the agent create the branch, file edit, and Pull Request directly. | A short-lived fine-grained GitHub PAT pasted into the connector wizard. |
+| **Option 3 — advanced hardening: Builder → Connectors → custom MCP server** | Restrict remediation to two allowlisted issue/status tools. | SRE Agent managed identity calls a broker; the broker uses an issue-only GitHub App. |
 
-The onboarding GitHub sign-in cannot be reused by terminal Git or by a custom MCP
-server. For the production-shaped path, choose the generic **MCP server** tile
-and use managed identity. For a faster demo, you can instead choose the
-preconfigured **GitHub** MCP tile and supply a fine-grained PAT; that path is
-easier to set up but less secure.
-
-The recommended path reuses the existing private Key Vault for the GitHub App
-private key. Terraform never receives or reads the key, so it cannot enter
-Terraform state. The SRE Agent never receives it either.
+The native BYO GitHub App setup is documented by Microsoft at
+[Set up GitHub BYO App connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/setup-github-byo-app).
+It uses Key Vault-backed GitHub App credentials directly in **Code Access**. The
+custom MCP broker below is separate and optional; keep it only when you want to
+show an extra hardening pattern.
 
 Before continuing, confirm `.github/workflows/apply-infra.yml` is present on the
-repository's default branch. The recommended broker path also requires
+repository's default branch. The advanced broker hardening path also requires
 `.github/workflows/sre-remediation-pr.yml`, because issue events load their
 workflow definition from that branch.
 
-### 4a. Connect your source code
+### 4a. Option 1 — Connect Code Access with BYO GitHub App
 
-1. Open **Builder → Code Access**.
-2. Under **GitHub**, use the existing onboarding connection or select **Connect**.
-3. Select **Add repository**, choose `<your-org>/<your-repo>`, and save.
-4. Wait until the connected-repository row shows a healthy status. Use its sync
-   control if the repository was connected before these Scenario B files were
-   merged.
+This is the recommended demo path: no PAT, no custom broker, and GitHub actions
+are attributed to your app identity.
 
-**Expected outcome:** the connected-repository row shows the repository and begins indexing.
-This connection is read context only; it does not supply the PR credential.
+1. In GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub
+   App**. For an organisation-owned repository, create it under the
+   organisation's settings instead.
+2. Set:
+   - **GitHub App name:** a unique name, for example
+     `contosopay-sre-agent`;
+   - **Homepage URL:** `https://sre.azure.com`;
+   - **Webhook → Active:** unchecked.
+3. Under **Repository permissions**, set:
+   - **Contents:** **Read and write**;
+   - **Pull requests:** **Read and write**;
+   - **Metadata:** **Read-only** (GitHub adds this automatically).
 
-### Optional shortcut: use the PAT-based GitHub MCP connector
+   Leave **Actions**, **Administration**, **Secrets**, and unrelated permissions
+   at **No access**.
+4. Under **Where can this GitHub App be installed?**, keep it limited to the
+   owning account unless broader installation is genuinely required. Select
+   **Create GitHub App**.
+5. On the app's **General** page, record the **Client ID** that starts with
+   `Iv...`. This is different from the numeric App ID.
+6. Select **Generate a private key** and keep the downloaded PEM file local.
+7. Open **Install App**, install it on the repository owner, choose **Only select
+   repositories**, and select this repository only.
+8. Store the private key in Key Vault:
+   - Open the demo Key Vault in the Azure portal.
+   - Go to **Secrets → Generate/Import**.
+   - Use a name such as `sre-agent-github-app-key`.
+   - Paste the full PEM content as the value and create the secret.
+   - Copy the secret URI. The unversioned URI is preferred so key rotation works
+     without updating the connector.
+9. Grant the SRE Agent managed identity **Key Vault Secrets User** on that Key
+   Vault.
+10. In SRE Agent, open **Builder → Code Access → Add repositories**.
+11. Choose **GitHub**, enter `github.com`, continue to **Authenticate**, and
+    select **Bring your own GitHub App**.
+12. Enter:
+    - **Client ID:** the `Iv...` Client ID from the GitHub App;
+    - **Private key secret URI:** the Key Vault secret URI;
+    - **Key Vault identity:** the SRE Agent managed identity, if prompted.
+13. Select **Connect**, then add this repository and save.
+
+**Expected outcome:** Code Access shows the repository connected with auth type
+`GitHubApp`. The SRE Agent can use app-based GitHub access for repository
+operations, and no individual user's PAT is involved.
+
+### 4b. Option 2 — demo shortcut: use the PAT-based GitHub MCP connector
 
 Use this only when demo speed matters more than showing the most secure pattern.
-It avoids the GitHub App, Entra API registration, Key Vault private-key upload,
-and custom broker deployment in 4b through 4e. The tradeoff is that the SRE
-Agent connector holds a GitHub PAT with repository write permissions for the
-duration of the demo.
+It avoids GitHub App and Key Vault setup. The tradeoff is that the SRE Agent
+connector holds a GitHub PAT with repository write permissions for the duration
+of the demo.
 
 If you choose this shortcut:
 
@@ -392,20 +426,26 @@ If you choose this shortcut:
    management, or merge/approve tools.
 7. Continue with [4f. Grant Reader-level workload access](#4f-grant-reader-level-workload-access).
    In Part 5b, use
-   [`agent/gitops-remediation-agent-pat.md`](../agent/gitops-remediation-agent-pat.md)
-   instead of the managed-identity broker prompt.
+   [`agent/gitops-remediation-agent-github.md`](../agent/gitops-remediation-agent-github.md).
 8. After the demo, revoke the PAT in GitHub under **Settings → Developer
    settings → Personal access tokens → Fine-grained tokens**.
 
 > Keep the global tool access policy in Part 5a even with the PAT shortcut. It
 > still blocks terminal fallback and direct Azure/Kubernetes/Terraform writes.
 
-### 4b. Create the least-privilege GitHub App
+### 4c. Option 3 — advanced hardening: deploy the custom MCP broker
+
+Skip this section unless you explicitly want to showcase the hardened broker
+pattern. The broker is useful when you do not want the agent to receive general
+repository write tools at all. Instead, the agent can only create a fixed issue;
+GitHub Actions then opens the remediation PR.
+
+#### 4c.1. Create the issue-only GitHub App
 
 1. In GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub
    App**. For an organisation-owned repository, create it under the
    organisation's settings instead.
-2. Set a unique **GitHub App name** and a **Homepage URL** for this repository.
+2. Set a unique **GitHub App name** and **Homepage URL** `https://sre.azure.com`.
 3. Disable **Webhook → Active**. This flow does not receive webhooks.
 4. Under **Repository permissions**, set:
    - **Issues:** **Read and write**;
@@ -430,7 +470,7 @@ If you choose this shortcut:
     approve pull requests**. The workflow creates a PR but never approves or
     merges it.
 
-### 4c. Register the broker API in Microsoft Entra
+#### 4c.2. Register the broker API in Microsoft Entra
 
 The custom MCP wizard needs an Entra token scope. This registration has no
 client secret: the SRE Agent authenticates with its managed identity.
@@ -473,10 +513,10 @@ client secret: the SRE Agent authenticates with its managed identity.
 
    No certificate, client secret, or delegated user permission is required.
 
-### 4d. Enable and deploy the broker
+#### 4c.3. Enable and deploy the broker
 
 1. Set the nonsecret repository variables consumed by both `deploy` and
-   `apply-infra`. Replace the placeholders with the values from 4b and 4c:
+   `apply-infra`. Replace the placeholders with the values from 4c.1 and 4c.2:
 
    ```bash
    REPO="<your-org>/<your-repo>"
@@ -549,7 +589,7 @@ client secret: the SRE Agent authenticates with its managed identity.
 > Its managed identity can pull its image and read Key Vault secrets. The GitHub
 > App can read/write issues only on this one repository.
 
-### 4e. Add the custom MCP connector in the current SRE Agent UI
+#### 4c.4. Add the custom MCP connector in the current SRE Agent UI
 
 1. Open **Builder → Connectors** and select **Add connector**.
 2. In the connector catalog, select **MCP**, then select **MCP server**.
@@ -935,29 +975,29 @@ its core monitoring roles.
    opens is titled **Create a custom agent**.
 2. On the **Form** tab, set **Custom agent name** to
    `gitops-remediation`. Open
-   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
+   [`agent/gitops-remediation-agent-github.md`](../agent/gitops-remediation-agent-github.md)
    and paste **only the fenced prompt block** (the text inside the ` ```text `
    fence, from *"You are the ContosoPay GitOps remediation specialist."* to the
    end) into the **Instructions** field. Do **not** include the file's markdown
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
-   If you chose the PAT shortcut in Part 4, use
-   [`agent/gitops-remediation-agent-pat.md`](../agent/gitops-remediation-agent-pat.md)
+   If you chose the advanced broker hardening option in Part 4, use
+   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
    instead.
 3. Under **Choose tools**, use an explicit selection rather than leaving the list
    empty. The current **Create a custom agent** form warns that selecting tools
    overrides inherited global tools.
 
-   For the recommended broker path, select Code Access repository read, Azure
-   read tools, `create_slow_leak_remediation_issue`, and
-   `get_slow_leak_remediation_status`. Do not select workflow dispatch,
-   terminal, repository administration, direct Pull Request authoring, or Pull
-   Request merge tools. Save when done.
+   For the native BYO GitHub App path or PAT shortcut, select the GitHub
+   connector tools needed to create a branch, update `infra/leak.auto.tfvars`,
+   commit the change, and open a Pull Request. Do not select terminal, workflow
+   dispatch, repository administration, secret-management, approval, or merge
+   tools.
 
-   If you chose the PAT shortcut, select the GitHub connector tools needed to
-   create a branch, update `infra/leak.auto.tfvars`, commit the change, and open
-   a Pull Request. Do not select terminal, workflow dispatch, repository
-   administration, secret-management, approval, or merge tools.
+   For the advanced broker hardening path, select Code Access repository read,
+   Azure read tools, `create_slow_leak_remediation_issue`, and
+   `get_slow_leak_remediation_status`. Do not select direct Pull Request
+   authoring tools for that path.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -990,9 +1030,10 @@ Pull Request edits the right file.
    investigation and remediation to the `gitops-remediation` custom agent, remain
    in review/human-approval mode, and never mutate Azure directly.
 4. On **Review custom plan**, confirm the plan invokes
-   `gitops-remediation`. For the recommended path it should use the two broker
-   tools only for remediation. For the PAT shortcut it should use only the
-   minimum GitHub branch/file/Pull Request tools. Save the plan.
+   `gitops-remediation`. For the native BYO GitHub App path or PAT shortcut, it
+   should use only the minimum GitHub branch/file/Pull Request tools. For the
+   advanced broker hardening path, it should use the two broker tools only for
+   remediation. Save the plan.
 
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
 quick check, ask the agent in a chat to "restart the payment-service container" —

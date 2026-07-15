@@ -82,24 +82,21 @@ code. Code Access is repository context only in this demo. It is not a terminal 
 credential, and its onboarding OAuth session is not reused by the custom MCP
 connector.
 
-Scenario B's recommended path does not give the agent a PAT or terminal Git
-access. A narrow custom MCP broker is deployed to Azure Container Apps and
-protected by Microsoft Entra. The connector authenticates with the SRE Agent
-managed identity. The broker then uses a GitHub App private key from the demo's
-existing private Key Vault to mint a one-hour installation token with Issues
-read/write permission on one repository. It exposes only two tools: create the
-fixed remediation issue and read trusted workflow result markers. GitHub Actions
-creates the branch, one-file commit, and unmerged Pull Request with the run's
-short-lived `GITHUB_TOKEN`.
+Scenario B's recommended path uses SRE Agent's native **Code Access → Bring your
+own GitHub App** flow. The GitHub App private key lives in Key Vault, the SRE
+Agent managed identity reads it, and GitHub operations are attributed to the app
+identity instead of a user.
 
-For the recommended path, use **Builder → Connectors → Add connector → MCP →
-MCP server**, **Streamable-HTTP**, and **Managed identity**. Do not choose the
-preconfigured **GitHub** MCP tile for that path; that wizard requires a PAT.
+For a faster demo-only setup, Scenario B also documents a PAT shortcut: use
+**Builder → Connectors → Add connector → MCP → GitHub** with a same-day
+fine-grained PAT scoped to this repository and limited to **Contents: Read and
+write** plus **Pull requests: Read and write**. Revoke it immediately after the
+demo.
 
-For a faster demo-only setup, Scenario B also documents a PAT shortcut: use the
-preconfigured **GitHub** MCP tile with a same-day fine-grained PAT scoped to this
-repository and limited to **Contents: Read and write** plus **Pull requests:
-Read and write**. Revoke it immediately after the demo.
+For advanced hardening, the guide keeps a separate custom MCP broker option. It
+uses **Builder → Connectors → Add connector → MCP → MCP server**,
+**Streamable-HTTP**, and **Managed identity** so the agent can only call two
+allowlisted issue/status tools.
 
 ---
 
@@ -147,8 +144,9 @@ GitHub sign-in and response plan in the portal.
 | The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
 | There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
 | The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
-| Custom MCP discovery returns 401 | Confirm the connector uses **Managed identity**, selects the Scenario B agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
-| The GitHub MCP wizard asks for a PAT | For the recommended path, you selected **MCP → GitHub** by mistake; go back and select the generic **MCP → MCP server** tile. For the demo shortcut, this is expected. |
+| BYO GitHub App validation fails | Verify the GitHub App **Client ID** starts with `Iv...`, the private-key secret URI points to Key Vault, and the agent managed identity has **Key Vault Secrets User**. |
+| Custom MCP discovery returns 401 | Advanced broker path only: confirm the connector uses **Managed identity**, selects the Scenario B agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
+| The GitHub MCP wizard asks for a PAT | This is expected only for the PAT shortcut. For native BYO GitHub App, configure it in **Builder → Code Access**, not the MCP GitHub tile. |
 | The remediation issue opens but no workflow starts | Broker path only: confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
 | The PAT shortcut cannot open a PR | Confirm the fine-grained PAT has **Contents: Read and write** and **Pull requests: Read and write** on this repository, and that the custom agent selected the GitHub branch/file/Pull Request tools. |
 
