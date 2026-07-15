@@ -7,8 +7,8 @@ name: deploy
 # OIDC (no stored credentials):
 #   1. Bootstrap the remote Terraform state storage (idempotent).
 #   2. terraform apply (phase 1): platform only -- no apps yet (images don't exist).
-#   3. Build + push the three container images to ACR.
-#   4. terraform apply (phase 2): the three Container Apps + alert, on the new tag.
+#   3. Build + push app images and the optional MCP broker to ACR.
+#   4. terraform apply (phase 2): Container Apps + alert, on the new tag.
 #   5. Publish the resulting URLs / names to the job summary.
 #
 # Run it from the Actions tab (Run workflow). It is intentionally manual
@@ -70,6 +70,17 @@ jobs:
       TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
       TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
       TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
+      TF_VAR_enable_sre_remediation_broker: ${{ vars.ENABLE_SRE_REMEDIATION_BROKER || 'false' }}
+      TF_VAR_sre_remediation_allowed_caller_principal_id: ${{ vars.SRE_REMEDIATION_CALLER_PRINCIPAL_ID }}
+      TF_VAR_sre_remediation_entra_api_client_id: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
+      TF_VAR_sre_remediation_entra_token_audience: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
+      TF_VAR_sre_remediation_entra_token_scope: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
+      TF_VAR_sre_remediation_github_app_id: ${{ vars.SRE_GITHUB_APP_ID }}
+      TF_VAR_sre_remediation_github_app_installation_id: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
+      TF_VAR_sre_remediation_github_app_bot_login: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
+      TF_VAR_sre_remediation_github_repository_owner: ${{ github.repository_owner }}
+      TF_VAR_sre_remediation_github_repository_name: ${{ github.event.repository.name }}
+      TF_VAR_sre_remediation_github_app_private_key_secret_name: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_SECRET_NAME || 'github-app-private-key' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -230,6 +241,7 @@ jobs:
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
       - name: Terraform apply (phase 1 -- platform, no apps yet)
+        id: platform
         working-directory: infra
         run: |
           set -euo pipefail
@@ -246,11 +258,15 @@ jobs:
           # Subsequent steps must use the immutable location recorded in state.
           echo "TF_LOCATION=${LOCATION}" >> "$GITHUB_ENV"
 
-          terraform apply -input=false -auto-approve \
-            -var 'deploy_apps=false' \
-            -var "prefix=${TF_PREFIX}" \
-            -var "environment=${TF_ENVIRONMENT}" \
-            -var "location=${LOCATION}"
+          if grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}"; then
+            echo "Existing app deployment detected; preserving running revisions."
+          else
+            terraform apply -input=false -auto-approve \
+              -var 'deploy_apps=false' \
+              -var "prefix=${TF_PREFIX}" \
+              -var "environment=${TF_ENVIRONMENT}" \
+              -var "location=${LOCATION}"
+          fi
 
       - name: Build and push images
         working-directory: infra
@@ -261,7 +277,8 @@ jobs:
           ACR_NAME="$(terraform output -raw acr_name)"
           ACR_LOGIN_SERVER="$(terraform output -raw acr_login_server)"
           az acr login --name "${ACR_NAME}"
-          for svc in frontend checkout-api payment-service; do
+          SERVICES=(frontend checkout-api payment-service sre-remediation-mcp)
+          for svc in "${SERVICES[@]}"; do
             docker build \
               -t "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}" \
               -t "${ACR_LOGIN_SERVER}/${svc}:latest" \
@@ -290,9 +307,12 @@ jobs:
           FRONTEND_URL="$(terraform output -raw frontend_url)"
           RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
           ACR_NAME="$(terraform output -raw acr_name)"
+          KEY_VAULT_NAME="$(terraform output -raw key_vault_name)"
           FRONTEND_APP="$(terraform output -raw frontend_app_name)"
           CHECKOUT_APP="$(terraform output -raw checkout_app_name)"
           PAYMENT_APP="$(terraform output -raw payment_app_name)"
+          BROKER_APP="$(terraform output -raw sre_remediation_broker_app_name 2>/dev/null || true)"
+          BROKER_ENDPOINT="$(terraform output -raw sre_remediation_broker_endpoint_url 2>/dev/null || true)"
           GRAFANA="$(terraform output -raw grafana_endpoint 2>/dev/null || true)"
           {
             echo "## ContosoPay environment deployed"
@@ -301,7 +321,9 @@ jobs:
             echo "| --- | --- |"
             echo "| Frontend URL | ${FRONTEND_URL} |"
             echo "| Resource group | ${RESOURCE_GROUP} |"
+            echo "| Key Vault name | ${KEY_VAULT_NAME} |"
             [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "| Grafana | ${GRAFANA} |"
+            [[ -n "${BROKER_ENDPOINT}" && "${BROKER_ENDPOINT}" != "null" ]] && echo "| SRE remediation MCP endpoint | ${BROKER_ENDPOINT} |"
             echo ""
             echo "### Set these GitHub Actions *variables* so deploy-apps.yml can ship code changes:"
             echo ""
@@ -312,6 +334,9 @@ jobs:
             echo "| FRONTEND_APP | ${FRONTEND_APP} |"
             echo "| CHECKOUT_APP | ${CHECKOUT_APP} |"
             echo "| PAYMENT_APP | ${PAYMENT_APP} |"
+            if [[ -n "${BROKER_APP}" && "${BROKER_APP}" != "null" ]]; then
+              echo "| SRE_REMEDIATION_BROKER_APP | ${BROKER_APP} |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # After the environment is up, open the Scenario B "arm the leak" Pull Request

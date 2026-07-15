@@ -29,6 +29,11 @@ Internet ──TLS──► frontend (public, ACA external ingress)
    Azure Monitor alert ──► (SRE Agent scanner polls the Alerts API every ~1 min)
    Azure Managed Grafana ──► dashboards over App Insights / Log Analytics
 
+   Azure SRE Agent UAMI ──Entra/TLS──► remediation MCP broker (public ACA)
+                                             │ GitHub App installation token
+                                             ▼
+                                      fixed remediation issue
+
    GitHub PR ──merge──► self-hosted runner VNet
                               │ global VNet peering
                               ▼
@@ -38,16 +43,21 @@ Internet ──TLS──► frontend (public, ACA external ingress)
                        Terraform / ACR / Key Vault
 ```
 
-Only **frontend** is publicly reachable. Application services use internal ingress. In the CI/CD
-path shown above, Terraform state is reached through a private endpoint in the runner VNet; Key
-Vault and ACR private endpoints live in the application VNet and are reachable over global VNet
-peering. Terraform state remains in an **LRS storage account** bootstrapped by the deploy workflow.
+By default only **frontend** is publicly reachable. When Scenario B's optional
+remediation broker is enabled, it is the sole exception: its HTTPS endpoint must
+be reachable by the managed Azure SRE Agent, but Container Apps authentication
+rejects callers without the dedicated Entra audience and the broker allows only
+the exact agent managed identity. Application services remain internal. In the
+CI/CD path shown above, Terraform state is reached through a private endpoint in
+the runner VNet; Key Vault and ACR private endpoints live in the application
+VNet and are reachable over global VNet peering. Terraform state remains in an
+**LRS storage account** bootstrapped by the deploy workflow.
 
 ## Prerequisites
 
 - [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az login`, contributor on the target sub)
 - [Terraform](https://developer.hashicorp.com/terraform) >= 1.9
-- [Docker](https://www.docker.com/) (daemon running — builds the three images)
+- [Docker](https://www.docker.com/) (daemon running — builds the app images and optional broker)
 - A Bash shell (Linux/macOS/WSL/Git Bash) **or** PowerShell 7+ on Windows
 - For GitHub CI/CD: a Linux self-hosted runner with the labels `azure-private` and `contosopay`,
   attached to the VNet configured by the runner networking Terraform variables.
@@ -123,7 +133,8 @@ The deploy workflow (or the script) opens a **Pull Request** flipping the plante
 `apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
 deploys the leak — no one edits the live app by hand. **Remediation is GitOps too:** the agent is
 limited to **Reader-level workload access**, with a required global Tool Access Policy that denies
-direct mutation tools. It creates a constrained issue that triggers a workflow to **open a PR**
+direct mutation tools. Through a managed-identity custom MCP broker, it creates a constrained issue
+that triggers a workflow to **open a PR**
 setting `enable_slow_leak=false`. A human merges it, CI redeploys, and memory recovers. See
 [`agent/`](agent/) for the committable agent config.
 
@@ -137,6 +148,7 @@ setting `enable_slow_leak=false`. A human merges it, CI redeploys, and memory re
 | `src/frontend` | Public SPA + Node server |
 | `src/checkout-api` | Internal API (orders) |
 | `src/payment-service` | Internal API with the planted, flag-gated memory leak |
+| `src/sre-remediation-mcp` | Optional Entra-protected two-tool Scenario B broker; GitHub App key is read from Key Vault via managed identity |
 | `scripts/` | `deploy`, `teardown`, `trigger-incident-direct` (Scenario A), `trigger-incident-gitops` (Scenario B) |
 | `agent/` | Committable SRE Agent **Scenario B** GitOps config (tool-access policy, custom agent, runbook) |
 | `docs/run-of-show.md` | Start here — what the demo is and which scenario guide to follow |
@@ -151,8 +163,9 @@ setting `enable_slow_leak=false`. A human merges it, CI redeploys, and memory re
 
 ## Security
 
-- No secrets in source. All secrets live in **Azure Key Vault**; apps read them via **managed
-  identity**. CI/CD uses **OIDC federation**, never stored credentials.
+- No secrets in source. All secrets live in **Azure Key Vault**; apps and the
+  optional broker read them via **managed identity**. The GitHub App key never
+  enters Terraform state. CI/CD uses **OIDC federation**, never stored credentials.
 - ACR admin user disabled · private endpoints for state, ACR, and Key Vault · Key Vault RBAC +
   purge protection · TLS-only ingress · least-privilege role assignments · diagnostic settings to
   Log Analytics.

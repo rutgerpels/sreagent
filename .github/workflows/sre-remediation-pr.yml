@@ -22,7 +22,13 @@ jobs:
       github.event.issue.title == '[SRE] Remediate ContosoPay slow memory leak' &&
       contains(github.event.issue.labels.*.name, 'sre-remediation') &&
       contains(github.event.issue.body, '<!-- sre-remediation:payment-slow-leak -->') &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
+      (
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association) ||
+        (
+          github.event.issue.user.type == 'Bot' &&
+          github.event.issue.user.login == vars.SRE_GITHUB_APP_BOT_LOGIN
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -74,7 +80,8 @@ jobs:
             echo "found=true" >> "${GITHUB_OUTPUT}"
             gh issue comment "${ISSUE_NUMBER}" \
               --repo "${GH_REPO}" \
-              --body "An open remediation PR already exists: ${PR_URL}"
+              --body "<!-- sre-remediation-result:existing-pr -->
+            An open remediation PR already exists: ${PR_URL}"
             echo "Existing open remediation PR: ${PR_URL}" >> "${GITHUB_STEP_SUMMARY}"
           else
             echo "found=false" >> "${GITHUB_OUTPUT}"
@@ -155,7 +162,8 @@ jobs:
           set -euo pipefail
           gh issue comment "${ISSUE_NUMBER}" \
             --repo "${GH_REPO}" \
-            --body "No remediation PR was needed because enable_slow_leak is already false on main."
+            --body "<!-- sre-remediation-result:not-needed -->
+          No remediation PR was needed because enable_slow_leak is already false on main."
 
       - name: Open remediation pull request
         if: steps.remediation.outputs.changed == 'true'
@@ -183,7 +191,8 @@ jobs:
 
           gh issue comment "${ISSUE_NUMBER}" \
             --repo "${GH_REPO}" \
-            --body "Remediation PR opened for human review: ${PR_URL}"
+            --body "<!-- sre-remediation-result:pr-opened -->
+          Remediation PR opened for human review: ${PR_URL}"
 
           {
             echo "## SRE remediation PR opened"
@@ -207,7 +216,8 @@ jobs:
           RUN_URL="${SERVER_URL}/${GH_REPO}/actions/runs/${RUN_ID}"
           if ! gh issue comment "${ISSUE_NUMBER}" \
             --repo "${GH_REPO}" \
-            --body "The remediation workflow failed and did not produce a verified PR. Review the failed run: ${RUN_URL}"; then
+            --body "<!-- sre-remediation-result:failed -->
+          The remediation workflow failed and did not produce a verified PR. Review the failed run: ${RUN_URL}"; then
             echo "::warning::Could not report the workflow failure on issue ${ISSUE_NUMBER}."
           fi
 

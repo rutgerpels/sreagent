@@ -1,6 +1,6 @@
 name: deploy-apps
 
-# Build the three ContosoPay images and roll them out to Container Apps.
+# Build the ContosoPay images and roll them out to Container Apps.
 # Authentication is OIDC-only (no stored credentials, no creds JSON blob).
 #
 # The operator configures these GitHub Actions *variables* (Settings > Secrets
@@ -95,3 +95,40 @@ jobs:
             --name "${APP_NAME}" \
             --resource-group "${RG}" \
             --image "${ACR}.azurecr.io/${SVC}:${TAG}"
+
+  build-and-deploy-remediation-broker:
+    if: ${{ vars.ACR_NAME != '' && vars.SRE_REMEDIATION_BROKER_APP != '' }}
+    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build, push, and deploy broker
+        env:
+          ACR: ${{ vars.ACR_NAME }}
+          APP_NAME: ${{ vars.SRE_REMEDIATION_BROKER_APP }}
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          readonly SVC="sre-remediation-mcp"
+          readonly LOGIN_SERVER="${ACR}.azurecr.io"
+          az acr login --name "${ACR}"
+          docker build \
+            -t "${LOGIN_SERVER}/${SVC}:${TAG}" \
+            -t "${LOGIN_SERVER}/${SVC}:latest" \
+            "src/${SVC}"
+          docker push "${LOGIN_SERVER}/${SVC}:${TAG}"
+          docker push "${LOGIN_SERVER}/${SVC}:latest"
+          az containerapp update \
+            --name "${APP_NAME}" \
+            --resource-group "${RG}" \
+            --image "${LOGIN_SERVER}/${SVC}:${TAG}"

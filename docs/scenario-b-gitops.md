@@ -38,13 +38,14 @@ especially for the SRE Agent. Three categories:
 | --- | --- | --- |
 | **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
 | **One-time bootstrap seed (cannot be GitOps)** | The private Linux runner and its VNet, the identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: the runner and identity must exist before any pipeline can run. The first deploy creates the remote state account and its private endpoint automatically. |
-| **SRE Agent portal-only (no IaC equivalent today)** | The GitHub OAuth sign-in for Code Access and issue tools, the tool access policy, the subagent (custom agent) and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
+| **SRE Agent portal-only (no IaC equivalent today)** | GitHub OAuth for repository indexing, the managed-identity custom MCP connection, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
 
 So for the SRE Agent specifically: **the agent resource, its permissions, and its
 connection to Azure Monitor can be Infrastructure as Code** (see
 [the reference, §6](sre-agent-setup.md#6-optional-provisioning-the-agent-with-terraform)),
-while **the GitHub OAuth, tool policy, custom-agent behaviour, and response plan
-are configured in the portal** because they are interactive, identity-bound steps.
+while **Code Access OAuth, custom MCP selection, tool policy, custom-agent
+behaviour, and the response plan are configured in the portal** because they are
+interactive, identity-bound steps.
 
 ---
 
@@ -326,86 +327,229 @@ environment.
 
 ## Part 4 — Connect the agent
 
-The agent's setup page shows an **Add context** screen with four cards — **Code**,
-**Logs**, **Azure resources**, and **Incidents**. Connect **all four**. Scenario B
-uses the GitHub OAuth connector only to create a specially labeled remediation
-issue. That issue triggers a fixed repository-owned workflow, which creates the
-remediation branch and Pull Request with GitHub's short-lived `GITHUB_TOKEN`.
+Scenario B uses two separate GitHub connections for two different jobs:
 
-> **No PAT, GitHub MCP server, GitHub App, or additional Key Vault setup is
-> required for this scenario.** The deployment already creates the Key Vault
-> needed by the application, but GitHub authentication does not belong there in
-> this design. Keeping PR authoring inside GitHub Actions avoids another
-> long-lived credential and avoids exposing the deployment's private Key Vault
-> to the managed SRE Agent service.
+| Connection | Purpose | Authentication |
+| --- | --- | --- |
+| **Builder → Code Access** | Index and read the repository during investigation. | Your interactive GitHub OAuth sign-in from onboarding. |
+| **Builder → Connectors → custom MCP server** | Invoke two tightly constrained remediation tools. | The SRE Agent's managed identity obtains an Entra token for the broker. The broker uses a repository-scoped GitHub App installation token that expires after one hour. |
 
-Before continuing, open the repository's **Actions** tab and confirm the
-**sre-remediation-pr** workflow is listed. Issue events use workflow definitions
-from the default branch, so merge the repository changes containing
-`.github/workflows/sre-remediation-pr.yml` first.
+The onboarding GitHub sign-in cannot be reused by terminal Git or by a custom MCP
+server. Do not choose the preconfigured **GitHub** MCP tile: the current wizard
+for that tile requires a PAT. Choose the generic **MCP server** tile instead.
 
-If you followed an older version of this guide, remove the `GitHubMCP` connector
-from **Builder → Connectors** and revoke its PAT in GitHub. If you only opened
-the **Bring your own GitHub App** dialog without completing it, select
-**Cancel**—no GitHub App or Key Vault key is needed below. Keep the existing
-Code Access OAuth connection.
+The deployment reuses the existing private Key Vault for the GitHub App private
+key. Terraform never receives or reads the key, so it cannot enter Terraform
+state. The SRE Agent never receives it either.
+
+Before continuing, confirm `.github/workflows/sre-remediation-pr.yml` is present
+on the repository's default branch. Issue events load their workflow definition
+from that branch.
 
 ### 4a. Connect your source code
 
-1. On the agent setup page, find the **Code** card and select **+**.
-2. Choose **GitHub**, sign in, and select this demo's repository
-   (`<your-org>/<your-repo>`).
+1. Open **Builder → Code Access**.
+2. Under **GitHub**, use the existing onboarding connection or select **Connect**.
+3. Select **Add repository**, choose `<your-org>/<your-repo>`, and save.
+4. Wait until the connected-repository row shows a healthy status. Use its sync
+   control if the repository was connected before these Scenario B files were
+   merged.
 
-**Expected outcome:** the **Code** card shows the repository and begins indexing.
-This gives the agent source context for investigations.
+**Expected outcome:** the connected-repository row shows the repository and begins indexing.
+This connection is read context only; it does not supply the PR credential.
 
-### 4b. Enable the GitHub issue connector
+### 4b. Create the least-privilege GitHub App
 
-**What this adds:** the agent creates one tightly defined remediation issue.
-Opening that issue triggers `.github/workflows/sre-remediation-pr.yml`, which
-sets `enable_slow_leak = false` on a new branch and opens an unmerged Pull
-Request. The agent cannot dispatch arbitrary workflows, never receives a Git
-credential, and never runs `git push`.
+1. In GitHub, open **Settings → Developer settings → GitHub Apps → New GitHub
+   App**. For an organisation-owned repository, create it under the
+   organisation's settings instead.
+2. Set a unique **GitHub App name** and a **Homepage URL** for this repository.
+3. Disable **Webhook → Active**. This flow does not receive webhooks.
+4. Under **Repository permissions**, set:
+   - **Issues:** **Read and write**;
+   - **Metadata:** **Read-only** (GitHub adds this automatically).
 
-1. Open **Builder → Connectors**.
-2. Look for the GitHub OAuth connection created during 4a. If it is present and
-   **Connected**, edit it. Otherwise select **Add connector → GitHub OAuth
-   connector → OAuth**, sign in with the same GitHub account, and save.
-3. In the connector's tool selection, enable:
-   - `CreateGithubIssue`;
-   - `FetchGithubIssue`.
+   Leave **Contents**, **Pull requests**, **Actions**, **Administration**, and all
+   other permissions at **No access**.
+5. Under **Where can this GitHub App be installed?**, keep it limited to the
+   owning account unless broader installation is genuinely required. Select
+   **Create GitHub App**.
+6. On the app's **General** page, record the numeric **App ID** and the app slug.
+   Select **Generate a private key** and keep the downloaded PEM file local.
+7. Open **Install App**, install it on the repository owner, choose **Only select
+   repositories**, and select this repository only.
+8. Record the numeric installation ID from the installation page URL
+   (`.../settings/installations/<installation-id>`).
+9. In the repository, create the label:
+   - **Name:** `sre-remediation`;
+   - **Description:** `Approved trigger for the fixed SRE remediation workflow`.
+10. Open **Settings → Actions → General → Workflow permissions**, select **Read
+    and write permissions**, and enable **Allow GitHub Actions to create and
+    approve pull requests**. The workflow creates a PR but never approves or
+    merges it.
 
-   Do not enable workflow dispatch, repository administration, deletion,
-   secret-management, or Pull Request merge tools.
-4. In GitHub, open the repository's **Settings → Actions → General → Workflow
-   permissions**:
-   - select **Read and write permissions**; and
-   - enable **Allow GitHub Actions to create and approve pull requests**.
+### 4c. Register the broker API in Microsoft Entra
 
-   The workflow opens a PR but never approves or merges it.
-5. In GitHub, open **Issues → Labels → New label** and create:
-   - **Name:** `sre-remediation`
-   - **Description:** `Approved trigger for the fixed SRE remediation workflow`
-6. Return to **Builder → Connectors** and confirm the GitHub OAuth connector is
-   **Connected** and the two issue tools are selected.
+The custom MCP wizard needs an Entra token scope. This registration has no
+client secret: the SRE Agent authenticates with its managed identity.
+
+1. Record the agent resource group and agent name, then retrieve the exact
+   Scenario B managed identity:
+
+   ```bash
+   AGENT_RG="<resource-group-containing-the-sre-agent>"
+   AGENT_NAME="<sre-agent-name>"
+
+   AGENT_IDENTITY_ID="$(az resource show \
+     --resource-group "$AGENT_RG" \
+     --name "$AGENT_NAME" \
+     --resource-type Microsoft.App/agents \
+     --api-version 2026-01-01 \
+     --query properties.actionConfiguration.identity -o tsv)"
+   SRE_CALLER_PRINCIPAL_ID="$(az identity show \
+     --ids "$AGENT_IDENTITY_ID" --query principalId -o tsv)"
+   ```
+
+   If the first query is empty, open the agent's **Settings → Azure Settings**
+   page, copy its managed identity resource ID, and use that as
+   `AGENT_IDENTITY_ID`.
+2. Create the dedicated single-tenant API registration:
+
+   ```bash
+   BROKER_API_CLIENT_ID="$(az ad app create \
+     --display-name "contosopay-sre-remediation-api" \
+     --sign-in-audience AzureADMyOrg \
+     --query appId -o tsv)"
+   BROKER_AUDIENCE="api://${BROKER_API_CLIENT_ID}"
+   BROKER_SCOPE="${BROKER_AUDIENCE}/.default"
+
+   az ad app update \
+     --id "$BROKER_API_CLIENT_ID" \
+     --identifier-uris "$BROKER_AUDIENCE"
+   az ad sp create --id "$BROKER_API_CLIENT_ID"
+   ```
+
+   No certificate, client secret, or delegated user permission is required.
+
+### 4d. Enable and deploy the broker
+
+1. Set the nonsecret repository variables consumed by both `deploy` and
+   `apply-infra`. Replace the placeholders with the values from 4b and 4c:
+
+   ```bash
+   REPO="<your-org>/<your-repo>"
+
+   gh variable set ENABLE_SRE_REMEDIATION_BROKER \
+     --repo "$REPO" --body "true"
+   gh variable set SRE_REMEDIATION_CALLER_PRINCIPAL_ID \
+     --repo "$REPO" --body "$SRE_CALLER_PRINCIPAL_ID"
+   gh variable set SRE_REMEDIATION_ENTRA_API_CLIENT_ID \
+     --repo "$REPO" --body "$BROKER_API_CLIENT_ID"
+   gh variable set SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE \
+     --repo "$REPO" --body "$BROKER_AUDIENCE"
+   gh variable set SRE_REMEDIATION_ENTRA_TOKEN_SCOPE \
+     --repo "$REPO" --body "$BROKER_SCOPE"
+   gh variable set SRE_GITHUB_APP_ID \
+     --repo "$REPO" --body "<numeric-app-id>"
+   gh variable set SRE_GITHUB_APP_INSTALLATION_ID \
+     --repo "$REPO" --body "<numeric-installation-id>"
+   gh variable set SRE_GITHUB_APP_BOT_LOGIN \
+     --repo "$REPO" --body "<app-slug>[bot]"
+   gh variable set SRE_GITHUB_APP_PRIVATE_KEY_SECRET_NAME \
+     --repo "$REPO" --body "github-app-private-key"
+   ```
+
+2. In GitHub, open **Actions → deploy → Run workflow** again. Existing app
+   revisions remain running; the workflow builds the broker image and adds the
+   broker identity, Key Vault/ACR roles, Container App, and Entra authentication.
+3. From the run summary, record:
+   - `SRE_REMEDIATION_BROKER_APP`;
+   - **SRE remediation MCP endpoint**;
+   - **Key Vault name**.
+   Save the app name for future broker code deployments:
+
+   ```bash
+   gh variable set SRE_REMEDIATION_BROKER_APP \
+     --repo "$REPO" \
+     --body "<SRE_REMEDIATION_BROKER_APP from summary>"
+   ```
+
+4. Upload the PEM private key to that existing Key Vault. The preferred path is
+   to run this from the private runner network:
+
+   ```bash
+   ./scripts/configure-github-app-key.sh \
+     --vault-name "<key-vault-name>" \
+     --private-key "./<downloaded-key>.pem"
+   ```
+
+   From an operator machine outside the VNet, add
+   `--operator-cidr "<your-public-ip>/32"`. The script briefly enables the vault's
+   public endpoint for only that CIDR and restores private-only access even when
+   the upload fails. It also grants the signed-in user **Key Vault Secrets
+   Officer** only when needed and removes that temporary role on exit; the user
+   therefore needs permission to create role assignments. PowerShell users can run
+   `scripts/configure-github-app-key.ps1` with the equivalent parameters.
+5. Delete the local PEM copy after confirming the Key Vault secret exists. Never
+   put the PEM in a GitHub secret, tfvars file, workflow input, or repository.
+6. Confirm the boundary:
+
+   ```bash
+   curl -i "<SRE remediation MCP endpoint>"
+   ```
+
+   An unauthenticated request must return **401**. The `/health` endpoint is the
+   only auth exclusion and returns only `{"status":"ok"}` for platform probes.
+
+> The broker is the only public endpoint besides `frontend`. It is HTTPS-only,
+> rejects unauthenticated requests in Container Apps authentication, and then
+> checks that `x-ms-client-principal-id` equals this exact SRE Agent identity.
+> Its managed identity can pull its image and read Key Vault secrets. The GitHub
+> App can read/write issues only on this one repository.
+
+### 4e. Add the custom MCP connector in the current SRE Agent UI
+
+1. Open **Builder → Connectors** and select **Add connector**.
+2. In the connector catalog, select **MCP**, then select **MCP server**.
+
+   Do **not** select the preconfigured **GitHub** tile. That wizard currently
+   points at `https://api.githubcopilot.com/mcp/` and requires a PAT/API key.
+3. Fill in the custom MCP form:
+
+   | Current wizard field | Value |
+   | --- | --- |
+   | **Name** | `ContosoPay remediation` |
+   | **Connection type** | **Streamable-HTTP** |
+   | **Server URL** | The **SRE remediation MCP endpoint** from the deploy summary, including `/mcp` |
+   | **Authentication** | **Managed identity** |
+   | **Managed identity** | This Scenario B SRE Agent's managed identity |
+   | **Azure AD token scope** | The value of `BROKER_SCOPE`, for example `api://<client-id>/.default` |
+
+4. Complete the connector wizard, then open **Capabilities → Tools → MCP servers
+   + services** and expand **ContosoPay remediation**. The server must expose
+   exactly:
+   - `create_slow_leak_remediation_issue`;
+   - `get_slow_leak_remediation_status`.
+5. Enable only those two tools and save the tool selection.
 
 The workflow runs only when all of these conditions match:
 
 - exact title: `[SRE] Remediate ContosoPay slow memory leak`;
 - label: `sre-remediation`;
 - body marker: `<!-- sre-remediation:payment-slow-leak -->`; and
-- issue author is the repository owner, an organisation member, or collaborator.
+- issue author is the configured GitHub App bot (or a trusted owner, member, or
+  collaborator for manual recovery).
 
 **Expected outcome:** the agent can create and read the narrowly defined trigger
 issue. GitHub Actions performs branch creation, the commit, and PR creation with
 a short-lived `GITHUB_TOKEN`.
 
-> If `CreateGithubIssue` is unavailable, reopen the native GitHub OAuth connector
-> and reauthenticate. Do not add GitHub MCP, paste a PAT, or give the agent
-> terminal access. Use the manual reset script in Part 7 if the connector remains
-> unavailable.
+> If tool discovery fails, first confirm the connector uses the generic **MCP
+> server** tile, the URL ends in `/mcp`, authentication is **Managed identity**,
+> and the scope ends in `/.default`. A raw browser or `curl` request returning
+> `401` is expected; a `404` indicates the wrong URL.
 
-### 4c. Grant Reader-level workload access
+### 4f. Grant Reader-level workload access
 
 **What you will do:** let the agent investigate the demo resource group without
 workload contributor roles — that is the point of this scenario.
@@ -424,7 +568,7 @@ with Reader-level workload access. Monitoring Contributor can change alert
 lifecycle and monitoring settings, so the required tool policy in Part 5a
 provides the second boundary against direct Azure mutations.
 
-### 4d. Add logs context (App Insights / Log Analytics)
+### 4g. Add logs context (App Insights / Log Analytics)
 
 **What you will do:** point the agent at the demo's telemetry so it can read the
 memory trend and correlate it with the code and deployment. On the onboarding
@@ -440,7 +584,7 @@ this scenario it is the single most valuable context source after Code.
 query the payment-service memory metric that drives the incident and line it up
 against the commit/PR that introduced it.
 
-### 4e. Add past-incident context
+### 4h. Add past-incident context
 
 **What you will do:** let the agent learn from prior investigations so repeat
 incidents resolve faster (the "memory" moment in Part 6). On the onboarding
@@ -453,7 +597,7 @@ screen this is the **Incidents** card.
 be empty — that is fine; after the demo runs once, re-triggering the leak shows
 the agent recalling the earlier pattern and resolving it more quickly.
 
-### 4f. Connect Azure Monitor
+### 4i. Connect Azure Monitor
 
 1. Open **Builder → Incident platform**, choose **Azure Monitor**, and save.
 
@@ -542,8 +686,10 @@ Shell.**
 
 #### Method 1 (recommended): the Permissions UI — no API needed
 
-In the SRE Agent portal, open **Settings → Permissions** (older builds:
-**Capabilities → Tools**). Two tabs make up the global tool access policy:
+In the current SRE Agent portal, open **Capabilities → Tools**. The page includes
+**Built-in tools**, **MCP servers + services**, **Custom tools**, **Advanced
+permissions**, and **Approval expiration**. Two tabs are relevant to the global
+tool access policy:
 
 - **Built-in tools** — a grid of per-tool `On/Off` + `Allow/Ask` toggles.
 - **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor, with a
@@ -563,8 +709,8 @@ the contents with
 ```
 
 This one paste allows read diagnostics and denies terminal/shell fallback plus
-direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation
-remains available through the connector's issue tools.
+direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation remains available through the connector's two constrained
+broker tools.
 (Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
 form, or the box rejects it.)
 
@@ -740,21 +886,23 @@ its core monitoring roles.
 
 ### 5b. Add the GitOps behaviour (subagent)
 
-1. Open **Builder → Agent Canvas**, then select **+ Create subagent**.
-   (Recent builds renamed this from **Custom Agent**; the canvas now shows
-   **Subagent** nodes. Older builds had **Builder → Custom agents → New**.)
-2. Set **Name** to `gitops-remediation`. Open
+1. Open **Builder → Agent Canvas**, then select **Create subagent**. The form that
+   opens is titled **Create a custom agent**.
+2. On the **Form** tab, set **Custom agent name** to
+   `gitops-remediation`. Open
    [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md)
    and paste **only the fenced prompt block** (the text inside the ` ```text `
    fence, from *"You are the ContosoPay GitOps remediation specialist."* to the
    end) into the **Instructions** field. Do **not** include the file's markdown
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
-3. **Tools:** explicitly select Code Access repository read, Azure read tools,
-   `CreateGithubIssue`, and `FetchGithubIssue`. Do not leave the selection empty:
-   inherited global tools could broaden the subagent's capabilities. Do not
-   select workflow-dispatch, terminal, repository-administration, direct Pull
-   Request authoring, or Pull Request merge tools. Save when done.
+3. Under **Choose tools**, explicitly select Code Access repository read, Azure read tools,
+   `create_slow_leak_remediation_issue`, and
+   `get_slow_leak_remediation_status`. The current **Create a custom agent** form
+   warns that selecting tools overrides inherited global tools; use that explicit
+   selection rather than leaving it empty. Do not select workflow dispatch,
+   terminal, repository administration, direct Pull Request authoring, or Pull
+   Request merge tools. Save when done.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -770,14 +918,25 @@ Pull Request edits the right file.
 
 ### 5d. Create the response plan
 
-1. From the incident platform page, select **Create a response plan**.
-2. Configure it:
+1. Open **Builder → Incident Response Plans** and select **Create incident
+   response plan**. The same wizard is available from **Builder → Agent Canvas →
+   Create → Trigger → Incident response plan**.
+2. On the first page of the current wizard, set:
 
-   | Setting | Value |
+   | Current wizard field | Value |
    | --- | --- |
-   | **Severity filter** | Include **Sev2 / Warning**. |
-   | **Response agent** | The **`gitops-remediation`** subagent from 5b. |
-   | **Autonomy level** | **Review**. |
+   | **Incident response plan name** | `ContosoPay payment memory leak` |
+   | **Severity** | **2 / Warning** |
+   | **Title contains** | `alert-payment-memory-` |
+   | **Title does not contain** | Leave empty |
+   | **I want a custom response plan** | Selected |
+
+3. Continue to **Define agent learning**. State that this plan must delegate the
+   investigation and remediation to the `gitops-remediation` custom agent, remain
+   in review/human-approval mode, and never mutate Azure directly.
+4. On **Review custom plan**, confirm the plan invokes
+   `gitops-remediation` and uses the two broker tools only for remediation. Save
+   the plan.
 
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
 quick check, ask the agent in a chat to "restart the payment-service container" —
@@ -881,6 +1040,11 @@ az group delete --name rg-contosopay-tfstate --yes --no-wait
 az group delete --name rg-sre-agent --yes
 ```
 
+Delete the `contosopay-sre-remediation-api` Entra app registration and uninstall
+the repository-scoped GitHub App when you no longer need Scenario B. Deleting
+the ContosoPay resource group removes the broker identity, Container App, and
+Key Vault copy of the private key.
+
 ---
 
 ## How this maps to Azure SRE Agent capabilities
@@ -901,4 +1065,6 @@ az group delete --name rg-sre-agent --yes
 - [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
 - [GitHub connector](https://learn.microsoft.com/en-us/azure/sre-agent/github-connector)
   · [Connect source code](https://learn.microsoft.com/en-us/azure/sre-agent/connect-source-code)
+- [MCP connectors](https://learn.microsoft.com/en-us/azure/sre-agent/mcp-connectors)
+- [GitHub App installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
 - [The committable agent configuration](../agent/README.md)

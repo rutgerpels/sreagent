@@ -78,16 +78,23 @@ the change that caused it. In the agent portal, open the **Code** card on the
 setup page (or **Builder → Knowledge base → Add repository**), choose **GitHub**,
 sign in, and select this demo's repository (`<your-org>/<your-repo>`). When the
 card shows the repository with a green check, the agent has begun indexing the
-code. Current builds automatically create the corresponding GitHub OAuth
-connector if one does not already exist and can open a Pull Request from an
-existing source branch.
+code. Code Access is repository context only in this demo. It is not a terminal Git
+credential, and its onboarding OAuth session is not reused by the custom MCP
+connector.
 
-Scenario B does not give the agent a PAT or terminal Git access. The GitHub OAuth
-connector creates a specially labeled remediation issue, which triggers the
-repository-owned `sre-remediation-pr` workflow. GitHub Actions creates the
-branch, one-file commit, and unmerged Pull Request with the run's short-lived
-`GITHUB_TOKEN`. No additional Azure resource or Key Vault credential is required
-for GitHub remediation.
+Scenario B does not give the agent a PAT or terminal Git access. A narrow custom
+MCP broker is deployed to Azure Container Apps and protected by Microsoft Entra.
+The connector authenticates with the SRE Agent managed identity. The broker then
+uses a GitHub App private key from the demo's existing private Key Vault to mint
+a one-hour installation token with Issues read/write permission on one
+repository. It exposes only two tools: create the fixed remediation issue and
+read trusted workflow result markers. GitHub Actions creates the branch,
+one-file commit, and unmerged Pull Request with the run's short-lived
+`GITHUB_TOKEN`.
+
+In the current portal use **Builder → Connectors → Add connector → MCP → MCP
+server**, **Streamable-HTTP**, and **Managed identity**. Do not choose the
+preconfigured **GitHub** MCP tile for this scenario; that wizard requires a PAT.
 
 ---
 
@@ -135,6 +142,9 @@ GitHub sign-in and response plan in the portal.
 | The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
 | There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
 | The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
+| Custom MCP discovery returns 401 | Confirm the connector uses **Managed identity**, selects the Scenario B agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
+| The GitHub MCP wizard asks for a PAT | You selected **MCP → GitHub**. Go back and select the generic **MCP → MCP server** tile. |
+| The remediation issue opens but no workflow starts | Confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
 
 ---
 
@@ -157,3 +167,5 @@ environment itself.
 - [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
 - [GitHub connector](https://learn.microsoft.com/en-us/azure/sre-agent/github-connector)
   · [Connect source code](https://learn.microsoft.com/en-us/azure/sre-agent/connect-source-code)
+- [MCP connectors](https://learn.microsoft.com/en-us/azure/sre-agent/mcp-connectors)
+- [Authenticate as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
