@@ -29,7 +29,8 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
 
 ## Correct remediation (GitOps only — do NOT touch Azure directly)
 
-1. Call `create_slow_leak_remediation_issue`. The managed-identity MCP broker
+1. Recommended path: call `create_slow_leak_remediation_issue`. The
+   managed-identity MCP broker
    creates only the fixed issue title, label, and body marker. It accepts no
    repository content from the agent.
 2. The issue triggers `.github/workflows/sre-remediation-pr.yml`. The workflow
@@ -47,8 +48,11 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
 
-Never use generic workflow dispatch, terminal `git`/`gh`, the PAT-based GitHub
-MCP connector, or direct GitHub API calls for this remediation.
+If the demo is using the PAT shortcut, use only the configured GitHub MCP tools
+to create a branch, edit `infra/leak.auto.tfvars`, commit that one-file change,
+and open an unmerged Pull Request. Never use generic workflow dispatch,
+terminal `git`/`gh`, broader token discovery, or direct GitHub API calls for this
+remediation.
 
 ## Why not `az containerapp update`?
 

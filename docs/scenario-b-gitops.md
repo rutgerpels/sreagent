@@ -332,19 +332,23 @@ Scenario B uses two separate GitHub connections for two different jobs:
 | Connection | Purpose | Authentication |
 | --- | --- | --- |
 | **Builder → Code Access** | Index and read the repository during investigation. | Your interactive GitHub OAuth sign-in from onboarding. |
-| **Builder → Connectors → custom MCP server** | Invoke two tightly constrained remediation tools. | The SRE Agent's managed identity obtains an Entra token for the broker. The broker uses a repository-scoped GitHub App installation token that expires after one hour. |
+| **Recommended: Builder → Connectors → custom MCP server** | Invoke two tightly constrained remediation tools. | The SRE Agent's managed identity obtains an Entra token for the broker. The broker uses a repository-scoped GitHub App installation token that expires after one hour. |
+| **Demo shortcut: Builder → Connectors → GitHub MCP** | Let the agent create the branch, file edit, and Pull Request directly. | A short-lived fine-grained GitHub PAT pasted into the connector wizard. |
 
 The onboarding GitHub sign-in cannot be reused by terminal Git or by a custom MCP
-server. Do not choose the preconfigured **GitHub** MCP tile: the current wizard
-for that tile requires a PAT. Choose the generic **MCP server** tile instead.
+server. For the production-shaped path, choose the generic **MCP server** tile
+and use managed identity. For a faster demo, you can instead choose the
+preconfigured **GitHub** MCP tile and supply a fine-grained PAT; that path is
+easier to set up but less secure.
 
-The deployment reuses the existing private Key Vault for the GitHub App private
-key. Terraform never receives or reads the key, so it cannot enter Terraform
-state. The SRE Agent never receives it either.
+The recommended path reuses the existing private Key Vault for the GitHub App
+private key. Terraform never receives or reads the key, so it cannot enter
+Terraform state. The SRE Agent never receives it either.
 
-Before continuing, confirm `.github/workflows/sre-remediation-pr.yml` is present
-on the repository's default branch. Issue events load their workflow definition
-from that branch.
+Before continuing, confirm `.github/workflows/apply-infra.yml` is present on the
+repository's default branch. The recommended broker path also requires
+`.github/workflows/sre-remediation-pr.yml`, because issue events load their
+workflow definition from that branch.
 
 ### 4a. Connect your source code
 
@@ -357,6 +361,44 @@ from that branch.
 
 **Expected outcome:** the connected-repository row shows the repository and begins indexing.
 This connection is read context only; it does not supply the PR credential.
+
+### Optional shortcut: use the PAT-based GitHub MCP connector
+
+Use this only when demo speed matters more than showing the most secure pattern.
+It avoids the GitHub App, Entra API registration, Key Vault private-key upload,
+and custom broker deployment in 4b through 4e. The tradeoff is that the SRE
+Agent connector holds a GitHub PAT with repository write permissions for the
+duration of the demo.
+
+If you choose this shortcut:
+
+1. In GitHub, create a **fine-grained personal access token**:
+   - **Resource owner:** the repository owner;
+   - **Repository access:** **Only select repositories**, then choose this repo;
+   - **Expiration:** as short as possible, ideally same day;
+   - **Repository permissions:** **Contents: Read and write**, **Pull requests:
+     Read and write**, and **Metadata: Read-only**.
+2. Copy the token once. Do not store it in the repository, Terraform variables,
+   Key Vault, workflow secrets, shell history, or notes.
+3. Open **Builder → Connectors → Add connector → MCP → GitHub**.
+4. Use the wizard's default GitHub MCP server URL
+   `https://api.githubcopilot.com/mcp/`, select **PAT / API key**
+   authentication, and paste the token.
+5. Save the connector, then open **Capabilities → Tools → MCP servers +
+   services** and expand the GitHub connector.
+6. Enable only the minimum GitHub tools needed to read repository content, create
+   a branch, update one file, create a commit, and open a Pull Request. Do not
+   enable repository administration, workflow dispatch, issue deletion, secret
+   management, or merge/approve tools.
+7. Continue with [4f. Grant Reader-level workload access](#4f-grant-reader-level-workload-access).
+   In Part 5b, use
+   [`agent/gitops-remediation-agent-pat.md`](../agent/gitops-remediation-agent-pat.md)
+   instead of the managed-identity broker prompt.
+8. After the demo, revoke the PAT in GitHub under **Settings → Developer
+   settings → Personal access tokens → Fine-grained tokens**.
+
+> Keep the global tool access policy in Part 5a even with the PAT shortcut. It
+> still blocks terminal fallback and direct Azure/Kubernetes/Terraform writes.
 
 ### 4b. Create the least-privilege GitHub App
 
@@ -514,6 +556,7 @@ client secret: the SRE Agent authenticates with its managed identity.
 
    Do **not** select the preconfigured **GitHub** tile. That wizard currently
    points at `https://api.githubcopilot.com/mcp/` and requires a PAT/API key.
+   Use it only for the demo shortcut above.
 3. Fill in the custom MCP form:
 
    | Current wizard field | Value |
@@ -710,7 +753,8 @@ the contents with
 
 This one paste allows read diagnostics and denies terminal/shell fallback plus
 direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation remains available through the connector's two constrained
-broker tools.
+broker tools. If you chose the PAT shortcut, allow the minimum GitHub
+branch/file/Pull Request tools instead.
 (Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
 form, or the box rejects it.)
 
@@ -731,9 +775,10 @@ Keep these **`On` / `Allow`** (safe, read-only):
 
 **Step 2 — turn off terminal fallback.**
 Set `RunInTerminal` and `RunShellCommand` to **Off**. The agent does not need
-either tool: it creates the constrained remediation issue, and the triggered
-workflow performs its fixed repository change with GitHub's short-lived
-`GITHUB_TOKEN`.
+either tool: the recommended path creates the constrained remediation issue and
+the triggered workflow performs its fixed repository change with GitHub's
+short-lived `GITHUB_TOKEN`. The PAT shortcut uses connector tools for the same
+one-file PR without terminal fallback.
 
 Keep the targeted deny patterns for direct infrastructure changes too:
 
@@ -896,13 +941,23 @@ its core monitoring roles.
    end) into the **Instructions** field. Do **not** include the file's markdown
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
-3. Under **Choose tools**, explicitly select Code Access repository read, Azure read tools,
-   `create_slow_leak_remediation_issue`, and
-   `get_slow_leak_remediation_status`. The current **Create a custom agent** form
-   warns that selecting tools overrides inherited global tools; use that explicit
-   selection rather than leaving it empty. Do not select workflow dispatch,
+   If you chose the PAT shortcut in Part 4, use
+   [`agent/gitops-remediation-agent-pat.md`](../agent/gitops-remediation-agent-pat.md)
+   instead.
+3. Under **Choose tools**, use an explicit selection rather than leaving the list
+   empty. The current **Create a custom agent** form warns that selecting tools
+   overrides inherited global tools.
+
+   For the recommended broker path, select Code Access repository read, Azure
+   read tools, `create_slow_leak_remediation_issue`, and
+   `get_slow_leak_remediation_status`. Do not select workflow dispatch,
    terminal, repository administration, direct Pull Request authoring, or Pull
    Request merge tools. Save when done.
+
+   If you chose the PAT shortcut, select the GitHub connector tools needed to
+   create a branch, update `infra/leak.auto.tfvars`, commit the change, and open
+   a Pull Request. Do not select terminal, workflow dispatch, repository
+   administration, secret-management, approval, or merge tools.
 
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
@@ -935,8 +990,9 @@ Pull Request edits the right file.
    investigation and remediation to the `gitops-remediation` custom agent, remain
    in review/human-approval mode, and never mutate Azure directly.
 4. On **Review custom plan**, confirm the plan invokes
-   `gitops-remediation` and uses the two broker tools only for remediation. Save
-   the plan.
+   `gitops-remediation`. For the recommended path it should use the two broker
+   tools only for remediation. For the PAT shortcut it should use only the
+   minimum GitHub branch/file/Pull Request tools. Save the plan.
 
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
 quick check, ask the agent in a chat to "restart the payment-service container" —

@@ -1,10 +1,12 @@
 # Azure SRE Agent — GitOps remediation config (Scenario B)
 
 These are the **committable artifacts** that turn the demo's SRE Agent into a
-GitOps-only operator: it investigates, invokes a managed-identity broker that
-opens a constrained GitHub issue, and
-lets the repository workflow **propose a fix as a Pull Request**, but is
-**structurally unable to modify the live Azure resources**.
+GitOps-only operator. The recommended path has the agent invoke a
+managed-identity broker that opens a constrained GitHub issue; the repository
+workflow then **proposes a fix as a Pull Request**. A demo-only shortcut can
+instead use the PAT-based GitHub MCP connector to create the branch, file edit,
+and Pull Request directly. In both paths the agent is **structurally unable to
+modify the live Azure resources** when the tool access policy is applied.
 
 > These artifacts are used **only in Scenario B (Full GitOps)**. Scenario A
 > (on-the-spot, direct remediation) does **not** use them — see
@@ -18,6 +20,7 @@ Apply them once, after the agent is created and connected (see
 | [`tool-access-policy.portal.json`](tool-access-policy.portal.json) | **Portal-shaped hard enforcement.** Denies terminal fallback and direct Azure/Kubernetes/Terraform writes; GitHub issue creation triggers the repository's fixed remediation workflow. | Paste into **Capabilities → Tools → Advanced permissions → JSON**. This editor accepts only `allow`, `ask`, and `deny` at the root. |
 | [`tool-access-policy.api.json`](tool-access-policy.api.json) | **API-shaped hard enforcement.** The same policy wrapped in the `permissions` object required by the global-settings API. | Send as the request body to the agent settings API. Do **not** paste this file into the portal editor. |
 | [`gitops-remediation-agent.md`](gitops-remediation-agent.md) | **Behavioural steering.** The custom-agent system prompt that tells the agent to remediate via a PR against `infra/leak.auto.tfvars` instead of acting directly. | **Builder → Agent Canvas → Create subagent**; paste it into **Create a custom agent → Instructions**. |
+| [`gitops-remediation-agent-pat.md`](gitops-remediation-agent-pat.md) | **Demo shortcut steering.** Alternate prompt for the PAT-based GitHub MCP connector. | Use instead of `gitops-remediation-agent.md` only when following the PAT shortcut in Scenario B. |
 | [`knowledge/gitops-runbook.md`](knowledge/gitops-runbook.md) | **Reference context.** A runbook the agent reads during investigations so it knows the exact GitOps fix for the planted leak. | Attach as knowledge/skill context to the `gitops-remediation` custom agent. |
 
 ## Why both a policy *and* a prompt?
@@ -33,6 +36,10 @@ Together they give a defence-in-depth, DevOps-correct remediation flow:
 incident -> agent diagnoses -> creates constrained issue -> workflow opens PR
         -> human reviews + merges -> apply-infra.yml terraform apply -> fixed
 ```
+
+With the PAT shortcut, the middle step is `agent diagnoses -> GitHub MCP opens
+PR`; the PR still requires human review and the live fix still happens through
+`apply-infra.yml`.
 
 See [`../docs/scenario-b-gitops.md`](../docs/scenario-b-gitops.md) §B1–§B6 for
 the click-by-click apply steps and the supported `accessLevel` / run-mode
