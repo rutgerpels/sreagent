@@ -133,10 +133,11 @@ The deploy workflow (or the script) opens a **Pull Request** flipping the plante
 `apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
 deploys the leak — no one edits the live app by hand. **Remediation is GitOps too:** the agent is
 limited to **Reader-level workload access**, with a required global Tool Access Policy that denies
-direct mutation tools. Through a managed-identity custom MCP broker, it creates a constrained issue
-that triggers a workflow to **open a PR**
-setting `enable_slow_leak=false`. A human merges it, CI redeploys, and memory recovers. See
-[`agent/`](agent/) for the committable agent config.
+direct mutation tools. The recommended path uses a managed-identity custom MCP broker to create a
+constrained issue that triggers a workflow to **open a PR** setting `enable_slow_leak=false`. For a
+shorter demo setup, the Scenario B guide also includes a fine-grained PAT GitHub MCP shortcut. A
+human merges the remediation PR, CI redeploys, and memory recovers. See [`agent/`](agent/) for the
+committable agent config.
 
 ## Repository layout
 

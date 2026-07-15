@@ -35,6 +35,11 @@ and an exact managed-identity check protect it. It can create the fixed
 remediation issue only; GitHub Actions remains the component that writes code and
 opens the PR.
 
+For a shorter demo setup, Scenario B also includes a PAT-based GitHub MCP
+shortcut. Use it only for demos: create a same-day fine-grained PAT scoped to
+this repository, enable only branch/file/Pull Request tools, and revoke the token
+after the run.
+
 ---
 
 ## What the demo shows
