@@ -29,16 +29,10 @@ an Azure Managed Grafana dashboard.
 Everything is built with Terraform. No secrets are stored in the code; the
 application reads its secrets from Key Vault using a managed identity.
 
-Scenario B can also deploy a narrow remediation MCP broker. Its HTTPS endpoint is
-public so the managed SRE Agent can reach it, but Microsoft Entra authentication
-and an exact managed-identity check protect it. It can create the fixed
-remediation issue only; GitHub Actions remains the component that writes code and
-opens the PR.
-
-For a shorter demo setup, Scenario B also includes a PAT-based GitHub MCP
-shortcut. Use it only for demos: create a same-day fine-grained PAT scoped to
-this repository, enable only branch/file/Pull Request tools, and revoke the token
-after the run.
+Scenario B uses SRE Agent's native BYO GitHub App flow by default, with the
+GitHub App private key stored in Key Vault. For a shorter setup, it also includes
+a PAT-based GitHub MCP shortcut. For hardening demos, it can deploy a narrow
+remediation MCP broker that exposes only the fixed issue/status tools.
 
 ---
 
