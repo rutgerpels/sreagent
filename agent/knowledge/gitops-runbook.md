@@ -29,17 +29,24 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
 
 ## Correct remediation (GitOps only — do NOT touch Azure directly)
 
-1. Branch from `main` (e.g. `Bug/sre-disable-memory-leak`).
-2. In `infra/leak.auto.tfvars`, set:
+1. Create a GitHub issue with the exact title
+   `[SRE] Remediate ContosoPay slow memory leak`, label `sre-remediation`, and
+   body marker `<!-- sre-remediation:payment-slow-leak -->`.
+2. The issue triggers `.github/workflows/sre-remediation-pr.yml`. The workflow
+   creates a branch and changes only `infra/leak.auto.tfvars`:
 
    ```hcl
    enable_slow_leak = false
    ```
 
-3. Commit and open a Pull Request into `main`.
+3. The workflow commits and opens an unmerged Pull Request into `main` with its
+   short-lived `GITHUB_TOKEN`.
 4. A human reviews and merges. Merging runs `.github/workflows/apply-infra.yml`,
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
+
+Never use generic workflow dispatch, terminal `git`/`gh`, GitHub MCP, a PAT, or
+direct GitHub API calls for this remediation.
 
 ## Why not `az containerapp update`?
 

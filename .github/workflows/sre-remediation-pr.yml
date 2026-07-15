@@ -1,0 +1,234 @@
+name: sre-remediation-pr
+
+# Scenario B remediation proposed from a narrowly authenticated issue. This
+# workflow only changes the GitOps leak flag and opens a PR for human review;
+# it never writes directly to Azure.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write # create and push the remediation branch
+  pull-requests: write # open the remediation PR
+  issues: write # report the remediation result on the triggering issue
+
+concurrency:
+  group: sre-remediation-pr
+  cancel-in-progress: false
+
+jobs:
+  propose-remediation:
+    if: >-
+      github.event.issue.title == '[SRE] Remediate ContosoPay slow memory leak' &&
+      contains(github.event.issue.labels.*.name, 'sre-remediation') &&
+      contains(github.event.issue.body, '<!-- sre-remediation:payment-slow-leak -->') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check for an existing remediation pull request
+        id: existing_pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          CANDIDATE="$(gh pr list \
+            --repo "${GH_REPO}" \
+            --state open \
+            --base main \
+            --limit 1000 \
+            --json number,url,title,baseRefName,headRefName,isCrossRepository \
+            --jq 'map(select(
+              .title == "fix(infra): disable slow memory leak" and
+              .baseRefName == "main" and
+              (.isCrossRepository | not) and
+              (.headRefName | startswith("sre-agent/remediate-slow-leak-"))
+            )) | first // empty')"
+
+          if [[ -n "${CANDIDATE}" ]]; then
+            PR_NUMBER="$(jq -r '.number' <<< "${CANDIDATE}")"
+            PR_URL="$(jq -r '.url' <<< "${CANDIDATE}")"
+            PR_FILES="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/files")"
+
+            if ! jq -e '
+              length == 1 and
+              .[0].filename == "infra/leak.auto.tfvars" and
+              .[0].additions == 1 and
+              .[0].deletions == 1
+            ' <<< "${PR_FILES}" >/dev/null; then
+              echo "::error::Existing remediation PR has an unexpected file set or change size: ${PR_URL}"
+              exit 1
+            fi
+
+            PATCH="$(jq -r '.[0].patch // ""' <<< "${PR_FILES}")"
+            if [[ "$(grep -Ec '^-[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*true[[:space:]]*$' <<< "${PATCH}" || true)" != "1" ]] ||
+               [[ "$(grep -Ec '^\+[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*false[[:space:]]*$' <<< "${PATCH}" || true)" != "1" ]]; then
+              echo "::error::Existing remediation PR does not contain the expected true-to-false change: ${PR_URL}"
+              exit 1
+            fi
+
+            echo "found=true" >> "${GITHUB_OUTPUT}"
+            gh issue comment "${ISSUE_NUMBER}" \
+              --repo "${GH_REPO}" \
+              --body "An open remediation PR already exists: ${PR_URL}"
+            echo "Existing open remediation PR: ${PR_URL}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout main
+        if: steps.existing_pr.outputs.found != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+
+      - name: Prepare remediation commit
+        if: steps.existing_pr.outputs.found != 'true'
+        id: remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly FILE="infra/leak.auto.tfvars"
+          if [[ ! -f "${FILE}" ]]; then
+            echo "::error file=${FILE}::Expected remediation file is missing."
+            exit 1
+          fi
+
+          readonly KEY_PATTERN='^[[:space:]]*enable_slow_leak[[:space:]]*='
+          readonly VALUE_PATTERN='^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$'
+          KEY_COUNT="$(grep -Ec "${KEY_PATTERN}" "${FILE}" || true)"
+          VALID_COUNT="$(grep -Ec "${VALUE_PATTERN}" "${FILE}" || true)"
+          if [[ "${KEY_COUNT}" != "1" || "${VALID_COUNT}" != "1" ]]; then
+            echo "::error file=${FILE}::Expected exactly one enable_slow_leak assignment with a true or false value; found ${KEY_COUNT} assignment(s), ${VALID_COUNT} valid."
+            exit 1
+          fi
+
+          LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' "${FILE}")"
+          if [[ "${LEAK_STATE}" == "false" ]]; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "Slow-leak remediation is already applied on main; no branch or PR was created." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if [[ "${LEAK_STATE}" != "true" ]]; then
+            echo "::error file=${FILE}::Could not determine the enable_slow_leak state."
+            exit 1
+          fi
+
+          readonly BRANCH="sre-agent/remediate-slow-leak-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "branch=${BRANCH}" >> "${GITHUB_OUTPUT}"
+          git switch -c "${BRANCH}"
+          sed -i -E 's/^([[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*)true([[:space:]]*)$/\1false\2/' "${FILE}"
+
+          mapfile -t CHANGED_FILES < <(git diff --name-only)
+          if [[ "${#CHANGED_FILES[@]}" -ne 1 || "${CHANGED_FILES[0]}" != "${FILE}" ]]; then
+            echo "::error::Safety check failed: remediation must change only ${FILE}."
+            printf 'Changed file: %s\n' "${CHANGED_FILES[@]:-none}" >&2
+            exit 1
+          fi
+          if ! grep -Eq '^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*false[[:space:]]*$' "${FILE}"; then
+            echo "::error file=${FILE}::Failed to set enable_slow_leak = false."
+            exit 1
+          fi
+          git diff --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${FILE}"
+          git commit -m "fix(infra): disable slow memory leak"
+          git push --set-upstream origin "HEAD:refs/heads/${BRANCH}"
+
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Report that no pull request is needed
+        if: steps.remediation.outputs.changed == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh issue comment "${ISSUE_NUMBER}" \
+            --repo "${GH_REPO}" \
+            --body "No remediation PR was needed because enable_slow_leak is already false on main."
+
+      - name: Open remediation pull request
+        if: steps.remediation.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ steps.remediation.outputs.branch }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          PR_URL="$(gh pr create \
+            --repo "${GH_REPO}" \
+            --base main \
+            --head "${HEAD_BRANCH}" \
+            --title "fix(infra): disable slow memory leak" \
+            --body "Azure SRE Agent Scenario B remediation: sets \`enable_slow_leak = false\` in \`infra/leak.auto.tfvars\`. Merge after human review to apply the healthy GitOps state through the existing infrastructure workflow.")"
+
+          PR_STATE="$(gh pr view "${PR_URL}" --repo "${GH_REPO}" --json state --jq '.state')"
+          if [[ "${PR_STATE}" != "OPEN" ]]; then
+            echo "::error::Remediation PR was created but is not open (state: ${PR_STATE})."
+            exit 1
+          fi
+
+          gh issue comment "${ISSUE_NUMBER}" \
+            --repo "${GH_REPO}" \
+            --body "Remediation PR opened for human review: ${PR_URL}"
+
+          {
+            echo "## SRE remediation PR opened"
+            echo ""
+            echo "The PR remains open and unmerged for human review: ${PR_URL}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Report remediation failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ steps.remediation.outputs.branch }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          RUN_URL="${SERVER_URL}/${GH_REPO}/actions/runs/${RUN_ID}"
+          if ! gh issue comment "${ISSUE_NUMBER}" \
+            --repo "${GH_REPO}" \
+            --body "The remediation workflow failed and did not produce a verified PR. Review the failed run: ${RUN_URL}"; then
+            echo "::warning::Could not report the workflow failure on issue ${ISSUE_NUMBER}."
+          fi
+
+          if [[ -z "${HEAD_BRANCH}" ]]; then
+            exit 0
+          fi
+          if [[ "${HEAD_BRANCH}" != sre-agent/remediate-slow-leak-* ]]; then
+            echo "::error::Refusing to clean up unexpected branch name: ${HEAD_BRANCH}"
+            exit 1
+          fi
+
+          REPO_OWNER="${GH_REPO%%/*}"
+          OPEN_PR_COUNT="$(gh pr list \
+            --repo "${GH_REPO}" \
+            --state open \
+            --head "${REPO_OWNER}:${HEAD_BRANCH}" \
+            --json number \
+            --jq 'length')"
+          if [[ "${OPEN_PR_COUNT}" == "0" ]] &&
+             gh api "repos/${GH_REPO}/git/ref/heads/${HEAD_BRANCH}" --silent >/dev/null 2>&1; then
+            gh api \
+              --method DELETE \
+              "repos/${GH_REPO}/git/refs/heads/${HEAD_BRANCH}"
+          fi

@@ -122,9 +122,10 @@ The deploy workflow (or the script) opens a **Pull Request** flipping the plante
 **Merging it** runs the
 `apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
 deploys the leak — no one edits the live app by hand. **Remediation is GitOps too:** the agent is
-**read-only on Azure** (Reader RBAC + a global Tool Access Policy that denies Azure CLI writes), so
-it fixes the incident by **opening a PR** that sets `enable_slow_leak=false`. A human merges it, CI
-redeploys, memory recovers. See [`agent/`](agent/) for the committable agent config.
+limited to **Reader-level workload access**, with a required global Tool Access Policy that denies
+direct mutation tools. It creates a constrained issue that triggers a workflow to **open a PR**
+setting `enable_slow_leak=false`. A human merges it, CI redeploys, and memory recovers. See
+[`agent/`](agent/) for the committable agent config.
 
 ## Repository layout
 
@@ -146,6 +147,7 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 | `.github/workflows/deploy.yml` | **Full environment deploy via CI/CD** (`workflow_dispatch`) — state bootstrap, platform, build/push, apps |
 | `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
 | `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes); computes remote-state backend automatically |
+| `.github/workflows/sre-remediation-pr.yml` | Converts a trusted Scenario B remediation issue into a one-file, unmerged PR |
 
 ## Security
 
@@ -157,8 +159,10 @@ redeploys, memory recovers. See [`agent/`](agent/) for the committable agent con
 
 ## Connecting the Azure SRE Agent
 
-The SRE Agent is a **managed service provisioned separately** at <https://sre.azure.com> — it is not
-part of this Terraform. Pick a scenario and follow its complete A-to-Z guide —
+The SRE Agent is a **managed service** configured at <https://sre.azure.com>.
+By default you create it in the portal; `infra/agents.tf` can optionally provision
+the agent resource and Azure RBAC when `enable_sre_agents = true`. Pick a scenario
+and follow its complete A-to-Z guide —
 [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) (on-the-spot) or
 [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) (full GitOps). Each guide covers deploying
 the app, creating and connecting the agent, running the incident, and resetting.

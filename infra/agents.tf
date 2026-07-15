@@ -6,9 +6,9 @@
 #   * agent-b  (Scenario B — full GitOps): accessLevel Low   + Reader only,
 #              so it must remediate by opening a PR.
 #
-# Both get Monitoring Contributor so the alert scanner can read fired alerts,
-# and both run in Review mode (human approves). Provisioning is gated behind
-# var.enable_sre_agents + a sponsor group id, because the resource is preview.
+# Both get Monitoring Contributor at subscription scope because Azure SRE Agent
+# requires it to manage the Azure Monitor alert lifecycle. Workload roles remain
+# scoped to the demo resource group, and both agents run in Review mode.
 #
 # Still manual after apply (no ARM/data-plane parity): GitHub Code Access &
 # Connector OAuth, the global Tool Access Policy deny, custom agents/knowledge,
@@ -20,14 +20,15 @@ locals {
 
   sre_agents = local.sre_agents_enabled ? {
     "a-direct" = { access = "High", role = "Contributor" } # Scenario A — direct mitigation
-    "b-gitops" = { access = "Low", role = "Reader" }       # Scenario B — read-only, PR remediation
+    "b-gitops" = { access = "Low", role = "Reader" }       # Scenario B — Reader workload access, PR remediation
   } : {}
 
-  # Each agent's RBAC: its scenario role + Monitoring Contributor for the scanner.
-  sre_agent_roles = merge([
-    for k, v in local.sre_agents : {
-      "${k}-scenario"   = { agent = k, role = v.role }
-      "${k}-monitoring" = { agent = k, role = "Monitoring Contributor" }
+  # Match the core resource-group roles assigned by the managed onboarding flow.
+  sre_agent_resource_group_roles = merge([
+    for key, agent in local.sre_agents : {
+      "${key}-access"            = { agent = key, role = agent.role }
+      "${key}-logs-reader"       = { agent = key, role = "Log Analytics Reader" }
+      "${key}-monitoring-reader" = { agent = key, role = "Monitoring Reader" }
     }
   ]...)
 }
@@ -41,10 +42,19 @@ resource "azurerm_user_assigned_identity" "agent" {
 }
 
 resource "azurerm_role_assignment" "agent" {
-  for_each             = local.sre_agent_roles
+  for_each             = local.sre_agent_resource_group_roles
   scope                = azurerm_resource_group.this.id
   role_definition_name = each.value.role
   principal_id         = azurerm_user_assigned_identity.agent[each.value.agent].principal_id
+}
+
+# Subscription scope is required by Azure SRE Agent to acknowledge and close
+# Azure Monitor alerts. No workload contributor role is granted at this scope.
+resource "azurerm_role_assignment" "agent_monitoring" {
+  for_each             = local.sre_agents
+  scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+  role_definition_name = "Monitoring Contributor"
+  principal_id         = azurerm_user_assigned_identity.agent[each.key].principal_id
 }
 
 resource "azapi_resource" "agent" {
@@ -94,5 +104,8 @@ resource "azapi_resource" "agent" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.agent]
+  depends_on = [
+    azurerm_role_assignment.agent,
+    azurerm_role_assignment.agent_monitoring,
+  ]
 }
