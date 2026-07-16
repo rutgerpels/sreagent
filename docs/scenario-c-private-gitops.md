@@ -8,9 +8,10 @@ Key Vault through your enterprise network path.
 
 **The story this scenario tells:** the SRE Agent has Reader-level workload
 access, direct Azure mutation tools are denied, and remediation still happens by
-Pull Request. Unlike Scenario B, GitHub access uses **Bring your own GitHub App**
-with the private key imported as a Key Vault key, and the agent uses a dedicated
-delegated subnet for outbound traffic to private Azure resources.
+Pull Request. Unlike Scenario B, Code Access uses **Bring your own GitHub App**
+with the private key imported as a Key Vault key. No-PAT PR creation goes through
+the broker/API, which uses a GitHub App installation token behind the
+scenes and triggers the repository workflow that opens the remediation PR.
 
 Use this mode for security, platform, or enterprise architecture audiences. Use
 [Scenario B](scenario-b-gitops.md) for the faster public-endpoint PAT demo.
@@ -21,9 +22,9 @@ You will work through eight parts:
 2. [Prepare the SRE Agent network subnet](#part-2--prepare-the-sre-agent-network-subnet)
 3. [Enable SRE Agent Azure VNet mode](#part-3--enable-sre-agent-azure-vnet-mode)
 4. [Create the BYO GitHub App](#part-4--create-the-byo-github-app)
-5. [Import the GitHub App key into private Key Vault](#part-5--import-the-github-app-key-into-private-key-vault)
+5. [Store the GitHub App credential in private Key Vault](#part-5--store-the-github-app-credential-in-private-key-vault)
 6. [Connect Code Access with BYO GitHub App](#part-6--connect-code-access-with-byo-github-app)
-7. [Apply GitOps guardrails and response plan](#part-7--apply-gitops-guardrails-and-response-plan)
+7. [Configure the no-PAT PR path and response plan](#part-7--configure-the-no-pat-pr-path-and-response-plan)
 8. [Run the incident and reset](#part-8--run-the-incident-and-reset)
 
 ---
@@ -120,11 +121,13 @@ the **Code repositories** infra-network toggle as a transitional exception.
    - **Homepage URL:** `https://sre.azure.com`;
    - **Webhook → Active:** unchecked.
 3. Under **Repository permissions**, set:
-   - **Contents:** **Read and write**;
-   - **Pull requests:** **Read and write**;
+   - **Contents:** **Read-only**;
+   - **Issues:** **Read and write**;
    - **Metadata:** **Read-only**.
-4. Leave **Actions**, **Administration**, **Secrets**, and unrelated permissions
-   at **No access**.
+4. Leave **Pull requests**, **Actions**, **Administration**, **Secrets**, and
+   unrelated permissions at **No access**. The remediation PR is created by the
+   repository workflow with its short-lived `GITHUB_TOKEN`; the GitHub App only
+   creates the constrained trigger issue through the broker.
 5. Under **Where can this GitHub App be installed?**, keep it limited to the
    owning account unless broader installation is required. Select
    **Create GitHub App**.
@@ -136,10 +139,14 @@ the **Code repositories** infra-network toggle as a transitional exception.
 
 ---
 
-## Part 5 — Import the GitHub App key into private Key Vault
+## Part 5 — Store the GitHub App credential in private Key Vault
 
-Import the private key into Key Vault as a **key**, not a secret. The current SRE
-Agent BYO App wizard expects a Key Vault key URI in the form `.../keys/<name>`.
+Store the downloaded GitHub App PEM in the form each component expects:
+
+- **SRE Agent Code Access** expects a Key Vault **key** URI in the form
+  `.../keys/<name>`.
+- **The broker/API** reads the same PEM from a Key Vault **secret** so it
+  can mint a short-lived GitHub App installation token.
 
 Run this from a VNet-connected jumpbox, private self-hosted runner, or other
 machine that can reach the private Key Vault endpoint:
@@ -178,6 +185,17 @@ Expected:
 - `kty` is `RSA` or `RSA-HSM`;
 - `ops` includes `sign`.
 
+If you use the broker/API for no-PAT PR creation, also store the PEM as a Key
+Vault secret using the secret name configured by
+`sre_remediation_github_app_private_key_secret_name`:
+
+```bash
+az keyvault secret set \
+  --vault-name "$KEY_VAULT_NAME" \
+  --name "github-app-private-key" \
+  --file "$PEM_FILE"
+```
+
 Delete the local PEM copy after the key import is verified. Do not put the PEM in
 Terraform state, GitHub secrets, workflow inputs, shell history, or repository
 files.
@@ -197,32 +215,43 @@ files.
      **Key Vault Crypto User**.
 4. Select **Connect**, then add this repository and save.
 
-If validation fails after the key and RBAC checks pass, re-check the network
-path: Azure VNet mode must be saved on the agent, the selected subnet must be
-able to resolve the Key Vault private endpoint, and firewall/NSG rules must allow
-HTTPS to the private endpoint.
-
 ---
 
-## Part 7 — Apply GitOps guardrails and response plan
+## Part 7 — Configure the no-PAT PR path and response plan
 
-Follow [Scenario B, Part 4c through Part 5](scenario-b-gitops.md#4c-grant-reader-level-workload-access),
-with these differences:
+Follow [Scenario B, Part 4c](scenario-b-gitops.md#4c-grant-reader-level-workload-access)
+and [Part 5a](scenario-b-gitops.md#5a-apply-the-hard-tool-access-policy) to grant
+Reader-level workload access and apply the hard tool access policy. Then use the
+broker/API path for PR creation:
 
-- skip the PAT-based GitHub MCP connector;
-- in the `gitops-remediation` custom agent, use
-  [`agent/gitops-remediation-agent-github.md`](../agent/gitops-remediation-agent-github.md);
-- select the GitHub tools exposed by the BYO GitHub App connection that are
-  needed to create a branch, update `infra/leak.auto.tfvars`, commit, and open a
-  Pull Request;
-- keep the global tool access policy that denies terminal fallback and direct
-  Azure/Kubernetes/Terraform mutations.
+1. Enable the optional remediation broker in the deploy/apply workflow variables:
+   - `ENABLE_SRE_REMEDIATION_BROKER=true`;
+   - `SRE_REMEDIATION_CALLER_PRINCIPAL_ID=<SRE Agent managed identity object ID>`;
+   - `SRE_REMEDIATION_ENTRA_API_CLIENT_ID=<broker API app client ID>`;
+   - `SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE=api://<broker API app client ID>`;
+   - `SRE_REMEDIATION_ENTRA_TOKEN_SCOPE=api://<broker API app client ID>/.default`;
+   - `SRE_GITHUB_APP_ID=<numeric GitHub App ID>`;
+   - `SRE_GITHUB_APP_INSTALLATION_ID=<numeric installation ID>`;
+   - `SRE_GITHUB_APP_BOT_LOGIN=<app-slug>[bot]`;
+   - `SRE_GITHUB_APP_PRIVATE_KEY_SECRET_NAME=github-app-private-key`.
+2. Re-run the deploy workflow so Terraform creates the broker Container App and
+   prints `sre_remediation_broker_endpoint_url`.
+3. In SRE Agent, add a custom MCP connector that points to that `/mcp` endpoint
+   and authenticates with managed identity using
+   `api://<broker API app client ID>/.default`.
+4. Create the `gitops-remediation` custom agent using
+   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md).
+   Select only Code Access read tools, Azure read tools,
+   `create_slow_leak_remediation_issue`, and
+   `get_slow_leak_remediation_status`.
+5. Add [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md)
+   as knowledge and create the same response plan as
+   [Scenario B, Part 5d](scenario-b-gitops.md#5d-create-the-response-plan), routed
+   to `gitops-remediation`.
 
-`RunInTerminal` must remain blocked in this scenario. If the agent tries to use
-it when opening the remediation PR, do not loosen the global policy. Re-open the
-`gitops-remediation` custom agent and confirm the BYO GitHub App branch/file/Pull
-Request tools are selected, then confirm the response plan delegates to that
-custom agent instead of the default agent.
+The broker exposes only two SRE-specific operations. It does not give the agent a
+general GitHub token, terminal access, workflow-dispatch access, or direct Azure
+write access.
 
 This keeps the enterprise network posture separate from the GitOps enforcement
 boundary: RBAC and tool policy control what the agent may do, while Azure VNet
@@ -237,8 +266,9 @@ Run the same GitOps incident and reset flow as
 [Part 7](scenario-b-gitops.md#part-7--reset-and-clean-up).
 
 The expected investigation and remediation are the same: the agent correlates the
-memory leak to the incident Pull Request, opens a remediation Pull Request that
-sets `enable_slow_leak=false`, and waits for a human to merge it.
+memory leak to the incident Pull Request, calls the broker/API, and the
+repository workflow opens a remediation Pull Request that sets
+`enable_slow_leak=false` for a human to merge.
 
 After the demo, remove or rotate the GitHub App private key, uninstall the GitHub
 App if it is no longer needed, and keep or remove the SRE Agent VNet subnet based

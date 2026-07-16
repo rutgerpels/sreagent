@@ -99,9 +99,9 @@ only differ in agent autonomy, GitOps guardrails, and network posture.
 | **Trigger** | Script pokes the live app | Pull Request + CI deploys the change | Pull Request + CI deploys the change |
 | **Command** | `scripts/trigger-incident-direct.*` | `scripts/trigger-incident-gitops.*` | `scripts/trigger-incident-gitops.*` |
 | **Agent Azure access** | **Privileged** (read/write) | **Reader** (read-only) | **Reader** (read-only) |
-| **GitHub auth** | Code Access context | Short-lived fine-grained PAT via GitHub MCP | BYO GitHub App with Key Vault key URI |
+| **GitHub auth** | Code Access context | Code Access + short-lived fine-grained PAT via GitHub MCP | Code Access with BYO GitHub App; no-PAT PR path uses the broker/API |
 | **Network posture** | Default public control paths | Public GitHub/SRE connector paths | SRE Agent Azure VNet mode + private Key Vault |
-| **Remediation** | Agent fixes Azure directly after approval | Agent opens a remediation PR; a human merges it | Agent opens a remediation PR; a human merges it |
+| **Remediation** | Agent fixes Azure directly after approval | Agent opens a remediation PR; a human merges it | Agent triggers broker/API; workflow opens a remediation PR for human review |
 | **Best for** | A fast, self-contained "watch it fix" moment | GitOps guardrails with minimal setup | Enterprise private-network setup |
 | **Full A-to-Z guide** | [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) | [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) | [`docs/scenario-c-private-gitops.md`](docs/scenario-c-private-gitops.md) |
 
@@ -109,7 +109,7 @@ New here? Start with [`docs/run-of-show.md`](docs/run-of-show.md) — it explain
 demo and points you to the right scenario guide. Each scenario guide is a complete,
 self-contained walkthrough (deploy → create and connect the agent → run the
 incident → reset). [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the
-agent reference the guides link to for background and troubleshooting.
+agent reference the guides link to for background.
 
 ### Scenario A — trigger on the spot
 
@@ -138,9 +138,9 @@ The deploy workflow (or the script) opens a **Pull Request** flipping the plante
 deploys the leak — no one edits the live app by hand. **Remediation is GitOps
 too:** the agent is limited to **Reader-level workload access**, with a required
 global Tool Access Policy that denies direct mutation tools. Scenario B uses a
-short-lived PAT GitHub MCP connector for demo speed; Scenario C uses SRE Agent
-Azure VNet mode and BYO GitHub App credentials backed by a Key Vault key. A
-human merges the remediation PR, CI redeploys, and memory recovers. See
+short-lived PAT GitHub MCP connector for demo speed. Scenario C uses SRE Agent
+Azure VNet mode, BYO GitHub App Code Access, and the broker/API path for
+no-PAT Pull Request creation. A human merges the remediation PR, CI redeploys, and memory recovers. See
 [`agent/`](agent/) for the committable agent config.
 
 ## Repository layout
@@ -160,17 +160,17 @@ human merges the remediation PR, CI redeploys, and memory recovers. See
 | `docs/scenario-a-direct.md` | Scenario A — complete A-to-Z autonomous troubleshooting guide |
 | `docs/scenario-b-gitops.md` | Scenario B — public-endpoint GitOps guide with PAT shortcut |
 | `docs/scenario-c-private-gitops.md` | Scenario C — enterprise GitOps guide with SRE Agent VNet integration |
-| `docs/sre-agent-setup.md` | Azure SRE Agent reference (prerequisites, regions, permissions, troubleshooting) |
+| `docs/sre-agent-setup.md` | Azure SRE Agent reference (prerequisites, regions, permissions) |
 | `docs/aks-variant.md` | Optional AKS deployment notes |
 | `.github/workflows/deploy.yml` | **Full environment deploy via CI/CD** (`workflow_dispatch`) — state bootstrap, platform, build/push, apps |
 | `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
 | `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes); computes remote-state backend automatically |
-| `.github/workflows/sre-remediation-pr.yml` | Optional broker path: converts a trusted remediation issue into a one-file, unmerged PR |
+| `.github/workflows/sre-remediation-pr.yml` | Scenario C broker path: converts a trusted remediation issue into a one-file, unmerged PR |
 
 ## Security
 
 - No secrets in source. All secrets live in **Azure Key Vault**; apps and the
-  optional broker read them via **managed identity**. The GitHub App key never
+  broker read them via **managed identity**. The GitHub App key never
   enters Terraform state. CI/CD uses **OIDC federation**, never stored credentials.
 - ACR admin user disabled · private endpoints for state, ACR, and Key Vault · Key Vault RBAC +
   purge protection · TLS-only ingress · least-privilege role assignments · diagnostic settings to
@@ -188,5 +188,5 @@ and follow its complete A-to-Z guide —
 (private-network GitOps). Each guide covers deploying
 the app, creating and connecting the agent, running the incident, and resetting.
 [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the agent reference (prerequisites,
-regions/models, permissions, troubleshooting). The committable GitOps agent config
+regions/models, permissions). The committable GitOps agent config
 (deny-Azure-writes policy, GitOps custom agent, runbook) lives in [`agent/`](agent/).

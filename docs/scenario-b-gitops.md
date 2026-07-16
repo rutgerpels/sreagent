@@ -44,12 +44,12 @@ especially for the SRE Agent. Three categories:
 | --- | --- | --- |
 | **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
 | **One-time bootstrap seed (cannot be GitOps)** | The private Linux runner and its VNet, the identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: the runner and identity must exist before any pipeline can run. The first deploy creates the remote state account and its private endpoint automatically. |
-| **SRE Agent portal-only (no IaC equivalent today)** | GitHub OAuth for repository indexing, the managed-identity custom MCP connection, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
+| **SRE Agent portal-only (no IaC equivalent today)** | GitHub Code Access, the PAT-based GitHub MCP connector, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
 
 So for the SRE Agent specifically: **the agent resource, its permissions, and its
 connection to Azure Monitor can be Infrastructure as Code** (see
-[the reference, §6](sre-agent-setup.md#6-optional-provisioning-the-agent-with-terraform)),
-while **Code Access OAuth, custom MCP selection, tool policy, custom-agent
+[the reference, §7](sre-agent-setup.md#7-optional-provisioning-the-agent-with-terraform)),
+while **Code Access, GitHub MCP selection, tool policy, custom-agent
 behaviour, and the response plan are configured in the portal** because they are
 interactive, identity-bound steps.
 
@@ -375,7 +375,7 @@ duration of the demo.
    `https://api.githubcopilot.com/mcp/`, select **PAT / API key**
    authentication, and paste the token.
 5. Save the connector, then open **Capabilities → Tools → MCP servers +
-   services** and expand the GitHub connector.
+   services** and expand the GitHub MCP server.
 6. Enable only the minimum GitHub tools needed to read repository content, create
    a branch, update one file, create a commit, and open a Pull Request. Do not
    enable repository administration, workflow dispatch, issue deletion, secret
@@ -484,49 +484,8 @@ the agent cannot change live resources even if asked.
 > The *tool access policy* here is a separate allow/deny list at the agent's
 > **global scope**.
 
-The policy to apply comes in **two shapes** — pick the one for how you apply it:
-
-> **If the portal reports unknown keys `_comment`, `permissions`, or both, you
-> opened the API file.** Clear the editor and paste the exact **Portal** JSON
-> below. Do not add comments or a `permissions` wrapper.
->
-- **Portal (Method 1)** — the **Advanced permissions → JSON** tab wants a
-  top-level object with just `allow` / `ask` / `deny` (paste
-  [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)):
-
-  ```json
-  {
-    "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-    "ask": [],
-    "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
-  }
-  ```
-
-- **API (Method 2)** — the global-settings endpoint wants the same lists wrapped
-  in a `permissions` object (see
-  [`agent/tool-access-policy.api.json`](../agent/tool-access-policy.api.json)):
-
-  ```json
-  {
-    "permissions": {
-      "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-      "ask": [],
-      "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
-    }
-  }
-  ```
-
-> **Do not paste the `permissions`-wrapped form into the portal JSON box.** It
-> rejects unknown keys with *"Invalid JSON: Unknown key(s): permissions. Only
-> allow, ask, and deny are valid."* Use the un-wrapped `.portal.json` there.
-
-Apply it at the **global** scope (only the global scope may *deny*). There are
-two ways; **use the portal UI (Method 1) — it needs no API, token, or Cloud
-Shell.**
-
-#### Method 1 (recommended): the Permissions UI — no API needed
-
-In the current SRE Agent portal, open **Capabilities → Tools**. The page includes
+Apply it at the **global** scope. In the current SRE Agent portal, open
+**Capabilities → Tools**. The page includes
 **Built-in tools**, **MCP servers + services**, **Custom tools**, **Advanced
 permissions**, and **Approval expiration**. Two tabs are relevant to the global
 tool access policy:
@@ -535,7 +494,6 @@ tool access policy:
 - **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor, with a
   **Form** and a **JSON** sub-tab.
 
-**Fastest path — paste the whole policy as JSON (no per-tool clicking).**
 On the **Advanced permissions** tab, switch to the **JSON** sub-tab and replace
 the contents with
 [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json):
@@ -550,17 +508,7 @@ the contents with
 
 This one paste allows read diagnostics and denies terminal/shell fallback plus
 direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation
-remains available through the minimum GitHub connector tools needed to create a
-branch, update `infra/leak.auto.tfvars`, commit, and open a Pull Request.
-(Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
-form, or the box rejects it.)
-
-> **Important:** `RunInTerminal` being blocked is the intended guardrail. Do not
-> remove that deny rule to make PR creation work. If the agent tries
-> `RunInTerminal`, the response plan is not using the `gitops-remediation`
-> custom agent, or that custom agent does not have the GitHub branch/file/Pull
-> Request tools selected. Fix the custom agent tool selection or response-plan
-> routing instead.
+remains available through the selected GitHub MCP tools.
 
 <details>
 <summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
@@ -594,138 +542,10 @@ bash(terraform * destroy *)
 
 </details>
 
-That's it — no token, no MFA.
-
-> **Troubleshooting — *"Failed to save tool changes. Refusing to PUT global
-> settings without an If-Match ETag."*** This is the portal's optimistic-
-> concurrency guard: it won't save because it isn't holding a current ETag —
-> usually the global-settings object hasn't been initialized yet, or the page
-> loaded without fetching current settings. Fix it in order:
-> 1. **Hard-refresh** the Permissions page (Ctrl+F5) so the portal re-fetches
->    settings + their ETag, then re-paste the JSON and **Save**.
-> 2. If it still refuses, **initialize the object first**: on the **Built-in
->    tools** tab flip one write tool (e.g. `RunAzCliWriteCommands` → `Off`) and
->    **Save**. That creates the settings object (and its ETag). Then return to
->    **Advanced permissions → JSON**, paste, and **Save**.
-> 3. Last resort: apply via **Method 2 (API)** below, which does GET-then-PUT
->    with `If-Match` explicitly.
-
 > **Do not continue while the policy is unsaved.** Reader-level agents retain
 > Monitoring Contributor for alert lifecycle operations and can request
 > administrator-authorized OBO elevation. The prompt is behavioral guidance, not
 > an enforcement boundary.
-
-> Older builds expose this same global policy under **Capabilities → Tools**
-> instead of **Settings → Permissions**. The tabs and toggles are equivalent.
-
-#### Method 2 (fallback): apply the policy with the API (step by step)
-
-Only needed if the Tools UI is unavailable. This path requires a *user* token for
-the SRE Agent audience, which **Cloud Shell often cannot obtain** (its Managed
-Identity rejects the audience, and the `az login` device-code fallback is
-frequently blocked by Conditional Access/MFA). If you hit that, use Method 1 or
-ask your SRE Agent administrator to apply the policy. Do not continue Scenario B
-without it.
-
-You will use **Azure Cloud Shell** — a browser terminal that already has the
-Azure CLI installed and is already signed in as you, so there is nothing to set
-up locally. (This also sidesteps the Windows shell issues in Part 1.)
-
-You need to be an **Administrator** on the SRE Agent (global tool policies are an
-admin-only setting).
-
-1. **Open Azure Cloud Shell.** Go to [https://shell.azure.com](https://shell.azure.com)
-   (or select the `>_` icon in the top bar of the Azure portal). If prompted,
-   choose **Bash**.
-
-2. **Get your agent's API endpoint.** It is stored on the agent resource as
-   `properties.agentEndpoint` (a host on `azuresre.ai` — *not* the
-   `sre.azure.com` address you see in the browser, which is only the portal UI).
-   Read it with the CLI, substituting your resource group and agent name:
-
-   ```bash
-   AGENT_ENDPOINT=$(az resource show \
-     --resource-group sreagentrg \
-     --name contosopay-sre-agent \
-     --resource-type Microsoft.App/agents \
-     --query properties.agentEndpoint -o tsv)
-   echo "$AGENT_ENDPOINT"
-   ```
-
-   It prints something like
-   `https://contosopay-sre-agent--70b63853.df9bfa8c.swedencentral.azuresre.ai`.
-
-3. **Get an access token** for the SRE Agent API. The `--resource` GUID is the
-   fixed SRE Agent application ID (the audience the API expects) — copy it exactly:
-
-   ```bash
-   TOKEN=$(az account get-access-token \
-     --resource 59f0a04a-b322-4310-adc9-39ac41e9631e \
-     --query accessToken -o tsv)
-   ```
-
-   (The token lasts about an hour. If a later call returns `401`, just re-run
-   this line to get a fresh one.)
-
-   > **Cloud Shell note:** Cloud Shell signs you in with a Managed Identity (MSI),
-   > which only issues tokens for a fixed set of audiences and will reject this
-   > one with *"Audience … is not a supported MSI token audience."* If you see
-   > that, sign in for this scope as a **user** first, then re-run the command above:
-   >
-   > ```bash
-   > az login --scope "59f0a04a-b322-4310-adc9-39ac41e9631e/.default"
-   > ```
-   >
-   > It prints a device-code URL — open it, paste the code, and you are done.
-   > (Running this from a local machine where you did an interactive `az login`
-   > avoids the MSI limitation entirely.)
-
-4. **Apply the policy** with a `PUT` request:
-
-   ```bash
-   SETTINGS_URL="$AGENT_ENDPOINT/api/v2/agent/settings/global"
-   HEADERS=$(mktemp)
-   trap 'rm -f "$HEADERS"' EXIT
-
-   curl -fsS -D "$HEADERS" -o /dev/null \
-     -H "Authorization: Bearer ${TOKEN}" \
-     "$SETTINGS_URL"
-   ETAG=$(awk 'tolower($1) == "etag:" { gsub("\r", "", $2); print $2 }' "$HEADERS")
-   : "${ETAG:?The settings response did not include an ETag}"
-
-   curl -X PUT "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
-     -H "Authorization: Bearer ${TOKEN}" \
-     -H "Content-Type: application/json" \
-     -H "If-Match: $ETAG" \
-     -d '{
-       "permissions": {
-         "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-         "ask": [],
-         "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
-       }
-     }'
-   ```
-
-   A `2xx` response (for example `200`) means it was accepted.
-
-5. **Verify** the policy is stored by reading it back:
-
-   ```bash
-   curl -s "$AGENT_ENDPOINT/api/v2/agent/settings/global" \
-     -H "Authorization: Bearer ${TOKEN}" | jq .
-   ```
-
-   You should see your `allow` and `deny` lists in the response.
-
-**Troubleshooting:**
-- `401 Unauthorized` → token expired or missing; re-run step 3.
-- `403 Forbidden` → your account isn't an **Administrator** on the agent.
-- `404 Not Found` / connection error → `AGENT_ENDPOINT` is empty or wrong; re-run
-  step 2 and confirm it printed an `https://…azuresre.ai` URL (check the resource
-  group and agent name).
-
-See [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
-for the full API reference.
 
 **What is happening:** Scenario B has no workload contributor role, and the
 global policy denies direct Azure mutation tools even though the agent retains
@@ -743,17 +563,16 @@ its core monitoring roles.
    end) into the **Instructions** field. Do **not** include the file's markdown
    header or the "Paste the block below" note — those are instructions *to you*,
    not part of the agent's prompt.
-3. Under **Choose tools**, use an explicit selection rather than leaving the list
-   empty. The current **Create a custom agent** form warns that selecting tools
-   overrides inherited global tools.
+3. Under **Choose tools**, explicitly select the GitHub MCP tools for this custom
+   agent.
 
-   Select the GitHub connector tools needed to create a branch, update
+   Select the GitHub MCP tools needed to create a branch, update
    `infra/leak.auto.tfvars`, commit the change, and open a Pull Request. Do not
    select terminal, workflow dispatch, repository administration,
    secret-management, approval, or merge tools.
 
    If those GitHub tools are not visible here, go back to **Capabilities → Tools
-   → MCP servers + services**, expand the GitHub connector, and enable the
+   → MCP servers + services**, expand the GitHub MCP server, and enable the
    minimum branch/file/Pull Request tools there first. Then return to this custom
    agent and select them explicitly.
 
@@ -788,17 +607,12 @@ Pull Request edits the right file.
    investigation and remediation to the `gitops-remediation` custom agent, remain
    in review/human-approval mode, and never mutate Azure directly.
 4. On **Review custom plan**, confirm the plan invokes
-   `gitops-remediation` and uses only the minimum GitHub branch/file/Pull
+   `gitops-remediation` and uses only the minimum GitHub MCP branch/file/Pull
    Request tools. Save the plan.
 
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
 quick check, ask the agent in a chat to "restart the payment-service container" —
 it should decline and offer to open a Pull Request instead.
-
-If an investigation reports **"RunInTerminal remains blocked by the global tool
-access policy"**, the guardrail is working. The missing piece is GitHub PR
-authoring capability on the `gitops-remediation` custom agent, or the response
-plan is still routed to the default agent instead of that custom agent.
 
 ---
 
@@ -852,10 +666,9 @@ fault, not just a generic alert.
 
 ### 6d. Review and merge the agent's fix
 
-Because the agent cannot change Azure directly, it opens the narrowly defined
-`sre-remediation` trigger issue. The workflow creates a branch, commits the
-one-line change to set `enable_slow_leak = false`, opens an unmerged Pull Request
-using the run's short-lived `GITHUB_TOKEN`, and comments the PR URL on the issue.
+Because the agent cannot change Azure directly, it uses the GitHub MCP tools to
+create a branch, commit the one-line change to set `enable_slow_leak = false`,
+and open an unmerged Pull Request.
 
 Open that Pull Request, review it, and **merge it** — this is the human approval
 gate. Merging runs `apply-infra` again, which deploys the fix; a fresh
@@ -899,9 +712,7 @@ az group delete --name rg-sre-agent --yes
 ```
 
 Revoke the fine-grained PAT used by the GitHub MCP connector when you no longer
-need Scenario B. If you also tested the optional broker hardening path, delete
-the `contosopay-sre-remediation-api` Entra app registration and uninstall the
-repository-scoped GitHub App.
+need Scenario B.
 
 ---
 
@@ -924,5 +735,4 @@ repository-scoped GitHub App.
 - [GitHub connector](https://learn.microsoft.com/en-us/azure/sre-agent/github-connector)
   · [Connect source code](https://learn.microsoft.com/en-us/azure/sre-agent/connect-source-code)
 - [MCP connectors](https://learn.microsoft.com/en-us/azure/sre-agent/mcp-connectors)
-- [GitHub App installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
 - [The committable agent configuration](../agent/README.md)

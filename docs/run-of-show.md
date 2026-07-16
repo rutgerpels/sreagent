@@ -38,8 +38,8 @@ but tell different security and operations stories:
    agent, tool policy guardrails, short-lived PAT GitHub MCP connector, and PR
    remediation. Best for a quick GitOps demo.
 3. **Scenario C — Private-network GitOps:** Reader-level agent, SRE Agent Azure
-   VNet integration, private Key Vault, BYO GitHub App key URI, and PR
-   remediation. Best for enterprise/security audiences.
+   VNet integration, private Key Vault, BYO GitHub App Code Access, and
+   broker/API PR remediation. Best for enterprise/security audiences.
 
 ---
 
@@ -65,9 +65,9 @@ follow that guide from top to bottom.
 | --- | --- | --- | --- |
 | **How the incident starts** | You run a small script that switches the fault on directly on the running service. | The incident Pull Request is pre-opened by the deploy workflow; you merge it and CI/CD deploys the change. | Same GitOps incident Pull Request as Scenario B. |
 | **How it is deployed** | One command from your machine (`scripts/deploy.*`). | Entirely through GitHub Actions. | Same GitHub Actions baseline as Scenario B, plus SRE Agent Azure VNet mode. |
-| **GitHub auth** | Code Access sign-in for context. | Short-lived fine-grained PAT in the GitHub MCP connector. | BYO GitHub App with private key imported as a Key Vault key. |
+| **GitHub auth** | Code Access sign-in for context. | Code Access plus short-lived fine-grained PAT in the GitHub MCP connector. | BYO GitHub App for Code Access; no-PAT PR creation uses the broker/API. |
 | **Network posture** | Default/public control-plane paths. | Public GitHub/SRE connector paths for demo speed. | Dedicated delegated SRE Agent subnet and private Key Vault access. |
-| **What the agent may do** | Privileged resource access; direct Azure fix after approval. | Reader workload access; opens a remediation Pull Request. | Reader workload access; opens a remediation Pull Request through enterprise network controls. |
+| **What the agent may do** | Privileged resource access; direct Azure fix after approval. | Reader workload access; opens a remediation Pull Request through GitHub MCP. | Reader workload access; triggers a constrained broker/API that opens the remediation Pull Request. |
 | **Best for** | A fast, self-contained "watch the agent fix it" story. | A practical GitOps and guardrails story with minimal setup. | A regulated enterprise story with private networking and stronger identity controls. |
 | **Follow this guide** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) | [`scenario-c-private-gitops.md`](scenario-c-private-gitops.md) |
 
@@ -83,7 +83,7 @@ resetting afterwards.
 ## Reference material
 
 - [`sre-agent-setup.md`](sre-agent-setup.md) — a deeper reference on the Azure
-  SRE Agent: prerequisites, regions and models, permissions, and troubleshooting.
+  SRE Agent: prerequisites, regions and models, and permissions.
   The scenario guides link to it where relevant; you do not need to read it
   separately first.
 - [`aks-variant.md`](aks-variant.md) — optional notes for running the same demo

@@ -3,9 +3,7 @@
 This is the reference companion to the three scenario guides
 ([Scenario A](scenario-a-direct.md), [Scenario B](scenario-b-gitops.md), and
 [Scenario C](scenario-c-private-gitops.md)). The
-scenario guides walk you through everything in order; come here when you want
-more background on a step, on the available options, or when something does not
-behave as expected.
+scenario guides walk you through everything in order; come here when you want more background on a step or on the available options.
 
 The Azure SRE Agent is a **managed Azure service**. The default setup creates it
 in the Azure SRE Agent portal at <https://sre.azure.com>. Optionally,
@@ -81,7 +79,7 @@ setup page (or **Builder → Knowledge base → Add repository**), choose **GitH
 sign in, and select this demo's repository (`<your-org>/<your-repo>`). When the
 card shows the repository with a green check, the agent has begun indexing the
 code. Code Access is repository context only in this demo. It is not a terminal Git
-credential, and its onboarding OAuth session is not reused by the custom MCP
+credential, and its onboarding OAuth session is not reused by the GitHub MCP
 connector.
 
 Scenario B uses the fast demo path: **Builder → Connectors → Add connector →
@@ -90,13 +88,14 @@ limited to **Contents: Read and write** plus **Pull requests: Read and write**.
 Revoke it immediately after the demo.
 
 Scenario C uses SRE Agent's native **Code Access → Bring your own GitHub App**
-flow. The GitHub App private key is imported as a Key Vault key, the SRE Agent
-managed identity uses it for signing, and GitHub operations are attributed to the
-app identity instead of a user.
+flow for repository indexing and correlation. For no-PAT PR creation, use the
+broker/API path: the agent calls a constrained
+managed-identity endpoint, and the broker uses a GitHub App installation token to
+trigger the repository workflow that opens the PR.
 
-The optional MCP broker remains an advanced hardening pattern for teams that want
-the agent to call only two allowlisted issue/status tools instead of general
-branch/file/Pull Request authoring tools.
+Code Access is not the PR-authoring path. For PR creation, Scenario B uses
+GitHub MCP with a PAT; Scenario C uses the broker/API path when PATs are not
+acceptable.
 
 ---
 
@@ -156,26 +155,7 @@ GitHub sign-in and response plan in the portal.
 
 ---
 
-## 8. Troubleshooting
-
-| Symptom | What to check |
-| --- | --- |
-| The agent portal will not load or the sign-in loops | A corporate firewall is blocking `sre.azure.com` or `*.azuresre.ai`. Allowlist both. |
-| "Insufficient privileges" when granting resource access | You need **Owner** or **User Access Administrator** on the subscription or resource group. Ask an administrator, or activate the role just-in-time with PIM. |
-| The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
-| There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
-| The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
-| BYO GitHub App validation fails | Verify the GitHub App **Client ID** starts with `Iv...`, the private-key URI points to `https://<vault>.vault.azure.net/keys/<name>`, and the agent managed identity has **Key Vault Crypto User** on the vault or key scope. |
-| BYO GitHub App validation still fails after key/RBAC checks | Check Key Vault networking. A private-only vault blocks the connector if the SRE Agent validation path is not allowed to reach the Key Vault data plane. Use Scenario C's Azure VNet mode, an approved network exception, or the PAT shortcut. |
-| Custom MCP discovery returns 401 | Advanced broker path only: confirm the connector uses **Managed identity**, selects the GitOps SRE Agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
-| The GitHub MCP wizard asks for a PAT | This is expected only for the PAT shortcut. For native BYO GitHub App, configure it in **Builder → Code Access**, not the MCP GitHub tile. |
-| The remediation issue opens but no workflow starts | Broker path only: confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
-| The PAT shortcut cannot open a PR | Confirm the fine-grained PAT has **Contents: Read and write** and **Pull requests: Read and write** on this repository, and that the custom agent selected the GitHub branch/file/Pull Request tools. |
-| The agent says `RunInTerminal` is blocked while trying to create the PR | This is expected and should stay blocked. The response plan is likely using the default agent, or the `gitops-remediation` custom agent does not have the GitHub branch/file/Pull Request tools selected. Fix routing/tool selection rather than unblocking terminal. |
-
----
-
-## 9. Removing the agent
+## 8. Removing the agent
 
 If Terraform created the agent (`enable_sre_agents = true`), the normal
 repository teardown removes it with the rest of the Terraform-managed
