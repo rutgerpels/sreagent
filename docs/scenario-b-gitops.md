@@ -400,6 +400,16 @@ are attributed to your app identity.
    The unversioned key URI is preferred so key rotation works without updating
    the connector. Do not import the PEM as a Key Vault secret and do not put it
    in Terraform state.
+
+   > **Private Key Vault caveat:** the SRE Agent BYO App validation must reach
+   > the Key Vault data plane to use this key. Managed identity RBAC does not
+   > bypass Key Vault networking. If your policy forces the vault to private-only
+   > networking and the SRE Agent service is not on an allowed private path, the
+   > wizard can fail even when the key URI, key operations, and RBAC role are
+   > correct. In that case, either get an approved network exception for this
+   > connector vault, use the PAT shortcut in Option 2, or use the advanced broker
+   > option in Option 3 so a VNet-hosted broker reads Key Vault instead of the SRE
+   > Agent connector.
 9. Grant the SRE Agent managed identity **Key Vault Crypto User** on that Key
    Vault, or on the imported key scope. The identity needs permission to use the
    key for signing GitHub App authentication tokens.
