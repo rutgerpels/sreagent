@@ -66,7 +66,7 @@ concurrency:
 jobs:
   destroy:
     runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
@@ -207,6 +207,78 @@ jobs:
         if: ${{ github.event.inputs.force_delete_rg == 'true' }}
         run: |
           set -euo pipefail
+
+          list_resource_ids() {
+            local rg="$1"
+            local type="$2"
+            az resource list --resource-group "${rg}" --resource-type "${type}" --query "[].id" -o tsv 2>/dev/null || true
+          }
+
+          delete_resource_type() {
+            local rg="$1"
+            local type="$2"
+            mapfile -t ids < <(list_resource_ids "${rg}" "${type}")
+            if [[ ${#ids[@]} -eq 0 ]]; then
+              return 0
+            fi
+
+            echo "  deleting ${type} resources before RG deletion"
+            for id in "${ids[@]}"; do
+              echo "    ${id}"
+              az resource delete --ids "${id}" 2>/dev/null || true
+            done
+          }
+
+          wait_for_resource_type_gone() {
+            local rg="$1"
+            local type="$2"
+            local remaining=""
+            for _ in $(seq 1 60); do
+              remaining="$(list_resource_ids "${rg}" "${type}")"
+              if [[ -z "${remaining}" ]]; then
+                return 0
+              fi
+              sleep 10
+            done
+
+            echo "::error::Timed out waiting for ${type} resources in '${rg}' to delete:" >&2
+            echo "${remaining}" >&2
+            return 1
+          }
+
+          wait_for_service_association_links_gone() {
+            local rg="$1"
+            local links=""
+
+            for _ in $(seq 1 60); do
+              links=""
+              mapfile -t vnets < <(az network vnet list --resource-group "${rg}" --query "[].name" -o tsv 2>/dev/null || true)
+              for vnet in "${vnets[@]}"; do
+                mapfile -t subnet_ids < <(az network vnet subnet list --resource-group "${rg}" --vnet-name "${vnet}" --query "[].id" -o tsv 2>/dev/null || true)
+                for subnet_id in "${subnet_ids[@]}"; do
+                  subnet="${subnet_id##*/}"
+                  subnet_links="$(az rest \
+                    --method get \
+                    --url "https://management.azure.com${subnet_id}?api-version=2023-11-01&\$expand=serviceAssociationLinks" \
+                    --query "properties.serviceAssociationLinks[].name" -o tsv 2>/dev/null || true)"
+                  if [[ -n "${subnet_links}" ]]; then
+                    links+="${vnet}/${subnet}: ${subnet_links}"$'\n'
+                  fi
+                done
+              done
+
+              if [[ -z "${links}" ]]; then
+                return 0
+              fi
+              sleep 10
+            done
+
+            echo "::error::Timed out waiting for subnet service association links to clear in '${rg}'." >&2
+            echo "${links}" >&2
+            echo "::error::If this is an SRE Agent VNet integration subnet, disconnect Azure VNet mode in Settings > Workspace configuration > Networking, then rerun destroy." >&2
+            return 1
+          }
+
           PATTERN="rg-${TF_PREFIX}-${TF_ENVIRONMENT}-"
           echo "==> Nuke mode: deleting resource groups starting with '${PATTERN}'"
           mapfile -t RGS < <(az group list --query "[?starts_with(name, '${PATTERN}')].name" -o tsv)
@@ -214,6 +286,17 @@ jobs:
             echo "No matching resource groups found (already gone)."
           else
             for rg in "${RGS[@]}"; do
+              echo "  pre-cleaning ${rg}"
+              delete_resource_type "${rg}" "Microsoft.App/containerApps"
+              delete_resource_type "${rg}" "Microsoft.App/jobs"
+              delete_resource_type "${rg}" "Microsoft.App/agents"
+              delete_resource_type "${rg}" "Microsoft.App/managedEnvironments"
+              wait_for_resource_type_gone "${rg}" "Microsoft.App/containerApps"
+              wait_for_resource_type_gone "${rg}" "Microsoft.App/jobs"
+              wait_for_resource_type_gone "${rg}" "Microsoft.App/agents"
+              wait_for_resource_type_gone "${rg}" "Microsoft.App/managedEnvironments"
+              wait_for_service_association_links_gone "${rg}"
+
               echo "  deleting ${rg}"
               az group delete -n "${rg}" --yes
             done
