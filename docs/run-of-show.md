@@ -30,9 +30,9 @@ Everything is built with Terraform. No secrets are stored in the code; the
 application reads its secrets from Key Vault using a managed identity.
 
 Scenario B uses SRE Agent's native BYO GitHub App flow by default, with the
-GitHub App private key stored in Key Vault. For a shorter setup, it also includes
-a PAT-based GitHub MCP shortcut. For hardening demos, it can deploy a narrow
-remediation MCP broker that exposes only the fixed issue/status tools.
+GitHub App private key imported as a Key Vault key. For a shorter setup, it also
+includes a PAT-based GitHub MCP shortcut. For hardening demos, it can deploy a
+narrow remediation MCP broker that exposes only the fixed issue/status tools.
 
 ---
 

@@ -332,7 +332,7 @@ explicitly want the quicker PAT shortcut or the hardened broker pattern.
 
 | Connection | Purpose | Authentication |
 | --- | --- | --- |
-| **Option 1 — recommended: Builder → Code Access → Bring your own GitHub App** | Connect the repository with app-based GitHub access so operations are attributed to the GitHub App, not a user. | GitHub App private key stored in Key Vault and read by the SRE Agent managed identity. |
+| **Option 1 — recommended: Builder → Code Access → Bring your own GitHub App** | Connect the repository with app-based GitHub access so operations are attributed to the GitHub App, not a user. | GitHub App private key imported as a Key Vault key and used by the SRE Agent managed identity. |
 | **Option 2 — demo shortcut: Builder → Connectors → GitHub MCP** | Let the agent create the branch, file edit, and Pull Request directly. | A short-lived fine-grained GitHub PAT pasted into the connector wizard. |
 | **Option 3 — advanced hardening: Builder → Connectors → custom MCP server** | Restrict remediation to two allowlisted issue/status tools. | SRE Agent managed identity calls a broker; the broker uses an issue-only GitHub App. |
 
@@ -375,21 +375,41 @@ are attributed to your app identity.
 6. Select **Generate a private key** and keep the downloaded PEM file local.
 7. Open **Install App**, install it on the repository owner, choose **Only select
    repositories**, and select this repository only.
-8. Store the private key in Key Vault:
-   - Open the demo Key Vault in the Azure portal.
-   - Go to **Secrets → Generate/Import**.
-   - Use a name such as `sre-agent-github-app-key`.
-   - Paste the full PEM content as the value and create the secret.
-   - Copy the secret URI. The unversioned URI is preferred so key rotation works
-     without updating the connector.
-9. Grant the SRE Agent managed identity **Key Vault Secrets User** on that Key
-   Vault.
+8. Import the private key into Key Vault as a **key**, not as a secret. The
+   current SRE Agent BYO App wizard rejects `.../secrets/<name>` URIs and expects
+   a Key Vault key URI in the form `.../keys/<name>`.
+
+   Run this from a VNet-connected jumpbox, private self-hosted runner, or other
+   machine that can reach the private Key Vault endpoint:
+
+   ```bash
+   KEY_VAULT_NAME="<demo-key-vault-name>"
+   KEY_NAME="sre-agent-github-app-key"
+   PEM_FILE="./<downloaded-github-app-key>.pem"
+
+   az keyvault key import \
+     --vault-name "$KEY_VAULT_NAME" \
+     --name "$KEY_NAME" \
+     --pem-file "$PEM_FILE" \
+     --ops sign
+
+   KEY_URI="https://${KEY_VAULT_NAME}.vault.azure.net/keys/${KEY_NAME}"
+   echo "$KEY_URI"
+   ```
+
+   The unversioned key URI is preferred so key rotation works without updating
+   the connector. Do not import the PEM as a Key Vault secret and do not put it
+   in Terraform state.
+9. Grant the SRE Agent managed identity **Key Vault Crypto User** on that Key
+   Vault, or on the imported key scope. The identity needs permission to use the
+   key for signing GitHub App authentication tokens.
 10. In SRE Agent, open **Builder → Code Access → Add repositories**.
 11. Choose **GitHub**, enter `github.com`, continue to **Authenticate**, and
     select **Bring your own GitHub App**.
 12. Enter:
     - **Client ID:** the `Iv...` Client ID from the GitHub App;
-    - **Private key secret URI:** the Key Vault secret URI;
+    - **Private key URI:** the Key Vault key URI, for example
+      `https://<vault-name>.vault.azure.net/keys/sre-agent-github-app-key`;
     - **Key Vault identity:** the SRE Agent managed identity, if prompted.
 13. Select **Connect**, then add this repository and save.
 

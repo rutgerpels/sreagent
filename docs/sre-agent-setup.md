@@ -83,9 +83,9 @@ credential, and its onboarding OAuth session is not reused by the custom MCP
 connector.
 
 Scenario B's recommended path uses SRE Agent's native **Code Access → Bring your
-own GitHub App** flow. The GitHub App private key lives in Key Vault, the SRE
-Agent managed identity reads it, and GitHub operations are attributed to the app
-identity instead of a user.
+own GitHub App** flow. The GitHub App private key is imported as a Key Vault
+key, the SRE Agent managed identity uses it for signing, and GitHub operations
+are attributed to the app identity instead of a user.
 
 For a faster demo-only setup, Scenario B also documents a PAT shortcut: use
 **Builder → Connectors → Add connector → MCP → GitHub** with a same-day
@@ -144,7 +144,7 @@ GitHub sign-in and response plan in the portal.
 | The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
 | There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
 | The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
-| BYO GitHub App validation fails | Verify the GitHub App **Client ID** starts with `Iv...`, the private-key secret URI points to Key Vault, and the agent managed identity has **Key Vault Secrets User**. |
+| BYO GitHub App validation fails | Verify the GitHub App **Client ID** starts with `Iv...`, the private-key URI points to `https://<vault>.vault.azure.net/keys/<name>`, and the agent managed identity has **Key Vault Crypto User** on the vault or key scope. |
 | Custom MCP discovery returns 401 | Advanced broker path only: confirm the connector uses **Managed identity**, selects the Scenario B agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
 | The GitHub MCP wizard asks for a PAT | This is expected only for the PAT shortcut. For native BYO GitHub App, configure it in **Builder → Code Access**, not the MCP GitHub tile. |
 | The remediation issue opens but no workflow starts | Broker path only: confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
