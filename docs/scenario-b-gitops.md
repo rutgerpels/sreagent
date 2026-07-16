@@ -403,6 +403,23 @@ are attributed to your app identity.
 9. Grant the SRE Agent managed identity **Key Vault Crypto User** on that Key
    Vault, or on the imported key scope. The identity needs permission to use the
    key for signing GitHub App authentication tokens.
+
+   If the wizard later says it could not authenticate with the Client ID and Key
+   Vault key, verify all three inputs before retrying:
+
+   ```bash
+   az keyvault key show \
+     --vault-name "$KEY_VAULT_NAME" \
+     --name "$KEY_NAME" \
+     --query "{kid:key.kid,kty:key.kty,ops:key.key_ops,enabled:attributes.enabled}" \
+     --output table
+   ```
+
+   The key must be enabled, `kty` must be RSA or RSA-HSM, and `ops` must include
+   `sign`. Also confirm the selected **Key Vault identity** in the wizard is the
+   same SRE Agent managed identity that has **Key Vault Crypto User**, and that
+   the GitHub App **Client ID** belongs to the exact GitHub App whose PEM you
+   imported.
 10. In SRE Agent, open **Builder → Code Access → Add repositories**.
 11. Choose **GitHub**, enter `github.com`, continue to **Authenticate**, and
     select **Bring your own GitHub App**.
