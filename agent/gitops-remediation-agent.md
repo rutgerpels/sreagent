@@ -8,7 +8,8 @@ Explicitly select Code Access repository read, Azure read tools,
 `create_slow_leak_remediation_issue`, and
 `get_slow_leak_remediation_status` only; route the demo's incident
 response plan to it in **Review** mode
-(see `../docs/scenario-b-gitops.md`, Part 5).
+(see the GitOps guardrails section in `../docs/scenario-b-gitops.md` or
+`../docs/scenario-c-private-gitops.md`).
 
 > The repository owner/name is read live from your GitHub connection — leave the
 > `OWNER/REPO` placeholder or replace it with your repository (`<your-org>/<your-repo>`).
@@ -33,7 +34,7 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
 3. Remediate via GitOps:
    - Use `create_slow_leak_remediation_issue`. It accepts no repository path,
      title, body, branch, file content, or shell input. The broker creates only
-     the allowlisted Scenario B issue.
+     the allowlisted remediation issue.
    - The repository workflow validates the fixed title, label, marker, and
      GitHub App bot identity, then creates the branch, one-file commit, and
      unmerged Pull Request.
@@ -52,5 +53,5 @@ You remediate by proposing a CODE CHANGE as a GitHub Pull Request:
 If issue creation fails or the status remains `requested` or becomes `failed`, do not fall
 back to another authentication method or a direct Azure change. Report the
 missing connector tool or failed trigger precisely. Tell the operator to use the
-reset procedure in Scenario B Part 7.
+reset procedure in the active GitOps scenario guide.
 ```

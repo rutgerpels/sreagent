@@ -1,10 +1,9 @@
 # Azure SRE Agent — Reference
 
-This is the reference companion to the two scenario guides
-([Scenario A](scenario-a-direct.md), [Scenario B](scenario-b-gitops.md)). The
-scenario guides walk you through everything in order; come here when you want
-more background on a step, on the available options, or when something does not
-behave as expected.
+This is the reference companion to the three scenario guides
+([Scenario A](scenario-a-direct.md), [Scenario B](scenario-b-gitops.md), and
+[Scenario C](scenario-c-private-gitops.md)). The
+scenario guides walk you through everything in order; come here when you want more background on a step or on the available options.
 
 The Azure SRE Agent is a **managed Azure service**. The default setup creates it
 in the Azure SRE Agent portal at <https://sre.azure.com>. Optionally,
@@ -54,14 +53,15 @@ The agent acts through its **managed identity**. Two kinds of access matter:
 
 | Access level | Meaning | Used by |
 | --- | --- | --- |
-| **Reader** (`Low`) | Reader-level workload diagnostics; core monitoring roles still manage the alert lifecycle. | Scenario B |
+| **Reader** (`Low`) | Reader-level workload diagnostics; core monitoring roles still manage the alert lifecycle. | Scenario B and Scenario C |
 | **Privileged** (`High`) | The agent can also perform changes, such as restarting a revision or updating a setting. | Scenario A |
 
 **Monitoring Contributor at subscription scope** — assigned by Azure SRE Agent
 for both permission levels so it can acknowledge and close Azure Monitor alerts
 and update monitoring settings. Scenario B therefore combines the Reader
 permission level with the required global tool policy that denies direct Azure
-mutation paths. (The agent does not subscribe to the alert's action group; the
+mutation paths. Scenarios B and C therefore use the same GitOps guardrail
+pattern. (The agent does not subscribe to the alert's action group; the
 action group is only used if you also want to notify a person by email or
 webhook.)
 
@@ -79,24 +79,23 @@ setup page (or **Builder → Knowledge base → Add repository**), choose **GitH
 sign in, and select this demo's repository (`<your-org>/<your-repo>`). When the
 card shows the repository with a green check, the agent has begun indexing the
 code. Code Access is repository context only in this demo. It is not a terminal Git
-credential, and its onboarding OAuth session is not reused by the custom MCP
+credential, and its onboarding OAuth session is not reused by the GitHub MCP
 connector.
 
-Scenario B's recommended path uses SRE Agent's native **Code Access → Bring your
-own GitHub App** flow. The GitHub App private key lives in Key Vault, the SRE
-Agent managed identity reads it, and GitHub operations are attributed to the app
-identity instead of a user.
+Scenario B uses the fast demo path: **Builder → Connectors → Add connector →
+MCP → GitHub** with a same-day fine-grained PAT scoped to this repository and
+limited to **Contents: Read and write** plus **Pull requests: Read and write**.
+Revoke it immediately after the demo.
 
-For a faster demo-only setup, Scenario B also documents a PAT shortcut: use
-**Builder → Connectors → Add connector → MCP → GitHub** with a same-day
-fine-grained PAT scoped to this repository and limited to **Contents: Read and
-write** plus **Pull requests: Read and write**. Revoke it immediately after the
-demo.
+Scenario C uses SRE Agent's native **Code Access → Bring your own GitHub App**
+flow for repository indexing and correlation. For no-PAT PR creation, use the
+broker/API path: the agent calls a constrained
+managed-identity endpoint, and the broker uses a GitHub App installation token to
+trigger the repository workflow that opens the PR.
 
-For advanced hardening, the guide keeps a separate custom MCP broker option. It
-uses **Builder → Connectors → Add connector → MCP → MCP server**,
-**Streamable-HTTP**, and **Managed identity** so the agent can only call two
-allowlisted issue/status tools.
+Code Access is not the PR-authoring path. For PR creation, Scenario B uses
+GitHub MCP with a PAT; Scenario C uses the broker/API path when PATs are not
+acceptable.
 
 ---
 
@@ -122,33 +121,37 @@ the agent and an investigation thread opens.
 
 ---
 
-## 6. Optional: provisioning the agent with Terraform
+## 6. Network integration
+
+Scenario C uses **Settings → Workspace configuration → Network → Azure VNet** to
+route SRE Agent outbound traffic through your virtual network. This is the right
+mode when the agent must reach private Azure data-plane endpoints such as Key
+Vault through private DNS, private endpoints, NSGs, UDRs, and firewalls.
+
+Azure VNet mode requires a dedicated subnet:
+
+- `/28` or larger;
+- delegated to `Microsoft.App/environments`;
+- in the same region as the SRE Agent resource;
+- not shared with Container Apps, private endpoints, runners, or other services.
+
+Network integration controls outbound egress only. Platform services still use
+the SRE Agent managed infrastructure, and public services such as GitHub SaaS
+either need allowed FQDN egress from your VNet or the relevant SRE Agent infra
+network toggle.
+
+---
+
+## 7. Optional: provisioning the agent with Terraform
 
 Most of the agent setup is done in the portal because the GitHub sign-in, the
-response plan, and (for Scenario B) the tool policy and subagent (custom agent) are
+response plan, and (for Scenarios B/C) the tool policy and subagent (custom agent) are
 interactive, portal-only steps. If you prefer, the agent resource itself, its
 access level, and its Azure Monitor wiring can be created in Terraform instead:
 set `enable_sre_agents = true` and `sre_agent_sponsor_group_id` in
 `terraform.tfvars`. This provisions two agents — one with Privileged access for
-Scenario A and one with Reader access for Scenario B. You still complete the
+Scenario A and one with Reader access for GitOps scenarios. You still complete the
 GitHub sign-in and response plan in the portal.
-
----
-
-## 7. Troubleshooting
-
-| Symptom | What to check |
-| --- | --- |
-| The agent portal will not load or the sign-in loops | A corporate firewall is blocking `sre.azure.com` or `*.azuresre.ai`. Allowlist both. |
-| "Insufficient privileges" when granting resource access | You need **Owner** or **User Access Administrator** on the subscription or resource group. Ask an administrator, or activate the role just-in-time with PIM. |
-| The alert fired but the agent never opens an investigation | Confirm Azure Monitor is the active incident platform (§5) and that the agent's identity has the core monitoring roles described in §3. |
-| There is no alert to pick up | The memory alert only exists after the application is deployed. Confirm `az monitor metrics alert list -g <resource-group>` lists the `alert-payment-memory-…` rule. |
-| The repository is not listed during Code Access | The signed-in GitHub identity does not have access to the demo repository. Re-authenticate with an account that does. |
-| BYO GitHub App validation fails | Verify the GitHub App **Client ID** starts with `Iv...`, the private-key secret URI points to Key Vault, and the agent managed identity has **Key Vault Secrets User**. |
-| Custom MCP discovery returns 401 | Advanced broker path only: confirm the connector uses **Managed identity**, selects the Scenario B agent identity, and requests the dedicated `api://<client-id>/.default` scope. A raw unauthenticated request is expected to return 401. |
-| The GitHub MCP wizard asks for a PAT | This is expected only for the PAT shortcut. For native BYO GitHub App, configure it in **Builder → Code Access**, not the MCP GitHub tile. |
-| The remediation issue opens but no workflow starts | Broker path only: confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
-| The PAT shortcut cannot open a PR | Confirm the fine-grained PAT has **Contents: Read and write** and **Pull requests: Read and write** on this repository, and that the custom agent selected the GitHub branch/file/Pull Request tools. |
 
 ---
 

@@ -29,9 +29,9 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
 
 ## Correct remediation (GitOps only — do NOT touch Azure directly)
 
-1. Recommended path: use only the configured GitHub connector tools to create a
-   branch, edit `infra/leak.auto.tfvars`, commit that one-file change, and open
-   an unmerged Pull Request.
+1. Scenario B path: use only the configured GitHub MCP tools to create a branch,
+   edit `infra/leak.auto.tfvars`, commit that one-file change, and open an
+   unmerged Pull Request.
 2. The Pull Request changes only `infra/leak.auto.tfvars`:
 
    ```hcl
@@ -42,11 +42,10 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
 
-If the demo is using the advanced broker hardening option, call
-`create_slow_leak_remediation_issue` instead. The broker creates only the fixed
-issue title, label, and body marker; `.github/workflows/sre-remediation-pr.yml`
-then opens the one-file remediation PR. Call
-`get_slow_leak_remediation_status` with the returned issue number.
+Scenario C path: call `create_slow_leak_remediation_issue` instead. The broker
+creates only the fixed issue title, label, and body marker;
+`.github/workflows/sre-remediation-pr.yml` then opens the one-file remediation
+PR. Call `get_slow_leak_remediation_status` with the returned issue number.
 
 Never use generic workflow dispatch, terminal `git`/`gh`, broader token
 discovery, or direct GitHub API calls for this remediation.
