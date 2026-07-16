@@ -218,6 +218,12 @@ with these differences:
 - keep the global tool access policy that denies terminal fallback and direct
   Azure/Kubernetes/Terraform mutations.
 
+`RunInTerminal` must remain blocked in this scenario. If the agent tries to use
+it when opening the remediation PR, do not loosen the global policy. Re-open the
+`gitops-remediation` custom agent and confirm the BYO GitHub App branch/file/Pull
+Request tools are selected, then confirm the response plan delegates to that
+custom agent instead of the default agent.
+
 This keeps the enterprise network posture separate from the GitOps enforcement
 boundary: RBAC and tool policy control what the agent may do, while Azure VNet
 mode controls where the agent may send traffic.

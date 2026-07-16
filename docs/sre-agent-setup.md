@@ -171,6 +171,7 @@ GitHub sign-in and response plan in the portal.
 | The GitHub MCP wizard asks for a PAT | This is expected only for the PAT shortcut. For native BYO GitHub App, configure it in **Builder → Code Access**, not the MCP GitHub tile. |
 | The remediation issue opens but no workflow starts | Broker path only: confirm `SRE_GITHUB_APP_BOT_LOGIN` exactly matches `<app-slug>[bot]`, the `sre-remediation` label exists, and the workflow is present on the default branch. |
 | The PAT shortcut cannot open a PR | Confirm the fine-grained PAT has **Contents: Read and write** and **Pull requests: Read and write** on this repository, and that the custom agent selected the GitHub branch/file/Pull Request tools. |
+| The agent says `RunInTerminal` is blocked while trying to create the PR | This is expected and should stay blocked. The response plan is likely using the default agent, or the `gitops-remediation` custom agent does not have the GitHub branch/file/Pull Request tools selected. Fix routing/tool selection rather than unblocking terminal. |
 
 ---
 

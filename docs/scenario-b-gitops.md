@@ -555,6 +555,13 @@ branch, update `infra/leak.auto.tfvars`, commit, and open a Pull Request.
 (Remember: paste the un-wrapped form here, *not* the `permissions`-wrapped API
 form, or the box rejects it.)
 
+> **Important:** `RunInTerminal` being blocked is the intended guardrail. Do not
+> remove that deny rule to make PR creation work. If the agent tries
+> `RunInTerminal`, the response plan is not using the `gitops-remediation`
+> custom agent, or that custom agent does not have the GitHub branch/file/Pull
+> Request tools selected. Fix the custom agent tool selection or response-plan
+> routing instead.
+
 <details>
 <summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
 
@@ -745,6 +752,11 @@ its core monitoring roles.
    select terminal, workflow dispatch, repository administration,
    secret-management, approval, or merge tools.
 
+   If those GitHub tools are not visible here, go back to **Capabilities → Tools
+   → MCP servers + services**, expand the GitHub connector, and enable the
+   minimum branch/file/Pull Request tools there first. Then return to this custom
+   agent and select them explicitly.
+
 **What is happening:** this tells the agent that its remediation is to open a Pull
 Request, not to run commands against Azure.
 
@@ -782,6 +794,11 @@ Pull Request edits the right file.
 **Expected outcome:** the response plan routes incidents to the GitOps agent. As a
 quick check, ask the agent in a chat to "restart the payment-service container" —
 it should decline and offer to open a Pull Request instead.
+
+If an investigation reports **"RunInTerminal remains blocked by the global tool
+access policy"**, the guardrail is working. The missing piece is GitHub PR
+authoring capability on the `gitops-remediation` custom agent, or the response
+plan is still routed to the default agent instead of that custom agent.
 
 ---
 

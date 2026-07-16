@@ -31,6 +31,9 @@ Apply them once, after the agent is created and connected (see
   instruction can't *guarantee* it won't try a direct write.
 - The **Tool Access Policy `deny`** makes the direct write *impossible*: even if
   the model attempts `az containerapp update`, the call is blocked before it runs.
+- `RunInTerminal` is intentionally denied. PR creation must come from the
+  selected GitHub connector tools on the `gitops-remediation` custom agent, not
+  from shell, `git`, or `gh`.
 
 Together they give a defence-in-depth, DevOps-correct remediation flow:
 
