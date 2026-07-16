@@ -1,4 +1,4 @@
-# Scenario A — On-the-spot fix
+# Scenario A — Autonomous troubleshooting
 
 This guide takes you from an empty subscription to a working demo where the
 **Azure SRE Agent detects an incident and fixes it directly** after you approve.
@@ -8,7 +8,9 @@ on any agent step, see the [Azure SRE Agent reference](sre-agent-setup.md).
 **The story this scenario tells:** a risky change is made directly to a running
 service, memory starts leaking, an alert fires, and the SRE Agent — which has
 permission to act on your Azure resources — investigates, proposes a fix, and
-applies it the moment a human approves.
+applies it the moment a human approves. This mode intentionally skips the GitOps
+guardrails from Scenarios B and C so the audience can see the full autonomous
+troubleshooting loop.
 
 You will work through six parts:
 
