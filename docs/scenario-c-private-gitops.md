@@ -5,7 +5,7 @@ Review**, Azure data-plane endpoints are private, Azure deployment work runs on 
 private self-hosted runner, and GitHub remediation uses a constrained custom MCP
 broker.
 
-Scenario C uses no PAT for write operations. It uses two separate GitHub Apps:
+Scenario C uses no PAT for write operations. It uses two workload GitHub Apps:
 
 1. a read-only bring-your-own App for SRE Agent Code Access;
 2. an issues-write remediation App used only by the broker.
@@ -29,8 +29,10 @@ Do not combine the Apps or reuse their private keys.
 
 The Terraform scenario is immutable. The state storage-account hash includes
 subscription, prefix, and `C`; the state blob is
-`<prefix>-C-<environment>.tfstate`. Never convert A or B state in place. Deploy C
-as a new environment, validate it, then destroy the old profile explicitly.
+`<prefix>-C-<environment>.tfstate`. Never convert A or B state in place. Destroy
+an active A or B GitHub Actions profile, delete its `DEPLOYMENT_SCENARIO`,
+`TF_PREFIX`, and `TF_ENVIRONMENT` variables, and only then dispatch C as a new
+isolated environment.
 
 ## Why the broker has external HTTPS ingress
 
@@ -88,7 +90,7 @@ cannot deploy it.
 
 The remaining manual prerequisites are limited to:
 
-1. create and install the two GitHub Apps;
+1. create and install the two workload GitHub Apps;
 2. import the remediation App PEM once as a non-exportable Key Vault RSA key;
 3. create the dedicated Entra API registration and complete required consent;
 4. configure SRE portal Code Access, MCP connector, tool policy, custom agent,
@@ -113,7 +115,6 @@ Configure these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `DEPLOYMENT_SCENARIO=C`
 - `SRE_AGENT_SPONSOR_GROUP_ID`
 - `RUNNER_NETWORK_RG`
 - `RUNNER_VNET_NAME`
@@ -245,10 +246,13 @@ Run the manual **deploy** workflow with:
 - the desired location;
 - **Open incident PR:** as desired.
 
-The selected workflow-dispatch scenario must match
-`DEPLOYMENT_SCENARIO=C`. Automatic `apply-infra` and `deploy-apps` runs require
-that valid repository variable and target its C state. Images use the full
-40-character commit SHA.
+The preflight accepts an absent activation marker or the same active C target.
+It rejects active A or B before private-runner or Azure work and instructs the
+operator to destroy that profile first. After deployment succeeds, activate push
+deployment by setting `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
+then setting `DEPLOYMENT_SCENARIO=C` last under repository Actions variables.
+Until then, automatic `apply-infra` and `deploy-apps` pushes are successful
+no-ops. Images use the full 40-character commit SHA.
 
 The workflow builds the broker image and provisions its supported infrastructure
 as part of the normal deployment. Do not run the local deploy wrapper for C; it

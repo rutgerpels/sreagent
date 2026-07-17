@@ -53,11 +53,10 @@ Set these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `DEPLOYMENT_SCENARIO=B`
 - `SRE_AGENT_SPONSOR_GROUP_ID`
 
-If the defaults are changed, also set `TF_PREFIX` and `TF_ENVIRONMENT`. Keep the
-same values for deployment, apply, app deployment, and destruction.
+Do not configure an Azure client secret. The temporary SRE Agent GitHub MCP PAT
+is used only in the SRE portal and is never provided to this deployment workflow.
 
 The Azure identity trusts the repository through GitHub Actions OIDC. Do not
 create a client secret and do not add a credentials JSON secret. Grant only the
@@ -79,14 +78,19 @@ The workflow:
 6. applies the Container Apps and alert;
 7. optionally opens the incident Pull Request.
 
+After deployment succeeds, set `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed
+values, then set `DEPLOYMENT_SCENARIO=B` last under repository Actions variables
+to activate push deployment.
+
 The state account hash includes subscription, prefix, and `B`; the state key is:
 
 ```text
 <prefix>-B-<environment>.tfstate
 ```
 
-Do not point Scenario B at state created by A or C. To change profiles, deploy a
-new isolated profile and explicitly destroy the old profile later.
+Do not point Scenario B at state created by A or C. To change the active GitHub
+Actions profile, destroy the old profile, delete `DEPLOYMENT_SCENARIO`,
+`TF_PREFIX`, and `TF_ENVIRONMENT`, and then dispatch the new isolated profile.
 
 ### Local alternative
 
@@ -108,11 +112,11 @@ protection still apply.
 
 ### Automation profile requirement
 
-Repository variable `DEPLOYMENT_SCENARIO` is mandatory for push-triggered
-`apply-infra` and `deploy-apps` automation. A manual workflow-dispatch scenario
-must match the repository variable. If you intentionally deploy more than one
-profile at once, only the profile named by `DEPLOYMENT_SCENARIO` is the automatic
-push target; operate the others by explicit dispatch.
+Before explicit operator activation, push-triggered `apply-infra` and
+`deploy-apps` emit a notice and succeed as no-ops without Azure OIDC or
+deployment-runner work. A nonempty invalid marker fails. Explicit dispatch is
+validated and can operate while no marker exists, but it cannot disagree with an
+active scenario.
 
 ### Verify the baseline
 

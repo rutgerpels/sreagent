@@ -30,15 +30,19 @@ agent, runner, and broker profile. Resource names include the scenario. The stat
 account hash includes subscription, prefix, and scenario; the state blob is
 `<prefix>-<scenario>-<environment>.tfstate`.
 
-In-place scenario conversion is unsupported. To change scenarios, create the new
-isolated environment and state, validate it, then explicitly destroy the old
-scenario with the **destroy** workflow or matching teardown command. Never point
-a new profile at old state.
+In-place scenario conversion is unsupported. For the GitHub Actions path,
+destroy the active profile first, delete the repository `DEPLOYMENT_SCENARIO`,
+`TF_PREFIX`, and `TF_ENVIRONMENT` variables, and only then dispatch **deploy** for
+another scenario. The workflow refuses a different scenario, prefix, or
+environment while the marker exists. Never point a new profile at old state.
 
-For push automation, set repository variable `DEPLOYMENT_SCENARIO` to the active
-profile. A workflow-dispatch scenario must match it. `apply-infra` and
-`deploy-apps` refuse to guess a profile for automatic runs. Workflow images use
-the full 40-character commit SHA.
+After a successful manual **deploy**, review its summary and explicitly set the
+repository Actions variables `TF_PREFIX` and `TF_ENVIRONMENT`, then set
+`DEPLOYMENT_SCENARIO` last as the activation marker. Until that marker exists,
+push-triggered `apply-infra` and `deploy-apps` emit a notice and succeed as no-ops
+without Azure OIDC or deployment-runner work. A nonempty invalid marker still
+fails. This explicit activation needs no PAT or additional GitHub App. Workflow
+images use the full 40-character commit SHA.
 
 ## Shared preparation
 
@@ -46,8 +50,9 @@ the full 40-character commit SHA.
    `infra/leak.auto.tfvars` contains `enable_slow_leak = false`.
 2. Configure GitHub Actions Azure OIDC variables. Never add an Azure client
    secret.
-3. Set `DEPLOYMENT_SCENARIO` to the selected profile.
-4. Deploy the selected profile.
+3. Dispatch **deploy** with the selected profile.
+4. After it succeeds, set `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
+   then set `DEPLOYMENT_SCENARIO` last to activate push deployment.
 5. Open the frontend, place a test order, and enable steady traffic.
 6. Create or connect the matching SRE Agent and add the demo resources, logs,
    code, and Azure Monitor incident platform.

@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deployment-${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO }}-${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'contosopay' }}-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+  group: deployment-${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO || 'unconfigured' }}-${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'contosopay' }}-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
   cancel-in-progress: false
 
 jobs:
@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      proceed: ${{ steps.profile.outputs.proceed }}
       scenario: ${{ steps.profile.outputs.scenario }}
       prefix: ${{ steps.profile.outputs.prefix }}
       environment: ${{ steps.profile.outputs.environment }}
@@ -44,21 +45,71 @@ jobs:
         id: profile
         shell: bash
         env:
-          SELECTED_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO }}
-          SELECTED_PREFIX: ${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
-          SELECTED_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SCENARIO: ${{ inputs.scenario }}
+          DISPATCH_PREFIX: ${{ inputs.prefix }}
+          DISPATCH_ENVIRONMENT: ${{ inputs.environment }}
           REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
+          REPOSITORY_PREFIX: ${{ vars.TF_PREFIX }}
+          REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
         run: |
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
           readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
           readonly SCENARIO_PATTERN='^(A|B|C)$'
-          [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
-          [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::DEPLOYMENT_SCENARIO must be exactly A, B, or C; got '${SELECTED_SCENARIO:-unset}'."; exit 1; }
-          [[ "${SELECTED_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::Selected scenario '${SELECTED_SCENARIO}' does not match repository profile '${REPOSITORY_SCENARIO}'."; exit 1; }
-          [[ "${SELECTED_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${SELECTED_PREFIX}'."; exit 1; }
-          [[ "${SELECTED_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${SELECTED_ENVIRONMENT}'."; exit 1; }
+          SELECTED_SCENARIO=""
+          SELECTED_PREFIX=""
+          SELECTED_ENVIRONMENT=""
           {
+            echo "proceed=false"
+            echo "scenario="
+            echo "prefix="
+            echo "environment="
+          } >> "${GITHUB_OUTPUT}"
+
+          case "${EVENT_NAME}" in
+            push)
+              if [[ -z "${REPOSITORY_SCENARIO}" ]]; then
+                echo "::notice title=Deployment profile not configured::Repository variable DEPLOYMENT_SCENARIO is unset; skipping push-triggered infrastructure deployment."
+                {
+                  echo "## Deployment skipped"
+                  echo ""
+                  echo 'Repository variable `DEPLOYMENT_SCENARIO` is unset, so push-triggered `apply-infra` deployment is a successful no-op.'
+                  echo 'Complete the manual `deploy` workflow, then configure its three profile variables. No Azure OIDC token or deployment runner was requested.'
+                } >> "${GITHUB_STEP_SUMMARY}"
+                exit 0
+              fi
+              SELECTED_SCENARIO="${REPOSITORY_SCENARIO}"
+              SELECTED_PREFIX="${REPOSITORY_PREFIX}"
+              SELECTED_ENVIRONMENT="${REPOSITORY_ENVIRONMENT}"
+              [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Nonempty repository variable DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
+              [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
+              [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
+              ;;
+            workflow_dispatch)
+              SELECTED_SCENARIO="${DISPATCH_SCENARIO}"
+              SELECTED_PREFIX="${DISPATCH_PREFIX}"
+              SELECTED_ENVIRONMENT="${DISPATCH_ENVIRONMENT}"
+              [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::The explicit scenario input must be exactly A, B, or C."; exit 1; }
+              if [[ -n "${REPOSITORY_SCENARIO}" ]]; then
+                [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Nonempty repository variable DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
+                [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
+                [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
+                [[ "${SELECTED_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::The explicit scenario does not match the active repository profile; destroy the active profile first. In-place conversion is forbidden."; exit 1; }
+                [[ "${SELECTED_PREFIX}" == "${REPOSITORY_PREFIX}" && "${SELECTED_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The explicit prefix/environment does not match the active repository profile; destroy the active profile first."; exit 1; }
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported workflow event."
+              exit 1
+              ;;
+          esac
+
+          [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
+          [[ "${SELECTED_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::The selected prefix is invalid."; exit 1; }
+          [[ "${SELECTED_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::The selected environment is invalid."; exit 1; }
+          {
+            echo "proceed=true"
             echo "scenario=${SELECTED_SCENARIO}"
             echo "prefix=${SELECTED_PREFIX}"
             echo "environment=${SELECTED_ENVIRONMENT}"
@@ -66,6 +117,7 @@ jobs:
 
   terraform-apply:
     needs: select-profile
+    if: ${{ needs.select-profile.outputs.proceed == 'true' }}
     runs-on: ${{ needs.select-profile.outputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
     permissions:
