@@ -40,10 +40,16 @@ too:
 **Never change `scenario` in an existing state.** In-place profile conversion is
 unsupported and is rejected by the deployment paths. To adopt another profile:
 
-1. deploy the new scenario, which creates a separate environment and state;
-2. validate the new environment;
-3. explicitly destroy the old scenario with the same scenario, prefix, and
-   environment values that created it.
+1. destroy the active scenario with the same scenario, prefix, and environment
+   values that created it;
+2. delete the repository `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and
+   `TF_ENVIRONMENT` variables;
+3. dispatch **deploy** with the new explicit scenario, which creates separate
+   environment and state.
+
+The workflow refuses to deploy a different scenario or automatic target while an
+activation marker exists. This ordering prevents an automatic in-place profile
+conversion; it does not reuse the destroyed profile's state.
 
 The state resource group can contain isolated state accounts or blobs for other
 profiles. Do not delete it indiscriminately.
@@ -102,36 +108,57 @@ and
 
 ### GitHub Actions
 
-The manual **deploy** workflow supports A, B, and C. Select the scenario
-explicitly. A and B use GitHub-hosted runners; C uses the labeled private
-self-hosted runner.
+The manual **deploy** workflow supports A, B, and C. The scenario, prefix,
+environment, and location are explicit dispatch inputs. A and B use GitHub-hosted
+runners; C uses the labeled private self-hosted runner.
 
-Configure these nonsecret repository variables for OIDC:
+Configure these nonsecret repository variables before dispatch:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `DEPLOYMENT_SCENARIO`
 - `SRE_AGENT_SPONSOR_GROUP_ID`
 
-`DEPLOYMENT_SCENARIO` must be exactly `A`, `B`, or `C`. It is the target for
-automatic `apply-infra` and `deploy-apps` runs. A manual workflow-dispatch
-selection must match the repository variable. This prevents a manual run and
-subsequent push automation from targeting different profiles.
+Do not set `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, or `TF_ENVIRONMENT` before the
+first deployment. Dispatch **deploy** with explicit A/B/C, prefix, and environment
+inputs. After the deployment succeeds and you have reviewed its summary, activate
+push deployment by setting these nonsecret repository Actions variables under
+**Settings > Secrets and variables > Actions > Variables**, in this order:
+
+- `TF_PREFIX` = the deployed prefix;
+- `TF_ENVIRONMENT` = the deployed environment;
+- `DEPLOYMENT_SCENARIO` = the deployed `A`, `B`, or `C` profile, set last as the
+  activation marker.
+
+This explicit operator step avoids adding a PAT or a third GitHub App with
+repository Variables write permission to the deployment trust boundary.
+
+An absent activation marker permits an explicit manual deploy. An existing valid
+marker permits only the same scenario, prefix, and environment. A different
+scenario or target fails in preflight with instructions to destroy the active
+profile first and then clear all three profile variables. Terraform independently
+verifies the scenario recorded in the isolated state before updating it.
+
+Push-triggered `apply-infra` and `deploy-apps` behavior is fail closed:
+
+- an unset `DEPLOYMENT_SCENARIO` emits a notice and a skipped-deployment summary,
+  then succeeds without requesting Azure OIDC or a deployment runner;
+- a nonempty value other than `A`, `B`, or `C` fails;
+- an active scenario without valid `TF_PREFIX` and `TF_ENVIRONMENT` fails;
+- a valid value runs against the persisted prefix and environment;
+- explicit workflow dispatch remains validated and may run while the repository
+  marker is absent, but it cannot disagree with an active scenario.
 
 The deployment workflows provision exactly one SRE Agent for the selected
 profile. `SRE_AGENT_SPONSOR_GROUP_ID` is the Entra sponsor group object ID.
 Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME` variables override
 the default `MicrosoftFoundry` / `gpt-5` model configuration.
 
-The workflows reject a missing or invalid automatic-deployment scenario and
-verify the scenario stored in state. Each full commit-SHA image is published
-once, write/delete locked in ACR, resolved to a `sha256` manifest digest, and
-deployed by digest. Do not use mutable tags such as `latest`.
-
-Partially created application state from an older tag-based revision has no
-trusted digest map for recovery. Replace that isolated scenario environment
-rather than guessing image ownership.
+Each full commit-SHA image is published once, write/delete locked in ACR, resolved
+to a `sha256` manifest digest, and deployed by digest. Do not use mutable tags
+such as `latest`. Partially created application state from an older tag-based
+revision has no trusted digest map for recovery; replace that isolated scenario
+environment rather than guessing image ownership.
 
 For Scenario A, set **Open incident PR** to `false`; use the direct incident
 script instead. Scenarios B and C use the incident Pull Request flow.
@@ -167,11 +194,14 @@ B profile:
 ./scripts/teardown.sh --scenario A
 ```
 
-The teardown verifies the scenario recorded in state before destroying.
+The teardown verifies the scenario recorded in state before destroying. If you
+intend to select another scenario, delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and
+`TF_ENVIRONMENT` only after the destroy succeeds. Leaving the scenario variable
+absent keeps push automation in its safe no-op state.
 
 ## Scenario C GitHub identities and key custody
 
-Scenario C uses two separate GitHub Apps:
+Scenario C uses two workload GitHub Apps:
 
 1. a read-only bring-your-own App for SRE Agent **Code Access**;
 2. an issues-write remediation App used only by the broker.

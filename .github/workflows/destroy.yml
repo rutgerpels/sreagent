@@ -57,6 +57,8 @@ jobs:
       TF_ENVIRONMENT: ${{ inputs.environment }}
       IMAGE_TAG: ${{ github.sha }}
       REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
+      REPOSITORY_PREFIX: ${{ vars.TF_PREFIX }}
+      REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
       SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
       SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
@@ -81,7 +83,9 @@ jobs:
           if [[ "${FORCE_DELETE_RG}" != "true" ]]; then
             readonly SHA_PATTERN='^[0-9a-f]{40}$'
             [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
-            [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::Dispatch scenario '${DEPLOYMENT_SCENARIO}' does not match repository profile '${REPOSITORY_SCENARIO}'."; exit 1; }
+            [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
+            [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
+            [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
             [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required for Terraform destroy."; exit 1; }
             {
@@ -283,6 +287,8 @@ jobs:
       - name: Summary
         if: ${{ always() }}
         shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
             echo "## Scenario ${DEPLOYMENT_SCENARIO} destroy"
@@ -291,4 +297,7 @@ jobs:
             echo "Status: \`${{ job.status }}\`"
             echo "The state account is retained because it can contain other environments for this scenario."
             echo "Key Vault purge protection can retain soft-deleted vault data until its retention period expires."
+            if [[ "${JOB_STATUS}" == "success" && "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]]; then
+              echo 'Delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT` before dispatching a different profile.'
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"

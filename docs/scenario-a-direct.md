@@ -42,8 +42,9 @@ Keep `infra/leak.auto.tfvars` at `enable_slow_leak = false` for deployment.
 
 The `scenario` variable selects an immutable profile. Its scenario is included in
 resource names, the state account hash, and the state key. Do not convert a B or
-C state to A. Deploy A as a new isolated environment, then destroy the old
-profile separately.
+C state to A. If another GitHub Actions profile is active, destroy it and delete
+the `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT` variables before
+dispatching A.
 
 ### Option 1: GitHub Actions
 
@@ -52,20 +53,22 @@ Set these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `DEPLOYMENT_SCENARIO=A`
 - `SRE_AGENT_SPONSOR_GROUP_ID`
 
-CI authentication is OIDC only. Do not configure an Azure client secret or a
-credentials JSON blob.
+Do not configure a PAT or Azure client secret for deployment.
 
 Run the manual **deploy** workflow with:
 
 - **Scenario:** `A`
 - **Open incident PR:** `false`
 
-The deploy job uses `ubuntu-latest`. The workflow builds immutable images tagged
-with the full `github.sha`, creates the scenario-specific state, and verifies
-that state reports Scenario A.
+The preflight allows an absent activation marker or the same active A target. It
+rejects B or C before Azure work and instructs the operator to destroy that
+profile first. The deploy job uses `ubuntu-latest`, builds immutable images
+tagged with the full `github.sha`, creates the scenario-specific state, and
+verifies that state reports Scenario A. After it succeeds, activate push
+deployment by setting `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
+then setting `DEPLOYMENT_SCENARIO=A` last under repository Actions variables.
 
 ### Option 2: local wrapper
 
@@ -218,9 +221,10 @@ Use the **destroy** workflow with Scenario `A` and confirmation
 ./scripts/teardown.sh --scenario A
 ```
 
-Teardown verifies that the selected state reports Scenario A. If you are moving
-to B or C, deploy and validate that new isolated environment first; never reuse
-or migrate the A state.
+Teardown verifies that the selected state reports Scenario A. To move to B or C,
+finish this destroy, delete the repository `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and
+`TF_ENVIRONMENT` variables, and then dispatch the new profile. Never reuse or
+migrate the A state.
 
 Remove a portal-created SRE Agent separately. A Terraform-provisioned agent is
 destroyed with its Scenario A state.
