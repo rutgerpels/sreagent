@@ -1,66 +1,71 @@
 ###############################################################################
-# ContosoPay / Azure SRE Agent demo — EXAMPLE variables.
+# ContosoPay / Azure SRE Agent demo - EXAMPLE variables.
 # Copy this file to `terraform.tfvars` and adjust. NEVER commit terraform.tfvars.
-# Contains placeholders only — no real subscription IDs, tenant IDs, or secrets.
+# Contains placeholders only - no real IDs, PATs, credentials, or key material.
 ###############################################################################
 
-# Short, non-identifying prefix used to build globally-unique resource names.
-# A random suffix is appended automatically (see infra/main.tf).
-prefix = "contosopay"
-
-# Deployment environment label (free text): dev | demo | test
+prefix      = "contosopay"
 environment = "demo"
+location    = "swedencentral"
 
-# Azure region. Co-locate with an SRE Agent region where possible.
-# SRE Agent preview regions: eastus2, canadacentral, swedencentral, uksouth,
-# francecentral, koreacentral, australiaeast.
-location = "swedencentral"
+# Immutable deployment profile: A, B, or C.
+# A = public endpoints, High/Contributor/Autonomous agent, no broker.
+# B = public ACR/Key Vault, Low/Reader/Review agent, manual built-in GitHub MCP
+#     connector with a short-lived fine-grained PAT. Terraform never accepts PAT.
+# C = private endpoints/runner peering, Low/Reader/Review agent, and the implied
+#     custom remediation broker. Two separate GitHub Apps remain manual.
+scenario = "A"
 
-# Existing runner network plus address space for the regional app VNet Terraform
-# will create. The networks must not overlap. The runner subnet setting is used
-# only for the Terraform state private endpoint.
-runner_vnet_resource_group                  = "agentrg"
-runner_vnet_name                            = "agent-vnet"
-runner_private_endpoint_subnet_name         = "private-endpoints"
-app_vnet_address_space                      = "10.100.0.0/16"
-app_private_endpoint_subnet_address_prefix  = "10.100.0.0/27"
-container_apps_subnet_address_prefix        = "10.100.0.64/27"
-sre_agent_subnet_address_prefix             = "10.100.0.96/27"
+# Scenario C only: existing private runner network plus non-overlapping address
+# space for the Terraform-managed regional VNet. A/B ignore these values and do
+# not evaluate the existing runner VNet data source.
+runner_vnet_resource_group                 = "agentrg"
+runner_vnet_name                           = "agent-vnet"
+runner_private_endpoint_subnet_name        = "private-endpoints"
+app_vnet_address_space                     = "10.100.0.0/16"
+app_private_endpoint_subnet_address_prefix = "10.100.0.0/27"
+container_apps_subnet_address_prefix       = "10.100.0.64/27"
+sre_agent_subnet_address_prefix            = "10.100.0.96/27"
 
-# Deploy Azure Managed Grafana (adds cost). true for the full demo experience.
 enable_grafana = true
 
-# Optional: pin a specific image tag pushed to ACR. The deploy script overrides
-# this with the freshly-built tag. Leave as "latest" for first apply.
-image_tag = "latest"
+# Owned by the deployment's second phase. Workflows publish each SHA tag once,
+# lock the ACR manifest, resolve its digest, and deploy only digest references.
+image_tag = "0000000000000000000000000000000000000000"
+image_digests = {
+  frontend            = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  checkout-api        = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  payment-service     = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  sre-remediation-mcp = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
 
-# Optional CIDR allow-list for the public frontend ingress. Empty = allow all.
+# Optional CIDR allow-list for the public application frontend.
 # frontend_allowed_ips = ["203.0.113.0/24"]
 
-# --- Optional: provision the two SRE Agents in Terraform (preview) ----------
-# Off by default. When true, also set sre_agent_sponsor_group_id. This creates
-# agent-a (High/Contributor, Scenario A) and agent-b (Low/Reader, Scenario B)
-# with Monitoring Contributor + Azure Monitor wired. The GitHub OAuth, tool
-# access policy, custom agent, and response plan still get set up in the portal.
+# Direct Terraform usage can opt into the same one-agent profile. The GitHub
+# deployment workflows always enable it and supply these values from nonsecret
+# repository variables.
 # enable_sre_agents          = true
-# sre_agent_sponsor_group_id = "00000000-0000-0000-0000-000000000000"  # Entra group object id (do NOT commit a real one)
-# sre_agent_model_provider   = "MicrosoftFoundry"   # or "Anthropic" outside EU
+# sre_agent_sponsor_group_id = "00000000-0000-0000-0000-000000000000"
+# sre_agent_model_provider   = "MicrosoftFoundry"
 # sre_agent_model_name       = "gpt-5"
 
-# --- Optional: Entra-protected Scenario B remediation MCP broker ------------
-# Off by default. When enabled, Terraform creates its identity and RBAC even
-# during phase 1 (deploy_apps=false); the Container App is created in phase 2.
-# Register a dedicated Entra API app out of band. Bootstrap the GitHub App
-# private key into the existing Key Vault under the configured name; never put
-# that key in tfvars or Terraform. All values below are placeholders only.
-# enable_sre_remediation_broker                         = true
-# sre_remediation_allowed_caller_principal_id           = "00000000-0000-0000-0000-000000000000" # omit when deriving Terraform-managed Scenario B UAMI
-# sre_remediation_entra_api_client_id                   = "00000000-0000-0000-0000-000000000000"
-# sre_remediation_entra_token_audience                  = "api://00000000-0000-0000-0000-000000000000"
-# sre_remediation_entra_token_scope                     = "api://00000000-0000-0000-0000-000000000000/.default"
-# sre_remediation_github_app_id                         = "123456"
-# sre_remediation_github_app_installation_id            = "12345678"
-# sre_remediation_github_app_bot_login                  = "example-app[bot]"
-# sre_remediation_github_repository_owner               = "example-owner"
-# sre_remediation_github_repository_name                = "example-repository"
-# sre_remediation_github_app_private_key_secret_name    = "github-app-private-key"
+# --- Scenario C nonsecret broker metadata -----------------------------------
+# Selecting C implies the broker; there is deliberately no enable-broker toggle.
+# Create two GitHub Apps manually: one for SRE Agent Code Access and a separate,
+# least-privilege app for the broker. Import only the remediation App key with
+# the repository script; configure the Code Access App through its portal flow.
+# Never put PEM/key material in Terraform.
+#
+# The allowed caller is derived when enable_sre_agents=true. The explicit value
+# is only a fallback for direct Terraform use with a separately managed agent.
+# sre_remediation_allowed_caller_principal_id        = "00000000-0000-0000-0000-000000000000"
+# sre_remediation_entra_api_client_id                = "00000000-0000-0000-0000-000000000000"
+# sre_remediation_entra_token_audience               = "00000000-0000-0000-0000-000000000000"
+# sre_remediation_entra_token_scope                  = "api://00000000-0000-0000-0000-000000000000/.default"
+# sre_remediation_github_app_id                      = "123456"
+# sre_remediation_github_app_installation_id         = "12345678"
+# sre_remediation_github_app_bot_login               = "example-remediation-app[bot]"
+# sre_remediation_github_repository_owner            = "example-owner"
+# sre_remediation_github_repository_name             = "example-repository"
+# sre_remediation_github_app_private_key_name         = "github-app-signing-key"

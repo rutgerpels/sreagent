@@ -1,47 +1,50 @@
 #!/bin/bash
-# Upload a GitHub App private key to the existing demo Key Vault without placing
-# the key in Terraform state or shell arguments. Run from the private runner
-# network, or supply --operator-cidr for a temporary single-IP firewall rule.
-# The script grants the signed-in user temporary secret-write access when needed
-# and removes that assignment on exit.
+# Import the Scenario C remediation GitHub App PEM as a non-exportable Key Vault
+# key. Run from the private runner network; this script never opens the vault.
 
 set -euo pipefail
 
 VAULT_NAME=""
 PRIVATE_KEY_PATH=""
-SECRET_NAME="github-app-private-key"
-OPERATOR_CIDR=""
-RULE_ADDED="false"
-PUBLIC_ACCESS_CHANGED="false"
-ORIGINAL_PUBLIC_ACCESS=""
-ROLE_ADDED="false"
+KEY_NAME="github-app-signing-key"
+FORCE="false"
 OPERATOR_OBJECT_ID=""
 VAULT_RESOURCE_ID=""
+ROLE_ASSIGNMENT_ID=""
 
 usage() {
-    echo "Usage: $0 --vault-name NAME --private-key PATH [--secret-name NAME] [--operator-cidr IPv4/32]" >&2
+    cat >&2 <<EOF
+Usage: $0 --vault-name NAME --private-key PATH [--key-name NAME] [--force]
+
+Run from a host that already has private network access to the Scenario C vault.
+--force imports a new version when the named key already exists.
+EOF
     exit 1
 }
 
 cleanup() {
-    if [[ "${PUBLIC_ACCESS_CHANGED}" == "true" ]]; then
-        az keyvault update \
-            --name "${VAULT_NAME}" \
-            --public-network-access "${ORIGINAL_PUBLIC_ACCESS}" \
-            --output none >/dev/null 2>&1 || true
-    fi
-    if [[ "${RULE_ADDED}" == "true" ]]; then
-        az keyvault network-rule remove \
-            --name "${VAULT_NAME}" \
-            --ip-address "${OPERATOR_CIDR}" \
-            --output none >/dev/null 2>&1 || true
-    fi
-    if [[ "${ROLE_ADDED}" == "true" ]]; then
-        az role assignment delete \
-            --assignee-object-id "${OPERATOR_OBJECT_ID}" \
-            --role "Key Vault Secrets Officer" \
-            --scope "${VAULT_RESOURCE_ID}" \
-            --output none >/dev/null 2>&1 || true
+    if [[ -n "${ROLE_ASSIGNMENT_ID}" ]]; then
+        local removed="false"
+        for _ in $(seq 1 6); do
+            az role assignment delete \
+                --ids "${ROLE_ASSIGNMENT_ID}" \
+                --output none >/dev/null 2>&1 || true
+            remaining="$(az role assignment list \
+                --assignee "${OPERATOR_OBJECT_ID}" \
+                --scope "${VAULT_RESOURCE_ID}" \
+                --role "Key Vault Crypto Officer" \
+                --query "[?id=='${ROLE_ASSIGNMENT_ID}'] | length(@)" \
+                --output tsv 2>/dev/null || echo 1)"
+            if [[ "${remaining}" == "0" ]]; then
+                removed="true"
+                break
+            fi
+            sleep 5
+        done
+        if [[ "${removed}" != "true" ]]; then
+            echo "Could not remove temporary Key Vault Crypto Officer role assignment '${ROLE_ASSIGNMENT_ID}'." >&2
+            exit 1
+        fi
     fi
 }
 
@@ -49,94 +52,112 @@ trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --vault-name)    VAULT_NAME="$2"; shift 2 ;;
-        --private-key)   PRIVATE_KEY_PATH="$2"; shift 2 ;;
-        --secret-name)   SECRET_NAME="$2"; shift 2 ;;
-        --operator-cidr) OPERATOR_CIDR="$2"; shift 2 ;;
-        -h|--help)       usage ;;
+        --vault-name)  VAULT_NAME="$2"; shift 2 ;;
+        --private-key) PRIVATE_KEY_PATH="$2"; shift 2 ;;
+        --key-name)    KEY_NAME="$2"; shift 2 ;;
+        --force)       FORCE="true"; shift ;;
+        -h|--help)     usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
 done
 
 [[ -n "${VAULT_NAME}" && -n "${PRIVATE_KEY_PATH}" ]] || usage
-[[ -f "${PRIVATE_KEY_PATH}" ]] || { echo "Private-key file not found: ${PRIVATE_KEY_PATH}" >&2; exit 1; }
-[[ "${SECRET_NAME}" =~ ^[0-9A-Za-z-]{1,127}$ ]] || { echo "Invalid Key Vault secret name." >&2; exit 1; }
-
-if ! grep -q -- "BEGIN RSA PRIVATE KEY\|BEGIN PRIVATE KEY" "${PRIVATE_KEY_PATH}"; then
+[[ -f "${PRIVATE_KEY_PATH}" ]] || {
+    echo "Private-key file not found: ${PRIVATE_KEY_PATH}" >&2
+    exit 1
+}
+readonly KEY_NAME_PATTERN='^[0-9A-Za-z-]{1,127}$'
+[[ "${KEY_NAME}" =~ ${KEY_NAME_PATTERN} ]] || {
+    echo "Invalid Key Vault key name." >&2
+    exit 1
+}
+grep -q -- "BEGIN RSA PRIVATE KEY\|BEGIN PRIVATE KEY" "${PRIVATE_KEY_PATH}" || {
     echo "The supplied file does not look like a PEM private key." >&2
     exit 1
-fi
+}
 
-command -v az >/dev/null 2>&1 || { echo "Required command 'az' was not found on PATH." >&2; exit 1; }
-az account show --output none >/dev/null 2>&1 || { echo "Not logged in to Azure. Run 'az login' first." >&2; exit 1; }
+command -v az >/dev/null 2>&1 || {
+    echo "Required command 'az' was not found on PATH." >&2
+    exit 1
+}
+az account show --output none >/dev/null 2>&1 || {
+    echo "Not logged in to Azure. Run 'az login' first." >&2
+    exit 1
+}
 
 OPERATOR_OBJECT_ID="$(az ad signed-in-user show --query id --output tsv)"
 VAULT_RESOURCE_ID="$(az keyvault show --name "${VAULT_NAME}" --query id --output tsv)"
 EXISTING_ROLE="$(az role assignment list \
     --assignee "${OPERATOR_OBJECT_ID}" \
     --scope "${VAULT_RESOURCE_ID}" \
-    --role "Key Vault Secrets Officer" \
-    --query "[0].id" --output tsv)"
+    --role "Key Vault Crypto Officer" \
+    --query "[0].id" \
+    --output tsv)"
 if [[ -z "${EXISTING_ROLE}" ]]; then
-    az role assignment create \
+    ROLE_ASSIGNMENT_ID="$(az role assignment create \
         --assignee-object-id "${OPERATOR_OBJECT_ID}" \
         --assignee-principal-type User \
-        --role "Key Vault Secrets Officer" \
+        --role "Key Vault Crypto Officer" \
         --scope "${VAULT_RESOURCE_ID}" \
-        --output none
-    ROLE_ADDED="true"
+        --query id \
+        --output tsv)"
 fi
 
-if [[ -n "${OPERATOR_CIDR}" ]]; then
-    if [[ ! "${OPERATOR_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]]; then
-        echo "--operator-cidr must be a valid IPv4 CIDR, normally your public IP followed by /32." >&2
-        exit 1
-    fi
-
-    ORIGINAL_PUBLIC_ACCESS="$(az keyvault show \
-        --name "${VAULT_NAME}" \
-        --query properties.publicNetworkAccess \
-        --output tsv)"
-    ORIGINAL_PUBLIC_ACCESS="${ORIGINAL_PUBLIC_ACCESS:-Disabled}"
-
-    EXISTING_RULE="$(az keyvault show \
-        --name "${VAULT_NAME}" \
-        --query "properties.networkAcls.ipRules[?value=='${OPERATOR_CIDR}'].value | [0]" \
-        --output tsv)"
-    if [[ -z "${EXISTING_RULE}" ]]; then
-        az keyvault network-rule add \
-            --name "${VAULT_NAME}" \
-            --ip-address "${OPERATOR_CIDR}" \
-            --output none
-        RULE_ADDED="true"
-    fi
-
-    if [[ "${ORIGINAL_PUBLIC_ACCESS}" != "Enabled" ]]; then
-        az keyvault update \
-            --name "${VAULT_NAME}" \
-            --public-network-access Enabled \
-            --output none
-        PUBLIC_ACCESS_CHANGED="true"
-    fi
-fi
-
-echo "==> Uploading GitHub App private key to Key Vault"
-uploaded="false"
+key_state=""
 for _ in $(seq 1 12); do
-    if az keyvault secret set \
+    set +e
+    key_error="$(az keyvault key show \
         --vault-name "${VAULT_NAME}" \
-        --name "${SECRET_NAME}" \
-        --file "${PRIVATE_KEY_PATH}" \
+        --name "${KEY_NAME}" \
+        --output none 2>&1 >/dev/null)"
+    key_status=$?
+    set -e
+
+    if [[ ${key_status} -eq 0 ]]; then
+        key_state="exists"
+        break
+    fi
+    if grep -Eqi '(KeyNotFound|not found|status code: 404|\(404\))' <<< "${key_error}"; then
+        key_state="absent"
+        break
+    fi
+    if grep -Eqi '(Forbidden|AuthorizationFailed|status code: 403|\(403\))' <<< "${key_error}"; then
+        sleep 5
+        continue
+    fi
+
+    echo "Could not verify whether key '${KEY_NAME}' exists: ${key_error}" >&2
+    exit 1
+done
+
+[[ -n "${key_state}" ]] || {
+    echo "Key Vault Crypto Officer access did not become effective; refusing to import without verifying key existence." >&2
+    exit 1
+}
+if [[ "${key_state}" == "exists" && "${FORCE}" != "true" ]]; then
+    echo "Key '${KEY_NAME}' already exists. Use --force only when rotating the GitHub App key." >&2
+    exit 1
+fi
+
+echo "==> Importing non-exportable GitHub App signing key"
+imported="false"
+for _ in $(seq 1 12); do
+    if az keyvault key import \
+        --vault-name "${VAULT_NAME}" \
+        --name "${KEY_NAME}" \
+        --pem-file "${PRIVATE_KEY_PATH}" \
+        --ops sign \
+        --exportable false \
         --output none 2>/dev/null; then
-        uploaded="true"
+        imported="true"
         break
     fi
     sleep 5
 done
 
-[[ "${uploaded}" == "true" ]] || {
-    echo "Key upload failed. Run from the private runner network or supply a permitted --operator-cidr." >&2
+[[ "${imported}" == "true" ]] || {
+    echo "Key import failed. Run this script from the private runner network and verify Key Vault RBAC propagation." >&2
     exit 1
 }
 
-echo "GitHub App private key stored as secret '${SECRET_NAME}'."
+echo "Imported key '${KEY_NAME}' with sign-only operations. The private key cannot be downloaded."

@@ -1,8 +1,9 @@
 ###############################################################################
-# Container Apps environment + ContosoPay apps and optional remediation broker.
-# `frontend` has external ingress (R4); the optional SRE remediation broker is
-# the sole exception and is public only for the managed SRE Agent, protected by
-# Microsoft Entra auth. Other apps are internal. TLS is enforced everywhere.
+# Container Apps environment + ContosoPay apps and Scenario C broker.
+# The frontend is external; other workload apps are internal. Scenario C keeps
+# the environment public because managed SRE Agent cannot use a direct private
+# endpoint to a single Container App. Its broker uses external TLS ingress with
+# Easy Auth and exact caller-principal validation instead of broad VNet reach.
 ###############################################################################
 
 resource "azurerm_container_app_environment" "this" {
@@ -10,7 +11,7 @@ resource "azurerm_container_app_environment" "this" {
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
-  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
+  infrastructure_subnet_id   = local.profile.private_network_enabled ? azurerm_subnet.container_apps[0].id : null
   public_network_access      = "Enabled"
   tags                       = local.tags
 
@@ -122,7 +123,7 @@ resource "azurerm_container_app" "app" {
 
     container {
       name   = each.key
-      image  = "${azurerm_container_registry.this.login_server}/${each.key}:${var.image_tag}"
+      image  = "${azurerm_container_registry.this.login_server}/${each.key}@${var.image_digests[each.key]}"
       cpu    = each.value.cpu
       memory = each.value.memory
 
@@ -175,14 +176,16 @@ resource "azurerm_container_app" "app" {
 }
 
 ###############################################################################
-# Optional public Streamable-HTTP remediation broker (R4 exception). It reuses
-# the VNet-integrated environment but requires external ingress because Azure
-# SRE Agent is managed. Easy Auth rejects unauthenticated traffic; the service
-# also verifies x-ms-client-principal-id against the exact Scenario B UAMI.
+# Scenario C Streamable-HTTP broker. Azure Container Apps does not support a
+# per-app private endpoint, and making the entire environment internal would
+# also remove the required public frontend. The supported narrow design is an
+# external HTTPS ingress protected by Easy Auth. Easy Auth restricts the token
+# to the exact SRE Agent principal and the service independently verifies the
+# Entra JWT signature, issuer, audience, expiry, and object ID.
 ###############################################################################
 
 resource "azurerm_container_app" "sre_remediation_broker" {
-  count = var.deploy_apps && var.enable_sre_remediation_broker ? 1 : 0
+  count = var.deploy_apps && local.profile.broker_enabled ? 1 : 0
 
   name                         = "ca-sre-remediation-${local.suffix}"
   container_app_environment_id = azurerm_container_app_environment.this.id
@@ -213,12 +216,13 @@ resource "azurerm_container_app" "sre_remediation_broker" {
   }
 
   template {
+    # Process-local issue-creation coalescing is authoritative at one replica.
     min_replicas = 1
     max_replicas = 1
 
     container {
       name   = "sre-remediation-mcp"
-      image  = "${azurerm_container_registry.this.login_server}/sre-remediation-mcp:${var.image_tag}"
+      image  = "${azurerm_container_registry.this.login_server}/sre-remediation-mcp@${var.image_digests["sre-remediation-mcp"]}"
       cpu    = var.container_cpu
       memory = var.container_memory
 
@@ -231,12 +235,18 @@ resource "azurerm_container_app" "sre_remediation_broker" {
         value = local.sre_remediation_allowed_caller_principal_id
       }
       env {
-        name  = "KEY_VAULT_URL"
-        value = azurerm_key_vault.this.vault_uri
+        name  = "ENTRA_TENANT_ID"
+        value = data.azurerm_client_config.current.tenant_id
       }
       env {
-        name  = "GITHUB_APP_PRIVATE_KEY_SECRET_NAME"
-        value = var.sre_remediation_github_app_private_key_secret_name
+        name  = "ENTRA_TOKEN_AUDIENCE"
+        value = var.sre_remediation_entra_token_audience
+      }
+      # Nonsecret, unversioned key URI only. The RSA key is imported manually;
+      # Terraform neither creates nor reads private key material.
+      env {
+        name  = "GITHUB_APP_PRIVATE_KEY_KEY_URI"
+        value = "${azurerm_key_vault.this.vault_uri}keys/${var.sre_remediation_github_app_private_key_name}"
       }
       env {
         name  = "GITHUB_APP_ID"
@@ -290,7 +300,7 @@ resource "azurerm_container_app" "sre_remediation_broker" {
 }
 
 resource "azapi_resource" "sre_remediation_broker_auth" {
-  count = var.deploy_apps && var.enable_sre_remediation_broker ? 1 : 0
+  count = var.deploy_apps && local.profile.broker_enabled ? 1 : 0
 
   type      = "Microsoft.App/containerApps/authConfigs@2024-03-01"
   name      = "current"
@@ -313,6 +323,11 @@ resource "azapi_resource" "sre_remediation_broker_auth" {
       httpSettings = {
         requireHttps = true
       }
+      login = {
+        tokenStore = {
+          enabled = true
+        }
+      }
       identityProviders = {
         azureActiveDirectory = {
           enabled           = true
@@ -323,6 +338,11 @@ resource "azapi_resource" "sre_remediation_broker_auth" {
           }
           validation = {
             allowedAudiences = [var.sre_remediation_entra_token_audience]
+            defaultAuthorizationPolicy = {
+              allowedPrincipals = {
+                identities = [local.sre_remediation_allowed_caller_principal_id]
+              }
+            }
           }
         }
       }

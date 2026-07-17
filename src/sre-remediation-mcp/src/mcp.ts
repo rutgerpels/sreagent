@@ -32,7 +32,7 @@ export function createMcpServer(client: RemediationClient): McpServer {
     {
       title: 'Request slow-leak remediation PR',
       description:
-        'Creates the fixed, allowlisted Scenario B issue that asks GitHub Actions to open an unmerged slow-memory-leak remediation PR. Takes no repository content or shell input.',
+        'Creates the fixed, allowlisted Scenario C issue that asks GitHub Actions to open an unmerged slow-memory-leak remediation PR. Takes no repository content or shell input.',
       inputSchema: {},
       annotations: {
         destructiveHint: false,
@@ -62,7 +62,7 @@ export function createMcpServer(client: RemediationClient): McpServer {
     {
       title: 'Check slow-leak remediation status',
       description:
-        'Returns only validated status markers written by the trusted GitHub Actions workflow for a Scenario B remediation issue.',
+        'Returns only validated status markers written by the trusted GitHub Actions workflow for a Scenario C remediation issue.',
       inputSchema: {
         issueNumber: z.number().int().positive()
       },

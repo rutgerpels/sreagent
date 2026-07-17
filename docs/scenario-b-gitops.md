@@ -1,738 +1,297 @@
-# Scenario B — Guarded GitOps with PAT and public endpoints
+# Scenario B: public-endpoint GitOps
 
-This guide takes you from an empty subscription to a working demo that is run
-**entirely through CI/CD**, the way a real DevOps organisation operates. This
-mode intentionally uses the simplest GitHub authoring path: a short-lived,
-repository-scoped PAT in the SRE Agent GitHub MCP connector. The fault is
-switched on by merging a Pull Request, and the **Azure SRE Agent remediates by
-opening its own Pull Request** — it never touches the live Azure resources
-directly.
+Scenario B is the fast enterprise GitOps demo. The Azure SRE Agent uses the
+Terraform-derived **Low / Reader / Review** profile. It investigates Azure but
+does not mutate the workload. Instead, the built-in GitHub MCP connector opens a
+remediation Pull Request under a hard tool policy.
 
-Follow it from top to bottom; everything you need is here. For deeper background
-on any agent step, see the [Azure SRE Agent reference](sre-agent-setup.md).
+This scenario has no custom broker and does not use the
+`sre-remediation-pr` issue workflow. Those belong only to Scenario C.
 
-**The story this scenario tells:** infrastructure and application both ship
-through pipelines. A change enters as a Pull Request, CI deploys it, memory
-starts leaking, an alert fires, and the SRE Agent — which has **Reader-level
-workload access** and a tool policy denying direct Azure changes — investigates,
-finds the Pull Request that caused it, and remediates by **opening a Pull
-Request** of its own. A human reviews and merges that PR, and the pipeline
-deploys the fix.
+## Security and operating model
 
-Use [Scenario C](scenario-c-private-gitops.md) instead when you want the
-enterprise version with SRE Agent Azure VNet integration, a private Key Vault,
-and a BYO GitHub App.
+| Concern | Scenario B behavior |
+| --- | --- |
+| Terraform profile | `scenario = "B"` |
+| SRE Agent access | Low; Reader on the demo resource group |
+| Run mode | Review |
+| Endpoints | Public state, ACR, and Key Vault endpoints secured with RBAC and TLS |
+| Runner | GitHub-hosted workflow jobs or local deploy wrapper |
+| Code context | Code Access |
+| GitHub write path | Built-in GitHub MCP connector with a short-lived fine-grained PAT |
+| Broker | None |
+| Incident | Pull Request sets `enable_slow_leak = true` |
+| Remediation | GitHub MCP opens a Pull Request setting the flag to `false` |
 
-You will work through seven parts:
-
-1. [Bootstrap the pipeline (one-time)](#part-1--bootstrap-the-pipeline-one-time)
-2. [Deploy the environment with CI/CD](#part-2--deploy-the-environment-with-cicd)
-3. [Create the SRE Agent](#part-3--create-the-sre-agent)
-4. [Connect the agent to your code, resources, logs and incidents](#part-4--connect-the-agent)
-5. [Apply the GitOps guardrails and behaviour](#part-5--apply-the-gitops-guardrails)
-6. [Run the incident and watch the fix](#part-6--run-the-incident)
-7. [Reset and clean up](#part-7--reset-and-clean-up)
-
----
-
-## What is automated, and what is not
-
-A useful part of this scenario is seeing exactly where the GitOps boundary sits —
-especially for the SRE Agent. Three categories:
-
-| Category | What it covers | How it is done |
-| --- | --- | --- |
-| **Automated in CI/CD (GitOps)** | All ContosoPay infrastructure (resource group, registry, Key Vault, telemetry, Container Apps, alert, Grafana), the application images, and the planted-fault flag. Optionally the SRE Agent resource, its access level, and its Azure Monitor wiring. | Terraform + GitHub Actions. Changes ship by merging Pull Requests. |
-| **One-time bootstrap seed (cannot be GitOps)** | The private Linux runner and its VNet, the identity that CI signs in as, the federated credentials that trust this repository, and the GitHub Actions variables that point at them. | Created once by hand (Part 1). This is the classic chicken-and-egg: the runner and identity must exist before any pipeline can run. The first deploy creates the remote state account and its private endpoint automatically. |
-| **SRE Agent portal-only (no IaC equivalent today)** | GitHub Code Access, the PAT-based GitHub MCP connector, the tool access policy, the custom agent and its knowledge, and the incident response plan. | Interactive steps in the agent portal (Parts 4 and 5). |
-
-So for the SRE Agent specifically: **the agent resource, its permissions, and its
-connection to Azure Monitor can be Infrastructure as Code** (see
-[the reference, §7](sre-agent-setup.md#7-optional-provisioning-the-agent-with-terraform)),
-while **Code Access, GitHub MCP selection, tool policy, custom-agent
-behaviour, and the response plan are configured in the portal** because they are
-interactive, identity-bound steps.
-
----
+Code Access and the write connector are separate. Code Access indexes the
+repository and correlates incidents to commits. The GitHub MCP connector provides
+only the selected branch, file, and Pull Request tools.
 
 ## Before you begin
 
-Because the heavy lifting happens in CI, you need very little installed locally:
+You need:
 
-- An Azure subscription where you have **Owner** (or **Contributor** plus
-  **User Access Administrator**), so you can create the deployment identity and
-  grant it roles in Part 1.
-- The [Azure CLI](https://learn.microsoft.com/cli/azure/) and the
-  [GitHub CLI](https://cli.github.com/) (`gh`), both signed in.
-- A shell to run the Part 1 commands: **PowerShell 7+** on Windows, or **Bash** on
-  macOS, Linux, WSL, or [Azure Cloud Shell](https://shell.azure.com). (On Windows,
-  avoid Git Bash for these `az` commands.)
-- A clone of this repository, and permission to run GitHub Actions and to open and
-  merge Pull Requests on it.
-- A persistent Linux self-hosted runner registered to the repository with
-  `self-hosted`, `Linux`, `X64`, `azure-private`, and `contosopay` labels. The runner
-  must have Docker and Azure CLI installed and outbound HTTPS access to GitHub.
-- An Azure VNet for that runner with a dedicated private-endpoint subnet. The defaults
-  are resource group `agentrg`, VNet `agent-vnet`, and subnet `private-endpoints`.
+- an Azure subscription and enough access to deploy resources and role
+  assignments;
+- repository permission to configure Actions variables and workflows;
+- an OIDC deployment identity for GitHub Actions;
+- permission to create and revoke a fine-grained GitHub PAT;
+- permission to create or configure an Azure SRE Agent.
 
-You do **not** need Terraform or Docker locally — the pipeline runs those for you.
+The healthy baseline on `main` must contain:
 
-Throughout this guide, replace `<your-org>/<your-repo>` with your repository.
+```hcl
+enable_slow_leak = false
+```
 
----
+in `infra/leak.auto.tfvars`.
 
-## Part 1 — Bootstrap the pipeline (one-time)
+## 1. Configure GitHub Actions
 
-This is the one part that cannot itself be GitOps: before any pipeline can deploy
-Azure resources, it needs an identity to sign in as. You create that identity
-once, let GitHub Actions authenticate to it with OpenID Connect (so there are no
-stored secrets), and record three variables in the repository.
+Set these nonsecret repository variables:
 
-**What you will do:** create a deployment identity, trust this repository, grant
-it access, and set the GitHub Actions variables.
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `DEPLOYMENT_SCENARIO=B`
+- `SRE_AGENT_SPONSOR_GROUP_ID`
 
-Use **one** of the two blocks below depending on your shell. They do the same
-thing: sign in, create an app registration, add federated credentials for the
-`main` branch and for pull requests, grant the identity access, and record the
-three variables the workflows read. Replace `<your-org>/<your-repo>` and
-`<your-subscription>` first.
+If the defaults are changed, also set `TF_PREFIX` and `TF_ENVIRONMENT`. Keep the
+same values for deployment, apply, app deployment, and destruction.
 
-> **Which block do I use?**
-> - On **macOS, Linux, WSL, or Azure Cloud Shell**, use the **Bash** block.
-> - On **Windows**, use the **PowerShell** block.
->
-> Bash and PowerShell assign variables differently — `SUB=$(az ...)` is Bash syntax
-> and fails in PowerShell with *"is not recognized as a name of a cmdlet"*; in
-> PowerShell you write `$SUB = az ...` instead.
->
-> **Windows users:** run these in **PowerShell**, **WSL**, or **Azure Cloud Shell**
-> (<https://shell.azure.com>). Avoid Git Bash for this step — it rewrites
-> `/subscriptions/...` scopes and mangles `az` output, which produces confusing
-> *"MissingSubscription"* errors.
+The Azure identity trusts the repository through GitHub Actions OIDC. Do not
+create a client secret and do not add a credentials JSON secret. Grant only the
+control-plane and role-assignment access needed for this demo, and scope it as
+narrowly as your bootstrap design permits.
 
-### Bash (macOS / Linux / WSL / Azure Cloud Shell)
+## 2. Deploy an isolated Scenario B environment
+
+Run the manual **deploy** workflow with Scenario `B`. The deploy and subsequent
+`apply-infra` and `deploy-apps` work runs on `ubuntu-latest`.
+
+The workflow:
+
+1. validates the selected scenario and OIDC variables;
+2. creates the scenario-isolated remote backend;
+3. applies platform resources;
+4. builds images tagged with the full 40-character `github.sha`;
+5. pushes through authenticated ACR access;
+6. applies the Container Apps and alert;
+7. optionally opens the incident Pull Request.
+
+The state account hash includes subscription, prefix, and `B`; the state key is:
+
+```text
+<prefix>-B-<environment>.tfstate
+```
+
+Do not point Scenario B at state created by A or C. To change profiles, deploy a
+new isolated profile and explicitly destroy the old profile later.
+
+### Local alternative
+
+The local wrapper also supports B and defaults to the current full commit SHA:
 
 ```bash
 az login
-az account set --subscription "<your-subscription>"
-
-REPO="<your-org>/<your-repo>"
-SUB=$(az account show --query id -o tsv)
-TENANT=$(az account show --query tenantId -o tsv)
-
-# App registration + service principal
-APP_ID=$(az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv)
-az ad sp create --id "$APP_ID"
-
-# Federated credentials: main branch (workflow_dispatch) and pull requests
-az ad app federated-credential create --id "$APP_ID" --parameters '{
-  "name":"main",
-  "issuer":"https://token.actions.githubusercontent.com",
-  "subject":"repo:'"$REPO"':ref:refs/heads/main",
-  "audiences":["api://AzureADTokenExchange"]
-}'
-az ad app federated-credential create --id "$APP_ID" --parameters '{
-  "name":"pull-request",
-  "issuer":"https://token.actions.githubusercontent.com",
-  "subject":"repo:'"$REPO"':pull_request",
-  "audiences":["api://AzureADTokenExchange"]
-}'
-
-# Access (subscription scope keeps the demo simple)
-az role assignment create --assignee "$APP_ID" --role "Contributor" \
-  --scope "/subscriptions/$SUB"
-az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" \
-  --scope "/subscriptions/$SUB"
-az role assignment create --assignee "$APP_ID" --role "User Access Administrator" \
-  --scope "/subscriptions/$SUB"
-
-# GitHub Actions variables the workflows read
-gh variable set AZURE_CLIENT_ID       --repo "$REPO" --body "$APP_ID"
-gh variable set AZURE_TENANT_ID       --repo "$REPO" --body "$TENANT"
-gh variable set AZURE_SUBSCRIPTION_ID --repo "$REPO" --body "$SUB"
+./scripts/deploy.sh --scenario B
 ```
-
-### PowerShell (Windows)
 
 ```powershell
 az login
-az account set --subscription "<your-subscription>"
-
-$REPO   = "<your-org>/<your-repo>"
-$SUB    = az account show --query id -o tsv
-$TENANT = az account show --query tenantId -o tsv
-
-# App registration + service principal
-$APP_ID = az ad app create --display-name "contosopay-gha-deployer" --query appId -o tsv
-az ad sp create --id $APP_ID
-
-# Federated credentials passed as files (avoids cross-shell JSON quoting issues).
-# The backtick before ':' stops PowerShell treating it as a scope/drive separator.
-@"
-{
-  "name": "main",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:$REPO`:ref:refs/heads/main",
-  "audiences": ["api://AzureADTokenExchange"]
-}
-"@ | Set-Content fic-main.json
-az ad app federated-credential create --id $APP_ID --parameters '@fic-main.json'
-
-@"
-{
-  "name": "pull-request",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:$REPO`:pull_request",
-  "audiences": ["api://AzureADTokenExchange"]
-}
-"@ | Set-Content fic-pr.json
-az ad app federated-credential create --id $APP_ID --parameters '@fic-pr.json'
-Remove-Item fic-main.json, fic-pr.json
-
-# Access (subscription scope keeps the demo simple)
-az role assignment create --assignee $APP_ID --role "Contributor" `
-  --scope "/subscriptions/$SUB"
-az role assignment create --assignee $APP_ID --role "Storage Blob Data Contributor" `
-  --scope "/subscriptions/$SUB"
-az role assignment create --assignee $APP_ID --role "User Access Administrator" `
-  --scope "/subscriptions/$SUB"
-
-# GitHub Actions variables the workflows read
-gh variable set AZURE_CLIENT_ID       --repo $REPO --body $APP_ID
-gh variable set AZURE_TENANT_ID       --repo $REPO --body $TENANT
-gh variable set AZURE_SUBSCRIPTION_ID --repo $REPO --body $SUB
+pwsh ./scripts/deploy.ps1 -Scenario B
 ```
 
-In both versions, **Contributor** lets the pipeline create and manage the demo
-resources, **Storage Blob Data Contributor** lets it read and write the Terraform
-state that the first pipeline run creates, and **User Access Administrator** lets
-it assign the managed-identity roles the apps need (for example `AcrPull` and
-`Key Vault Secrets User`). Without **User Access Administrator** the deploy fails
-partway with *"does not have authorization to perform action
-'Microsoft.Authorization/roleAssignments/write'"*.
+The public endpoints make this possible without a private runner. Azure RBAC,
+TLS, managed identities, disabled ACR admin access, and Key Vault purge
+protection still apply.
 
-**Expected outcome:** the repository's **Settings → Secrets and variables →
-Actions → Variables** lists `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
-`AZURE_SUBSCRIPTION_ID`. The pipeline can now authenticate to Azure with no stored
-credentials.
+### Automation profile requirement
 
-The workflows also accept these optional repository variables when the shared
-runner network uses different names or address space:
+Repository variable `DEPLOYMENT_SCENARIO` is mandatory for push-triggered
+`apply-infra` and `deploy-apps` automation. A manual workflow-dispatch scenario
+must match the repository variable. If you intentionally deploy more than one
+profile at once, only the profile named by `DEPLOYMENT_SCENARIO` is the automatic
+push target; operate the others by explicit dispatch.
 
-| Variable | Default |
+### Verify the baseline
+
+1. Open the workflow summary and record the frontend and resource group.
+2. Open the frontend, place an order, and enable steady traffic.
+3. Confirm payment-service memory is stable.
+4. Confirm the effective scenario is `B`.
+
+## 3. Verify and configure the matching SRE Agent
+
+The GitHub deployment workflow provisions the selected Terraform agent resource.
+Open it at <https://sre.azure.com> and complete the manual portal connections.
+For direct Terraform or local-wrapper usage, enable that resource explicitly or
+create the matching agent in the portal.
+
+The effective profile must be:
+
+| Setting | Value |
 | --- | --- |
-| `RUNNER_NETWORK_RG` | `agentrg` |
-| `RUNNER_VNET_NAME` | `agent-vnet` |
-| `RUNNER_PE_SUBNET_NAME` | `private-endpoints` |
-| `APP_VNET_ADDRESS_SPACE` | `10.100.0.0/16` |
-| `APP_PE_SUBNET_PREFIX` | `10.100.0.0/27` |
-| `CONTAINER_APPS_SUBNET_PREFIX` | `10.100.0.64/27` |
+| Access level | **Low** |
+| Workload role | **Reader** |
+| Mode | **Review** |
+| Managed resource | Only the Scenario B demo resource group |
+| Incident platform | Azure Monitor |
 
-The application address space and both subnet prefixes must not overlap the
-runner VNet. The deployment identity also needs permission to create the reverse
-VNet peering in `RUNNER_NETWORK_RG`; the subscription-scoped **Contributor**
-assignment above includes that permission.
+The managed service can require broader monitoring roles for alert lifecycle
+operations. The hard tool policy below remains mandatory because Reader workload
+access and behavioral instructions alone are not the complete enforcement
+boundary.
 
-Migrating an existing environment from the former single-VNet layout replaces
-the Container Apps environment and its private endpoints. Plan for a one-time
-deployment outage; subsequent applies use the peered layout in place.
+## 4. Configure Code Access
 
----
+Under **Builder > Code Access**, connect this repository and wait for indexing to
+start. This connection provides source and deployment context only. Do not assume
+that its sign-in is a Git write credential.
 
-## Part 2 — Deploy the environment with CI/CD
+Official Azure SRE Agent documentation distinguishes
+[Code Access, GitHub Connector, and GitHub MCP](https://learn.microsoft.com/azure/sre-agent/github-connector).
 
-**What you will do:** stand up the entire ContosoPay environment by running a
-GitHub Actions workflow — no local Terraform or Docker.
+## 5. Add the built-in GitHub MCP connector
 
-1. In GitHub, open the **Actions** tab, select the **deploy** workflow, and choose
-   **Run workflow** (you can keep the default prefix, environment, and region, or
-   override them).
+Create a fine-grained PAT specifically for this demonstration:
 
-   For an existing environment, the workflow ignores a conflicting region input
-   and reuses the immutable region stored in Terraform state.
+- owner: the account that owns this repository;
+- repository access: only this repository;
+- expiration: same day or the shortest practical lifetime;
+- permissions: only the minimum Contents and Pull Requests read/write access
+  required by the selected tools, plus Metadata read.
 
-**What is happening:** the `deploy` workflow runs on the self-hosted runner and
-signs in with the identity from Part 1. It creates the remote Terraform state
-storage and Blob private endpoint, then creates a regional application VNet with
-global peering to the runner VNet. Private Key Vault and Premium ACR endpoints
-live in the application VNet and are reachable from both Container Apps and the
-runner. The workflow then builds and pushes the images and deploys the
-application. No one runs anything against the live environment by hand.
+Do not put the PAT in Terraform, Key Vault, GitHub Actions, repository variables,
+workflow secrets, notes, or command history.
 
-**Expected outcome:** both the `deploy` and `arm-incident` jobs finish green, and
-an incident Pull Request appears in GitHub. Open the run summary to find the
-deployed environment's details:
+In the SRE Agent portal:
 
-| Output | Example |
-| --- | --- |
-| Frontend URL | `https://frontend.<region>.azurecontainerapps.io` |
-| Resource group | `rg-contosopay-demo-<suffix>` |
+1. open **Builder > Connectors > Add connector**;
+2. select the built-in GitHub MCP connector;
+3. use PAT authentication and enter the token interactively;
+4. enable only tools needed to read the target file, create a branch, commit that
+   one-file change, and open an unmerged Pull Request;
+5. disable merge, approval, workflow administration, repository administration,
+   secret management, and unrelated issue tools.
 
-> **The demo incident is pre-armed for you.** At the end of a successful `deploy`
-> run, a follow-up job automatically opens the **incident Pull Request** that
-> switches the memory-leak fault on (`enable_slow_leak = true`). It waits,
-> unmerged, in the **Pull requests** tab — the run summary links to it. When you
-> reach [Part 6](#part-6--run-the-incident), you just review and merge it. (To opt
-> out, run `deploy` with **Open incident PR** set to `false`.)
->
-> If `arm-incident` reports that the flag is already `true`, `main` contains an
-> armed incident instead of the required healthy baseline. Set
-> `enable_slow_leak = false` in `infra/leak.auto.tfvars` through a Pull Request,
-> merge it, and rerun `deploy`. New workflow versions fail clearly in this state
-> instead of completing green without a Pull Request.
+GitHub recommends fine-grained PATs over classic PATs and allows restriction to a
+single owner, repository set, and permission set. See
+[Managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
 
-2. The run summary also lists a small set of variables for the **deploy-apps**
-   workflow (which ships future application-code changes). Set them once so that
-   pipeline is ready too:
+## 6. Apply the hard tool policy
 
-   ```bash
-   gh variable set AZURE_RESOURCE_GROUP --repo "$REPO" --body "<resource group from summary>"
-   gh variable set ACR_NAME --repo "$REPO" --body "<ACR_NAME from summary>"
-   gh variable set FRONTEND_APP --repo "$REPO" --body "<FRONTEND_APP from summary>"
-   gh variable set CHECKOUT_APP --repo "$REPO" --body "<CHECKOUT_APP from summary>"
-   gh variable set PAYMENT_APP --repo "$REPO" --body "<PAYMENT_APP from summary>"
-   ```
+Apply the repository policy in
+[`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)
+at global scope. Verify that it:
 
-3. Open the **Frontend URL**, place a test order, and tick **"Generate steady
-   traffic"** so Application Insights has a healthy baseline to compare against.
+- allows Azure and Kubernetes read diagnostics needed by the demo;
+- denies Azure and Kubernetes write tools;
+- denies terminal and shell fallback;
+- denies Terraform apply and destroy paths.
 
-> From now on, infrastructure and flag changes deploy automatically when merged to
-> `main`: the **apply-infra** workflow runs `terraform apply`, and the
-> **deploy-apps** workflow rebuilds images when application code under `src/`
-> changes. The remote-state location is computed automatically, so there is
-> nothing else to copy between runs.
+Do not rely only on the custom-agent prompt. Tool policy is the enforced GitOps
+boundary. Test it before the demo by asking the agent to restart
+payment-service directly. It must refuse the Azure mutation and offer a Pull
+Request path instead.
 
----
+## 7. Configure GitOps behavior
 
-## Part 3 — Create the SRE Agent
-
-**What you will do:** create the managed SRE Agent that will watch this
-environment.
-
-1. Go to <https://sre.azure.com> and sign in with your Azure account.
-2. Start the create-agent wizard and fill in the **Basics**:
-
-   | Field | Value |
-   | --- | --- |
-   | **Subscription** | The subscription that owns `rg-contosopay-demo-<suffix>`. |
-   | **Resource group** | Create a new, dedicated group such as `rg-sre-agent`. |
-   | **Agent name** | A name of your choice, for example `contosopay-sre-agent`. |
-   | **Region** | **Sweden Central**, to match the demo and stay inside the EU Data Boundary. |
-   | **Application Insights** | Create new (this is the agent's own telemetry). |
-
-3. Review and create.
-
-**Expected outcome:** the agent's status becomes **Succeeded**.
-
-> Prefer to provision the agent as code? The agent resource, its access level, and
-> its Azure Monitor wiring can be created by Terraform instead — set
-> `enable_sre_agents = true` in `terraform.tfvars` and let the pipeline apply it.
-> The portal steps in Parts 4 and 5 still apply.
-
----
-
-## Part 4 — Connect the agent
-
-Scenario B deliberately uses the fast public-endpoint setup: Code Access for
-repository indexing, plus the GitHub MCP connector with a short-lived PAT for
-branch/file/PR authoring. This keeps the demo easy to run while still showing the
-important GitOps guardrail: the agent opens a Pull Request instead of mutating
-Azure directly.
-
-Use [Scenario C](scenario-c-private-gitops.md) if you need private Key Vault
-access, BYO GitHub App credentials, and SRE Agent Azure VNet integration.
-
-Before continuing, confirm `.github/workflows/apply-infra.yml` is present on the
-repository's default branch.
-
-### 4a. Connect Code Access
-
-1. In SRE Agent, open **Builder → Code Access → Add repositories**.
-2. Choose **GitHub**, enter `github.com`, continue to **Authenticate**, and use
-   **Your account**.
-3. Add this repository and save.
-
-**Expected outcome:** Code Access shows the repository connected and indexing.
-This gives the agent code context only; it is not used for Git push or Pull
-Request authoring in this scenario.
-
-### 4b. Add the PAT-based GitHub MCP connector
-
-This is the intentional shortcut for Scenario B. The tradeoff is that the SRE
-Agent connector holds a GitHub PAT with repository write permissions for the
-duration of the demo.
-
-1. In GitHub, create a **fine-grained personal access token**:
-   - **Resource owner:** the repository owner;
-   - **Repository access:** **Only select repositories**, then choose this repo;
-   - **Expiration:** as short as possible, ideally same day;
-   - **Repository permissions:** **Contents: Read and write**, **Pull requests:
-     Read and write**, and **Metadata: Read-only**.
-2. Copy the token once. Do not store it in the repository, Terraform variables,
-   Key Vault, workflow secrets, shell history, or notes.
-3. Open **Builder → Connectors → Add connector → MCP → GitHub**.
-4. Use the wizard's default GitHub MCP server URL
-   `https://api.githubcopilot.com/mcp/`, select **PAT / API key**
-   authentication, and paste the token.
-5. Save the connector, then open **Capabilities → Tools → MCP servers +
-   services** and expand the GitHub MCP server.
-6. Enable only the minimum GitHub tools needed to read repository content, create
-   a branch, update one file, create a commit, and open a Pull Request. Do not
-   enable repository administration, workflow dispatch, issue deletion, secret
-   management, or merge/approve tools.
-7. Continue with [4c. Grant Reader-level workload access](#4c-grant-reader-level-workload-access).
-8. In Part 5b, use
+1. Create the `gitops-remediation` custom agent from
    [`agent/gitops-remediation-agent-github.md`](../agent/gitops-remediation-agent-github.md).
-9. After the demo, revoke the PAT in GitHub under **Settings → Developer
-   settings → Personal access tokens → Fine-grained tokens**.
+2. Assign only Code Access/Azure read tools and the minimum built-in GitHub MCP
+   branch, file, commit, and Pull Request tools.
+3. Add
+   [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md)
+   as knowledge.
+4. Connect the Scenario B Log Analytics workspace and Application Insights
+   resource.
+5. Connect Azure Monitor as the incident platform.
+6. Create a response plan for the Sev2 payment-memory alert, route it to
+   `gitops-remediation`, and keep **Review** mode.
 
-> Keep the global tool access policy in Part 5a even with the PAT shortcut. It
-> still blocks terminal fallback and direct Azure/Kubernetes/Terraform writes.
+The response plan should explicitly require:
 
-### 4c. Grant Reader-level workload access
+- evidence before remediation;
+- no direct Azure, Kubernetes, terminal, or Terraform mutation;
+- exactly one change:
+  `infra/leak.auto.tfvars` from `enable_slow_leak = true` to `false`;
+- an unmerged Pull Request for human review.
 
-**What you will do:** let the agent investigate the demo resource group without
-workload contributor roles — that is the point of this scenario.
+## 8. Run the incident
 
-1. On the setup page, find the **Azure Resources** card and select **+**.
-2. Choose **Resource groups** and select **`rg-contosopay-demo-<suffix>`**.
-3. Select the **Reader** permission level. Azure SRE Agent assigns its core
-   monitoring roles automatically, including **Monitoring Contributor** at
-   subscription scope so it can acknowledge and close alerts. Do not select the
-   **Privileged** permission level. See
-   [Agent permissions in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/permissions)
-   for the current role list and scopes.
-
-**Expected outcome:** the **Azure Resources** card lists the demo resource group
-with Reader-level workload access. Monitoring Contributor can change alert
-lifecycle and monitoring settings, so the required tool policy in Part 5a
-provides the second boundary against direct Azure mutations.
-
-### 4d. Add logs context (App Insights / Log Analytics)
-
-**What you will do:** point the agent at the demo's telemetry so it can read the
-memory trend and correlate it with the code and deployment. On the onboarding
-screen this is the **Logs** card (marked *Recommended* / *Best with code*) — for
-this scenario it is the single most valuable context source after Code.
-
-1. On the setup page, find the **Logs** card and select **+**.
-2. Select the demo's **Log Analytics workspace** `law-<suffix>` (and, if offered,
-   the **Application Insights** resource `appi-<suffix>`) from
-   `rg-contosopay-demo-<suffix>`.
-
-**Expected outcome:** the **Logs** card shows the workspace. The agent can now
-query the payment-service memory metric that drives the incident and line it up
-against the commit/PR that introduced it.
-
-### 4e. Add past-incident context
-
-**What you will do:** let the agent learn from prior investigations so repeat
-incidents resolve faster (the "memory" moment in Part 6). On the onboarding
-screen this is the **Incidents** card.
-
-1. On the setup page, find the **Incidents** card and select **+**.
-2. Connect your incident source (e.g. Azure Monitor / the same subscription).
-
-**Expected outcome:** the **Incidents** card is connected. On a first run it may
-be empty — that is fine; after the demo runs once, re-triggering the leak shows
-the agent recalling the earlier pattern and resolving it more quickly.
-
-### 4f. Connect Azure Monitor
-
-1. Open **Builder → Incident platform**, choose **Azure Monitor**, and save.
-
-**Expected outcome:** Azure Monitor shows as **Connected**, and the agent begins
-polling for fired alerts.
-
----
-
-## Part 5 — Apply the GitOps guardrails
-
-These steps make the agent behave the GitOps way: no workload contributor roles,
-direct Azure mutation tools denied, and remediation routed through a Pull
-Request. The supporting files live in the [`agent/`](../agent/) folder.
-
-> **Refresh the agent after the setup wizard first.** When you finish the
-> onboarding wizard and land inside the agent, the backend can take a few minutes
-> to finish provisioning (settings objects, ETags, tool registry). Editing
-> permissions too soon triggers errors like *"Refusing to PUT global settings
-> without an If-Match ETag."* Do a **hard refresh (Ctrl+F5)** once you're inside
-> the agent before starting Part 5 — it clears most first-run save issues.
-
-### 5a. Block direct Azure changes (required tool access policy)
-
-**What you will do:** apply a global policy that denies Azure write commands, so
-the agent cannot change live resources even if asked.
-
-> **Do not skip this step.** Reader-level agents still receive Monitoring
-> Contributor for the Azure Monitor alert lifecycle, and an administrator can
-> authorize temporary on-behalf-of elevation. The policy below is therefore the
-> explicit GitOps boundary that denies direct Azure, Kubernetes, Terraform, and
-> terminal mutation paths.
->
-> The API method needs a *user* token for the SRE Agent audience. In many tenants
-> **Azure Cloud Shell cannot get one** — its Managed Identity rejects the custom
-> audience, and the `az login --scope …/.default` fallback uses the device-code
-> flow, which **Conditional Access / MFA policies often block** (*"Your sign-in was
-> successful but does not meet the criteria to access this resource"*). If you hit
-> either, use the portal method below instead. Do not proceed with Scenario B
-> until the policy saves successfully.
-
-> **Two different "Settings" — don't confuse them.** The **Settings → Azure
-> Settings / Managed Resources** page (Basics, Managed Resources, Azure Settings,
-> …) is where Part 4c sets the RBAC permission *level* (Reader / Privileged).
-> The *tool access policy* here is a separate allow/deny list at the agent's
-> **global scope**.
-
-Apply it at the **global** scope. In the current SRE Agent portal, open
-**Capabilities → Tools**. The page includes
-**Built-in tools**, **MCP servers + services**, **Custom tools**, **Advanced
-permissions**, and **Approval expiration**. Two tabs are relevant to the global
-tool access policy:
-
-- **Built-in tools** — a grid of per-tool `On/Off` + `Allow/Ask` toggles.
-- **Advanced permissions** — a glob-pattern `allow`/`ask`/`deny` editor, with a
-  **Form** and a **JSON** sub-tab.
-
-On the **Advanced permissions** tab, switch to the **JSON** sub-tab and replace
-the contents with
-[`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json):
-
-```json
-{
-  "allow": ["RunAzCliReadCommands", "RunKubectlReadCommand(kubectl get *)"],
-  "ask": [],
-  "deny": ["RunInTerminal", "RunShellCommand", "RunAzCliWriteCommands", "RunKubectlWriteCommand", "bash(az * create *)", "bash(az * update *)", "bash(az * delete *)", "bash(az * set *)", "bash(az * restart *)", "bash(az * start *)", "bash(az * stop *)", "bash(terraform * apply *)", "bash(terraform * destroy *)"]
-}
-```
-
-This one paste allows read diagnostics and denies terminal/shell fallback plus
-direct Azure/Kubernetes writes and Terraform apply/destroy. GitHub remediation
-remains available through the selected GitHub MCP tools.
-
-<details>
-<summary>Prefer clicking? Do it by hand with the toggles instead.</summary>
-
-**Step 1 — turn off the Azure/Kubernetes *write* tools (Built-in tools tab).**
-Search for each and set it to **`Off`** (or **`Ask`** to keep it but force
-approval):
-
-- `RunAzCliWriteCommands`
-- `RunKubectlWriteCommand`
-
-Keep these **`On` / `Allow`** (safe, read-only):
-
-- `RunAzCliReadCommands`
-- `RunKubectlReadCommand`
-
-**Step 2 — turn off terminal fallback.**
-Set `RunInTerminal` and `RunShellCommand` to **Off**. The agent does not need
-either tool: the GitHub MCP connector performs the one-file Pull Request without
-terminal fallback.
-
-Keep the targeted deny patterns for direct infrastructure changes too:
-
-```
-bash(az * create *)
-bash(az * update *)
-bash(az * delete *)
-bash(terraform * apply *)
-bash(terraform * destroy *)
-```
-
-</details>
-
-> **Do not continue while the policy is unsaved.** Reader-level agents retain
-> Monitoring Contributor for alert lifecycle operations and can request
-> administrator-authorized OBO elevation. The prompt is behavioral guidance, not
-> an enforcement boundary.
-
-**What is happening:** Scenario B has no workload contributor role, and the
-global policy denies direct Azure mutation tools even though the agent retains
-its core monitoring roles.
-
-### 5b. Add the GitOps behaviour (subagent)
-
-1. Open **Builder → Agent Canvas**, then select **Create subagent**. The form that
-   opens is titled **Create a custom agent**.
-2. On the **Form** tab, set **Custom agent name** to
-   `gitops-remediation`. Open
-   [`agent/gitops-remediation-agent-github.md`](../agent/gitops-remediation-agent-github.md)
-   and paste **only the fenced prompt block** (the text inside the ` ```text `
-   fence, from *"You are the ContosoPay GitOps remediation specialist."* to the
-   end) into the **Instructions** field. Do **not** include the file's markdown
-   header or the "Paste the block below" note — those are instructions *to you*,
-   not part of the agent's prompt.
-3. Under **Choose tools**, explicitly select the GitHub MCP tools for this custom
-   agent.
-
-   Select the GitHub MCP tools needed to create a branch, update
-   `infra/leak.auto.tfvars`, commit the change, and open a Pull Request. Do not
-   select terminal, workflow dispatch, repository administration,
-   secret-management, approval, or merge tools.
-
-   If those GitHub tools are not visible here, go back to **Capabilities → Tools
-   → MCP servers + services**, expand the GitHub MCP server, and enable the
-   minimum branch/file/Pull Request tools there first. Then return to this custom
-   agent and select them explicitly.
-
-**What is happening:** this tells the agent that its remediation is to open a Pull
-Request, not to run commands against Azure.
-
-### 5c. Add the runbook (knowledge)
-
-Add [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md)
-under **Builder → Knowledge Sources → Add** (or attach it directly on the
-`gitops-remediation` agent in **Agent Canvas** via its **Knowledge base**
-option). This tells the agent that the memory leak is
-controlled by the `enable_slow_leak` setting in `infra/leak.auto.tfvars`, so its
-Pull Request edits the right file.
-
-### 5d. Create the response plan
-
-1. Open **Builder → Incident Response Plans** and select **Create incident
-   response plan**. The same wizard is available from **Builder → Agent Canvas →
-   Create → Trigger → Incident response plan**.
-2. On the first page of the current wizard, set:
-
-   | Current wizard field | Value |
-   | --- | --- |
-   | **Incident response plan name** | `ContosoPay payment memory leak` |
-   | **Severity** | **2 / Warning** |
-   | **Title contains** | `alert-payment-memory-` |
-   | **Title does not contain** | Leave empty |
-   | **I want a custom response plan** | Selected |
-
-3. Continue to **Define agent learning**. State that this plan must delegate the
-   investigation and remediation to the `gitops-remediation` custom agent, remain
-   in review/human-approval mode, and never mutate Azure directly.
-4. On **Review custom plan**, confirm the plan invokes
-   `gitops-remediation` and uses only the minimum GitHub MCP branch/file/Pull
-   Request tools. Save the plan.
-
-**Expected outcome:** the response plan routes incidents to the GitOps agent. As a
-quick check, ask the agent in a chat to "restart the payment-service container" —
-it should decline and offer to open a Pull Request instead.
-
----
-
-## Part 6 — Run the incident
-
-**What you will do:** ship the fault through a Pull Request and watch the agent
-remediate it through another Pull Request.
-
-### 6a. Open the Pull Request that switches the fault on
-
-If you deployed with the **`deploy` workflow** (Actions tab), an incident Pull
-Request has **already been opened for you** at the end of that run — it sets
-`enable_slow_leak = true` in `infra/leak.auto.tfvars` and is waiting in the
-**Pull requests** tab. (The deploy run's summary links straight to it.) You can
-skip ahead and simply review and **merge** it.
-
-> To deploy without auto-opening the PR, run the `deploy` workflow with
-> **Open incident PR** set to `false`, then open it yourself with the script below.
-
-To open (or re-open) the incident PR manually instead — for example after a
-`--reset`, or when you deployed from your machine with `scripts/deploy.*`:
+If **Open incident PR** was enabled on the deploy workflow, review the generated
+incident Pull Request. Otherwise create it with:
 
 ```bash
-./scripts/trigger-incident-gitops.sh           # Bash
-# or
-pwsh ./scripts/trigger-incident-gitops.ps1     # PowerShell
+./scripts/trigger-incident-gitops.sh
 ```
 
-**What is happening:** the deploy workflow (or the script) opens a Pull Request
-that sets `enable_slow_leak = true` in `infra/leak.auto.tfvars`.
+```powershell
+pwsh ./scripts/trigger-incident-gitops.ps1
+```
 
-**Expected outcome:** a Pull Request appears in GitHub. Review the diff, then
-**merge it**. Merging runs the `apply-infra` workflow, which applies the change
-and switches the fault on. No one edits the live service by hand.
+Merge the incident Pull Request. `apply-infra` selects Scenario B from
+`DEPLOYMENT_SCENARIO`, verifies the B state, builds full-SHA images where needed,
+and applies `enable_slow_leak = true`.
 
-### 6b. Watch the memory climb and the alert fire
+Memory rises for approximately 8–12 minutes. When the five-minute average crosses
+the threshold, the Azure Monitor alert fires and the SRE Agent investigates.
 
-Open **Application Insights** or **Grafana** and watch the payment-service memory
-trend upward over roughly 8–12 minutes. The alert evaluates the five-minute
-average, so an ordinary one-sample spike does not fire it. When the average
-crosses the threshold, the **Azure Monitor alert** fires and the agent opens an
-investigation within about a minute.
+Expected evidence:
 
-### 6c. Watch the investigation and root cause
+- alert and working-set trend;
+- affected payment-service revision;
+- incident Pull Request and merge commit;
+- exact feature-flag change;
+- source and runbook context.
 
-The agent correlates the rising memory with the **Pull Request and merge commit**
-from 6a and explains the root cause.
+## 9. Review the remediation Pull Request
 
-**Expected outcome:** the agent points to the specific change that introduced the
-fault, not just a generic alert.
+In Scenario B, the SRE Agent uses the built-in GitHub MCP tools directly. It does
+**not** create a remediation issue, call the custom broker, or trigger
+`sre-remediation-pr`.
 
-### 6d. Review and merge the agent's fix
+The agent creates a branch, changes only `infra/leak.auto.tfvars`, and opens an
+unmerged Pull Request. Review and merge it. The normal `apply-infra` workflow
+applies the healthy flag to the same Scenario B state.
 
-Because the agent cannot change Azure directly, it uses the GitHub MCP tools to
-create a branch, commit the one-line change to set `enable_slow_leak = false`,
-and open an unmerged Pull Request.
+Verify:
 
-Open that Pull Request, review it, and **merge it** — this is the human approval
-gate. Merging runs `apply-infra` again, which deploys the fix; a fresh
-payment-service revision rolls out and memory returns to normal.
+1. the Pull Request changes exactly one expected line;
+2. no workflow, source, or secret file is changed;
+3. a new healthy payment-service revision starts;
+4. memory flattens;
+5. the alert resolves.
 
-**Expected outcome:** after the workflow completes, the alert resolves and
-payment-service memory flattens back to the baseline — and the entire change
-history, fault and fix, is recorded as reviewed Pull Requests.
+## 10. Reset, revoke, and destroy
 
-### 6e. (Optional) Show it again
-
-Run the trigger script again to open a fresh Pull Request and show the agent
-resolving the now familiar pattern faster.
-
----
-
-## Part 7 — Reset and clean up
-
-**Reset the fault** through a Pull Request (the same way the agent would):
+If a manual reset Pull Request is needed:
 
 ```bash
 ./scripts/trigger-incident-gitops.sh --reset
-# or
+```
+
+```powershell
 pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
 ```
 
-Merge the resulting Pull Request to return the service to a healthy state.
+Revoke the fine-grained PAT immediately after the demonstration.
 
-**Remove the ContosoPay environment** when finished. The quickest way is to delete
-the two resource groups the pipeline created:
-
-```bash
-az group delete --name rg-contosopay-demo-<suffix> --yes --no-wait
-az group delete --name rg-contosopay-tfstate --yes --no-wait
-```
-
-**Remove the SRE Agent** (it is separate from the demo's Terraform):
+Destroy with the **destroy** workflow using Scenario `B` and confirmation
+`<prefix>-B-<environment>`, or use:
 
 ```bash
-az group delete --name rg-sre-agent --yes
+./scripts/teardown.sh --scenario B
 ```
 
-Revoke the fine-grained PAT used by the GitHub MCP connector when you no longer
-need Scenario B.
-
----
-
-## How this maps to Azure SRE Agent capabilities
-
-| Step | Capability shown |
-| --- | --- |
-| 6b | Detects an incident from an Azure Monitor alert. |
-| 6c | Correlates telemetry with the originating Pull Request and commit, and explains the root cause. |
-| 6d | Remediates through a reviewed Pull Request, with no direct access to Azure. |
-| 6e | Recognises a repeated pattern and resolves it faster. |
-
----
+The teardown verifies the scenario recorded in state. Never destroy by guessed
+resource-name patterns and never reuse this state for another profile.
 
 ## References
 
-- [Agent permissions](https://learn.microsoft.com/en-us/azure/sre-agent/permissions)
-  · [Run modes](https://learn.microsoft.com/en-us/azure/sre-agent/run-modes)
-- [Tool access policies](https://learn.microsoft.com/en-us/azure/sre-agent/tool-access-policies)
-- [GitHub connector](https://learn.microsoft.com/en-us/azure/sre-agent/github-connector)
-  · [Connect source code](https://learn.microsoft.com/en-us/azure/sre-agent/connect-source-code)
-- [MCP connectors](https://learn.microsoft.com/en-us/azure/sre-agent/mcp-connectors)
-- [The committable agent configuration](../agent/README.md)
+- [Azure SRE Agent setup reference](sre-agent-setup.md)
+- [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
+- [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
+- [Azure SRE Agent tool access policies](https://learn.microsoft.com/azure/sre-agent/tool-access-policies)
+- [Fine-grained PAT guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)

@@ -8,9 +8,9 @@
       2. terraform init.
       3. terraform apply (phase 1) creating ACR/Key Vault/identities/observability/
          Container Apps environment WITHOUT the apps (images do not exist yet).
-      4. Builds and pushes the three app images and optional MCP broker to ACR.
+      4. Builds and pushes the three app images to ACR.
       5. terraform apply (phase 2) creating the Container Apps + alert,
-         pointing at the freshly pushed image tag.
+         pointing at the freshly published, locked image digest.
       6. Prints the public frontend URL and SRE Agent wiring next-steps.
 
     No secrets are handled by this script. All app secrets live in Key Vault and
@@ -21,11 +21,15 @@
     currently selected az subscription is used.
 
 .PARAMETER ImageTag
-    Optional image tag override. Defaults to a UTC timestamp so each deploy
-    produces a fresh revision.
+    Optional immutable image tag override. Defaults to the repository HEAD and
+    must be a full lowercase 40-character Git commit SHA.
 
 .PARAMETER SkipBuild
     Reuse images already in ACR (skip docker build/push). Useful for re-runs.
+
+.PARAMETER Scenario
+    Immutable deployment profile A or B. Scenario C must use deploy.yml on the
+    private self-hosted runner.
 
 .EXAMPLE
     pwsh ./scripts/deploy.ps1
@@ -37,8 +41,8 @@
     None. Writes status to the host and the frontend URL on success.
 
 .NOTES
-    The Azure SRE Agent itself is provisioned separately at https://sre.azure.com
-    and is intentionally not part of this script (see docs/run-of-show.md).
+    Direct Terraform settings control whether this local path provisions the
+    selected SRE Agent. The GitHub deployment workflows always provision it.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -46,7 +50,7 @@ param(
     [string]$SubscriptionName,
 
     [Parameter()]
-    [string]$ImageTag = (Get-Date -AsUTC -Format 'yyyyMMddHHmmss'),
+    [string]$ImageTag,
 
     [Parameter()]
     [string]$Prefix = 'contosopay',
@@ -58,6 +62,10 @@ param(
     [string]$Location = 'swedencentral',
 
     [Parameter()]
+    [ValidateSet('A', 'B')]
+    [string]$Scenario = 'A',
+
+    [Parameter()]
     [switch]$SkipBuild
 )
 
@@ -66,7 +74,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $infraDir = Join-Path $repoRoot 'infra'
-$services = @('frontend', 'checkout-api', 'payment-service', 'sre-remediation-mcp')
+$services = @('frontend', 'checkout-api', 'payment-service')
 
 function Assert-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -87,15 +95,22 @@ function Invoke-Checked {
 # values must be reproduced by .github/workflows/apply-infra.yml, so they are
 # derived purely from the subscription id + prefix (no random suffix).
 function Get-BackendConfig {
-    param([string]$SubscriptionId, [string]$Prefix, [string]$Environment)
+    param(
+        [string]$SubscriptionId,
+        [string]$Prefix,
+        [string]$Environment,
+        [ValidateSet('A', 'B')]
+        [string]$Scenario
+    )
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$SubscriptionId-$Prefix"))
+    $hashInput = "$SubscriptionId$([char]0)$Prefix$([char]0)$Scenario"
+    $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($hashInput))
     $hex = ([BitConverter]::ToString($bytes) -replace '-', '').ToLower().Substring(0, 16)
     [pscustomobject]@{
         ResourceGroup  = "rg-$Prefix-tfstate"
         StorageAccount = "sttf$hex"            # 20 chars, globally unique-ish, LRS
         Container      = 'tfstate'
-        Key            = "$Prefix-$Environment.tfstate"
+        Key            = "$Prefix-$Scenario-$Environment.tfstate"
     }
 }
 
@@ -118,7 +133,8 @@ function Initialize-StateStorage {
         Invoke-Checked -Name 'az storage account create (tfstate)' {
             az storage account create --name $Backend.StorageAccount --resource-group $Backend.ResourceGroup `
                 --location $stateLocation --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 `
-                --allow-blob-public-access false --https-only true --tags @tagArgs --output none
+                --allow-blob-public-access false --allow-shared-key-access false --https-only true `
+                --tags @tagArgs --output none
         }
     }
     $saId = az storage account show --name $Backend.StorageAccount --resource-group $Backend.ResourceGroup --query id --output tsv
@@ -139,6 +155,17 @@ Write-Host '==> Checking prerequisites' -ForegroundColor Cyan
 Assert-Command az
 Assert-Command terraform
 Assert-Command docker
+Assert-Command git
+
+if (-not $ImageTag) {
+    $ImageTag = git -C $repoRoot rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not resolve the repository HEAD commit SHA.'
+    }
+}
+if ($ImageTag -notmatch '^[0-9a-f]{40}$') {
+    throw 'ImageTag must be a full lowercase 40-character Git commit SHA.'
+}
 
 $account = az account show 2>$null | ConvertFrom-Json
 if (-not $account) {
@@ -163,8 +190,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $signedInId = az ad signed-in-user show --query id --output tsv
-$backend = Get-BackendConfig -SubscriptionId $account.id -Prefix $Prefix -Environment $Environment
-$tags = @{ project = 'sre-agent-demo'; env = $Environment; managed_by = 'terraform' }
+$backend = Get-BackendConfig -SubscriptionId $account.id -Prefix $Prefix -Environment $Environment -Scenario $Scenario
+$tags = @{ project = 'sre-agent-demo'; env = $Environment; scenario = $Scenario; managed_by = 'terraform' }
 Initialize-StateStorage -Backend $backend -Location $Location -PrincipalId $signedInId -Tags $tags
 
 Write-Host '==> terraform init (remote azurerm backend)' -ForegroundColor Cyan
@@ -174,6 +201,15 @@ Invoke-Checked -Name 'terraform init' {
         -backend-config="storage_account_name=$($backend.StorageAccount)" `
         -backend-config="container_name=$($backend.Container)" `
         -backend-config="key=$($backend.Key)"
+}
+
+# Reject state created for another or legacy profile.
+$stateResources = terraform -chdir="$infraDir" state list 2>$null
+if ($stateResources) {
+    $existingScenario = terraform -chdir="$infraDir" output -raw scenario 2>$null
+    if ($existingScenario -ne $Scenario) {
+        throw "State scenario '$existingScenario' does not match '$Scenario'. In-place conversion is unsupported."
+    }
 }
 
 # Preserve the immutable application resource-group location on reruns.
@@ -187,12 +223,12 @@ if ($existingResourceGroup) {
 }
 
 Write-Host '==> terraform apply (phase 1: platform, no apps yet)' -ForegroundColor Cyan
-$stateResources = terraform -chdir="$infraDir" state list 2>$null
 $existingAppDeployment = $stateResources | Where-Object { $_ -match '^azurerm_container_app\.app\[' }
 if (-not $existingAppDeployment -and $PSCmdlet.ShouldProcess('infra', 'terraform apply phase 1')) {
     Invoke-Checked -Name 'terraform apply (phase 1)' {
         terraform -chdir="$infraDir" apply -input=false -auto-approve `
-            -var 'deploy_apps=false' -var "prefix=$Prefix" -var "environment=$Environment" -var "location=$Location"
+            -var 'deploy_apps=false' -var "scenario=$Scenario" -var "prefix=$Prefix" `
+            -var "environment=$Environment" -var "location=$Location"
     }
 } elseif ($existingAppDeployment) {
     Write-Host '    Existing app deployment detected; preserving running revisions.'
@@ -203,28 +239,73 @@ $acrName = terraform -chdir="$infraDir" output -raw acr_name
 $acrLoginServer = terraform -chdir="$infraDir" output -raw acr_login_server
 Write-Host "    ACR: $acrLoginServer"
 
-if (-not $SkipBuild.IsPresent) {
-    Write-Host '==> Logging in to ACR' -ForegroundColor Cyan
-    Invoke-Checked -Name 'az acr login' { az acr login --name $acrName }
+Write-Host '==> Logging in to ACR' -ForegroundColor Cyan
+Invoke-Checked -Name 'az acr login' { az acr login --name $acrName }
 
-    foreach ($svc in $services) {
+$repositoryList = az acr repository list --name $acrName --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Could not list ACR repositories.' }
+$imageDigests = [ordered]@{}
+foreach ($svc in $services) {
+    $tagExists = $false
+    if ($repositoryList -contains $svc) {
+        $tags = az acr repository show-tags --name $acrName --repository $svc --output json | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "Could not list tags for ACR repository '$svc'." }
+        $tagExists = $tags -contains $ImageTag
+    }
+
+    if ($tagExists) {
+        $metadata = az acr repository show --name $acrName --image "${svc}:$ImageTag" --output json | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect image ${svc}:$ImageTag." }
+        if ($metadata.changeableAttributes.writeEnabled -or $metadata.changeableAttributes.deleteEnabled) {
+            throw "Image ${svc}:$ImageTag exists but is not write/delete locked."
+        }
+        Write-Host "==> Reusing locked image ${svc}:$ImageTag" -ForegroundColor Cyan
+    } else {
+        if ($SkipBuild.IsPresent) {
+            throw "Image ${svc}:$ImageTag is absent and -SkipBuild was supplied."
+        }
         $context = Join-Path $repoRoot "src/$svc"
         $imageSha = "${acrLoginServer}/${svc}:$ImageTag"
-        $imageLatest = "${acrLoginServer}/${svc}:latest"
         Write-Host "==> Building $svc -> ${svc}:$ImageTag" -ForegroundColor Cyan
-        Invoke-Checked -Name "docker build $svc" { docker build -t $imageSha -t $imageLatest $context }
-        Invoke-Checked -Name "docker push $svc (tag)" { docker push $imageSha }
-        Invoke-Checked -Name "docker push $svc (latest)" { docker push $imageLatest }
+        Invoke-Checked -Name "docker build $svc" {
+            docker build `
+                --label "org.opencontainers.image.revision=$ImageTag" `
+                --label "org.opencontainers.image.source=https://github.com/rutgerpels/sreagent" `
+                -t $imageSha $context
+        }
+        Invoke-Checked -Name "docker push $svc" { docker push $imageSha }
+        Invoke-Checked -Name "lock ACR image $svc" {
+            az acr repository update --name $acrName --image "${svc}:$ImageTag" `
+                --write-enabled false --delete-enabled false --output none
+        }
+        $metadata = az acr repository show --name $acrName --image "${svc}:$ImageTag" --output json | ConvertFrom-Json
     }
+    if (
+        $LASTEXITCODE -ne 0 -or
+        $metadata.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+        $metadata.changeableAttributes.writeEnabled -or
+        $metadata.changeableAttributes.deleteEnabled
+    ) {
+        throw "Image ${svc}:$ImageTag does not resolve to a locked manifest digest."
+    }
+    $imageDigests[$svc] = $metadata.digest
 }
+$imageDigestsJson = $imageDigests | ConvertTo-Json -Compress
 
 Write-Host '==> terraform apply (phase 2: container apps + alert)' -ForegroundColor Cyan
 if ($PSCmdlet.ShouldProcess('infra', 'terraform apply phase 2')) {
     Invoke-Checked -Name 'terraform apply (phase 2)' {
         terraform -chdir="$infraDir" apply -input=false -auto-approve `
             -var 'deploy_apps=true' -var "image_tag=$ImageTag" `
-            -var "prefix=$Prefix" -var "environment=$Environment" -var "location=$Location"
+            -var "image_digests=$imageDigestsJson" `
+            -var "scenario=$Scenario" -var "prefix=$Prefix" `
+            -var "environment=$Environment" -var "location=$Location"
     }
+}
+
+$appliedScenario = terraform -chdir="$infraDir" output -raw scenario
+if ($appliedScenario -ne $Scenario) {
+    throw "Applied Terraform state does not match Scenario $Scenario."
 }
 
 $frontendUrl = terraform -chdir="$infraDir" output -raw frontend_url
@@ -238,6 +319,7 @@ Write-Host ' ContosoPay demo deployed' -ForegroundColor Green
 Write-Host '============================================================' -ForegroundColor Green
 Write-Host "  Frontend URL : $frontendUrl"
 Write-Host "  Resource grp : $resourceGroup"
+Write-Host "  Scenario     : $Scenario"
 if ($grafana) { Write-Host "  Grafana      : $grafana" }
 if ($brokerEndpoint -and $brokerEndpoint -ne 'null') { Write-Host "  MCP broker   : $brokerEndpoint" }
 Write-Host ''
@@ -251,9 +333,9 @@ Write-Host ''
 Write-Host ' Next steps — connect the Azure SRE Agent (see docs/sre-agent-setup.md §1-5):' -ForegroundColor Yellow
 Write-Host "  1. Go to https://sre.azure.com, create an SRE Agent, and point it at '$resourceGroup'."
 Write-Host '  2. Connect this GitHub repo (Code Access) and Azure Monitor as the incident platform.'
-Write-Host '  3. Then pick a demo scenario and finish the wiring:'
-Write-Host '       Scenario A (on-the-spot): docs/scenario-a-direct.md  — grant Privileged access,'
-Write-Host '                                 then: scripts/trigger-incident-direct.ps1'
-Write-Host '       Scenario B (full GitOps): docs/scenario-b-gitops.md  — grant Reader + deny policy,'
-Write-Host '                                 then: scripts/trigger-incident-gitops.ps1 (opens a PR)'
+if ($Scenario -eq 'A') {
+    Write-Host '  3. Follow docs/scenario-a-direct.md and run scripts/trigger-incident-direct.ps1.'
+} else {
+    Write-Host '  3. Follow docs/scenario-b-gitops.md and run scripts/trigger-incident-gitops.ps1.'
+}
 Write-Host ''

@@ -46,35 +46,35 @@ resource "time_sleep" "wait_app_dependencies" {
 }
 
 ###############################################################################
-# Optional Scenario B remediation broker identity. This exists in phase 1 even
-# when deploy_apps=false so ACR/Key Vault RBAC can converge before image deploy.
+# Scenario C remediation broker identity. It exists in phase 1 even when
+# deploy_apps=false so ACR and Key Vault cryptographic RBAC can converge before
+# the broker image is deployed. Scenario A/B never create this identity.
 ###############################################################################
 
 locals {
-  # Prefer the Terraform-managed Scenario B identity when present. try() keeps
-  # the reference safe when enable_sre_agents=false or its for_each map is empty.
+  # Prefer the selected Terraform-managed Scenario C agent identity. The
+  # explicit principal input supports preview-disabled/manual agent onboarding.
   sre_remediation_allowed_caller_principal_id = var.enable_sre_agents ? try(
-    azurerm_user_assigned_identity.agent["b-gitops"].principal_id,
+    azurerm_user_assigned_identity.agent[local.profile.agent_key].principal_id,
     var.sre_remediation_allowed_caller_principal_id,
   ) : var.sre_remediation_allowed_caller_principal_id
 
-  # Null-safe strings used only by the cross-variable preconditions below.
   sre_remediation_validation = {
-    allowed_caller_id  = local.sre_remediation_allowed_caller_principal_id == null ? "" : local.sre_remediation_allowed_caller_principal_id
-    entra_client_id    = var.sre_remediation_entra_api_client_id == null ? "" : var.sre_remediation_entra_api_client_id
-    token_audience     = var.sre_remediation_entra_token_audience == null ? "" : var.sre_remediation_entra_token_audience
-    token_scope        = var.sre_remediation_entra_token_scope == null ? "" : var.sre_remediation_entra_token_scope
-    github_app_id      = var.sre_remediation_github_app_id == null ? "" : var.sre_remediation_github_app_id
-    installation_id    = var.sre_remediation_github_app_installation_id == null ? "" : var.sre_remediation_github_app_installation_id
-    github_bot_login   = var.sre_remediation_github_app_bot_login == null ? "" : var.sre_remediation_github_app_bot_login
-    repository_owner   = var.sre_remediation_github_repository_owner == null ? "" : var.sre_remediation_github_repository_owner
-    repository_name    = var.sre_remediation_github_repository_name == null ? "" : var.sre_remediation_github_repository_name
-    private_key_secret = var.sre_remediation_github_app_private_key_secret_name == null ? "" : var.sre_remediation_github_app_private_key_secret_name
+    allowed_caller_id = local.sre_remediation_allowed_caller_principal_id == null ? "" : local.sre_remediation_allowed_caller_principal_id
+    entra_client_id   = var.sre_remediation_entra_api_client_id == null ? "" : var.sre_remediation_entra_api_client_id
+    token_audience    = var.sre_remediation_entra_token_audience == null ? "" : var.sre_remediation_entra_token_audience
+    token_scope       = var.sre_remediation_entra_token_scope == null ? "" : var.sre_remediation_entra_token_scope
+    github_app_id     = var.sre_remediation_github_app_id == null ? "" : var.sre_remediation_github_app_id
+    installation_id   = var.sre_remediation_github_app_installation_id == null ? "" : var.sre_remediation_github_app_installation_id
+    github_bot_login  = var.sre_remediation_github_app_bot_login == null ? "" : var.sre_remediation_github_app_bot_login
+    repository_owner  = var.sre_remediation_github_repository_owner == null ? "" : var.sre_remediation_github_repository_owner
+    repository_name   = var.sre_remediation_github_repository_name == null ? "" : var.sre_remediation_github_repository_name
+    private_key_name  = var.sre_remediation_github_app_private_key_name
   }
 }
 
 resource "azurerm_user_assigned_identity" "sre_remediation_broker" {
-  count = var.enable_sre_remediation_broker ? 1 : 0
+  count = local.profile.broker_enabled ? 1 : 0
 
   name                = "id-sre-remediation-${local.suffix}"
   location            = azurerm_resource_group.this.location
@@ -84,49 +84,49 @@ resource "azurerm_user_assigned_identity" "sre_remediation_broker" {
   lifecycle {
     precondition {
       condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", local.sre_remediation_validation.allowed_caller_id))
-      error_message = "Enabling the SRE remediation broker requires a valid Scenario B caller principal ID, supplied directly or derived from agent[\"b-gitops\"]."
+      error_message = "Scenario C requires a valid allowed SRE Agent principal ID, supplied directly or derived from its Terraform-managed identity."
     }
     precondition {
       condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", local.sre_remediation_validation.entra_client_id))
-      error_message = "Enabling the SRE remediation broker requires a valid dedicated Entra API application client ID."
+      error_message = "Scenario C requires a valid dedicated Entra broker API application client ID."
     }
     precondition {
-      condition     = lower(local.sre_remediation_validation.token_audience) == "api://${lower(local.sre_remediation_validation.entra_client_id)}"
-      error_message = "sre_remediation_entra_token_audience must be api://<sre_remediation_entra_api_client_id>."
+      condition     = lower(local.sre_remediation_validation.token_audience) == lower(local.sre_remediation_validation.entra_client_id)
+      error_message = "sre_remediation_entra_token_audience must equal sre_remediation_entra_api_client_id for Microsoft Entra v2 access tokens."
     }
     precondition {
-      condition     = lower(local.sre_remediation_validation.token_scope) == "${lower(local.sre_remediation_validation.token_audience)}/.default"
-      error_message = "sre_remediation_entra_token_scope must be <sre_remediation_entra_token_audience>/.default."
+      condition     = lower(local.sre_remediation_validation.token_scope) == "api://${lower(local.sre_remediation_validation.entra_client_id)}/.default"
+      error_message = "sre_remediation_entra_token_scope must be api://<sre_remediation_entra_api_client_id>/.default."
     }
     precondition {
       condition     = can(regex("^[1-9][0-9]*$", local.sre_remediation_validation.github_app_id))
-      error_message = "Enabling the SRE remediation broker requires a positive numeric GitHub App ID."
+      error_message = "Scenario C requires a positive numeric remediation GitHub App ID."
     }
     precondition {
       condition     = can(regex("^[1-9][0-9]*$", local.sre_remediation_validation.installation_id))
-      error_message = "Enabling the SRE remediation broker requires a positive numeric GitHub App installation ID."
+      error_message = "Scenario C requires a positive numeric remediation GitHub App installation ID."
     }
     precondition {
       condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\[bot\\]$", local.sre_remediation_validation.github_bot_login))
-      error_message = "Enabling the SRE remediation broker requires the GitHub App bot login, including its [bot] suffix."
+      error_message = "Scenario C requires the remediation GitHub App bot login, including its [bot] suffix."
     }
     precondition {
       condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]{0,38}$", local.sre_remediation_validation.repository_owner))
-      error_message = "Enabling the SRE remediation broker requires a valid GitHub repository owner."
+      error_message = "Scenario C requires a valid GitHub repository owner."
     }
     precondition {
       condition     = can(regex("^[A-Za-z0-9._-]{1,100}$", local.sre_remediation_validation.repository_name))
-      error_message = "Enabling the SRE remediation broker requires a valid GitHub repository name."
+      error_message = "Scenario C requires a valid GitHub repository name."
     }
     precondition {
-      condition     = can(regex("^[0-9A-Za-z-]{1,127}$", local.sre_remediation_validation.private_key_secret))
-      error_message = "sre_remediation_github_app_private_key_secret_name must be a valid Key Vault secret name."
+      condition     = can(regex("^[0-9A-Za-z-]{1,127}$", local.sre_remediation_validation.private_key_name))
+      error_message = "sre_remediation_github_app_private_key_name must be a valid Key Vault key name."
     }
   }
 }
 
 resource "azurerm_role_assignment" "sre_remediation_broker_acr_pull" {
-  count = var.enable_sre_remediation_broker ? 1 : 0
+  count = local.profile.broker_enabled ? 1 : 0
 
   scope                            = azurerm_container_registry.this.id
   role_definition_name             = "AcrPull"
@@ -134,24 +134,41 @@ resource "azurerm_role_assignment" "sre_remediation_broker_acr_pull" {
   skip_service_principal_aad_check = true
 }
 
-resource "azurerm_role_assignment" "sre_remediation_broker_kv_secrets" {
-  count = var.enable_sre_remediation_broker ? 1 : 0
+# The imported RSA key remains non-exportable. This custom data-plane role grants
+# only key metadata read and sign operations; the broker cannot decrypt, unwrap,
+# export, create, rotate, or delete keys and has no secret permissions.
+resource "azurerm_role_definition" "sre_remediation_broker_key_signer" {
+  count = local.profile.broker_enabled ? 1 : 0
 
-  scope                            = azurerm_key_vault.this.id
-  role_definition_name             = "Key Vault Secrets User"
+  name        = "SRE Broker Key Signer ${local.suffix}"
+  scope       = azurerm_key_vault.this.id
+  description = "Read key metadata and sign digests for the Scenario C GitHub App."
+
+  permissions {
+    data_actions = [
+      "Microsoft.KeyVault/vaults/keys/read",
+      "Microsoft.KeyVault/vaults/keys/sign/action",
+    ]
+  }
+
+  assignable_scopes = [azurerm_key_vault.this.id]
+}
+
+resource "azurerm_role_assignment" "sre_remediation_broker_kv_crypto" {
+  count = var.deploy_apps && local.profile.broker_enabled ? 1 : 0
+
+  scope                            = "${azurerm_key_vault.this.id}/keys/${var.sre_remediation_github_app_private_key_name}"
+  role_definition_id               = azurerm_role_definition.sre_remediation_broker_key_signer[0].role_definition_resource_id
   principal_id                     = azurerm_user_assigned_identity.sre_remediation_broker[0].principal_id
   skip_service_principal_aad_check = true
 }
 
-# Give the broker's ACR and Key Vault data-plane roles time to propagate before
-# its first revision starts. Direct dependencies alone do not guarantee RBAC
-# propagation has completed.
 resource "time_sleep" "wait_sre_remediation_broker_dependencies" {
-  count = var.enable_sre_remediation_broker ? 1 : 0
+  count = var.deploy_apps && local.profile.broker_enabled ? 1 : 0
 
   depends_on = [
     azurerm_role_assignment.sre_remediation_broker_acr_pull,
-    azurerm_role_assignment.sre_remediation_broker_kv_secrets,
+    azurerm_role_assignment.sre_remediation_broker_kv_crypto,
     azurerm_private_dns_zone_virtual_network_link.acr_app,
     azurerm_private_dns_zone_virtual_network_link.key_vault_app,
     azurerm_private_endpoint.acr,

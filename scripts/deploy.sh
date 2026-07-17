@@ -6,31 +6,32 @@
 #   1. Validate prerequisites (az, terraform, docker, an az login).
 #   2. terraform init.
 #   3. terraform apply (phase 1): platform only, no apps (images don't exist yet).
-#   4. Build + push the three app images and the optional MCP broker to ACR.
-#   5. terraform apply (phase 2): Container Apps + alert, on the new tag.
+#   4. Build + push the three app images to ACR.
+#   5. Lock each manifest and deploy Container Apps by exact digest.
 #   6. Print the public frontend URL and SRE Agent wiring next-steps.
 #
 # No secrets are handled here. App secrets live in Key Vault, read via managed
-# identity. Usage: ./scripts/deploy.sh [-s SUBSCRIPTION] [-t IMAGE_TAG] [--skip-build]
+# identity. Scenario C must use deploy.yml from the private runner.
 # ============================================================================
 
 set -euo pipefail
 
 SUBSCRIPTION=""
-IMAGE_TAG="$(date -u +%Y%m%d%H%M%S)"
+IMAGE_TAG=""
 SKIP_BUILD="false"
 PREFIX="contosopay"
 ENVIRONMENT="demo"
 LOCATION="swedencentral"
+SCENARIO="A"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INFRA_DIR="${REPO_ROOT}/infra"
 readonly SCRIPT_DIR REPO_ROOT INFRA_DIR
-SERVICES=("frontend" "checkout-api" "payment-service" "sre-remediation-mcp")
+SERVICES=("frontend" "checkout-api" "payment-service")
 
 usage() {
-    echo "Usage: $0 [-s SUBSCRIPTION] [-t IMAGE_TAG] [--skip-build] [--prefix P] [--env E] [--location L]" >&2
+    echo "Usage: $0 [-s SUBSCRIPTION] [-t IMAGE_TAG] [--scenario A|B] [--skip-build] [--prefix P] [--env E] [--location L]" >&2
     exit 1
 }
 
@@ -42,10 +43,17 @@ while [[ $# -gt 0 ]]; do
         --prefix)          PREFIX="$2"; shift 2 ;;
         --env)             ENVIRONMENT="$2"; shift 2 ;;
         --location)        LOCATION="$2"; shift 2 ;;
+        --scenario)        SCENARIO="$2"; shift 2 ;;
         -h|--help)         usage ;;
         *) echo "Unknown argument: $1" >&2; usage ;;
     esac
 done
+
+readonly SCENARIO_PATTERN='^(A|B)$'
+[[ "${SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || {
+    echo "Local deployment supports Scenario A or B only. Run deploy.yml on the private runner for Scenario C." >&2
+    exit 1
+}
 
 require() {
     command -v "$1" >/dev/null 2>&1 || { echo "Required command '$1' not found on PATH." >&2; exit 1; }
@@ -55,6 +63,15 @@ echo "==> Checking prerequisites"
 require az
 require terraform
 require docker
+require git
+require jq
+
+IMAGE_TAG="${IMAGE_TAG:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
+readonly IMAGE_TAG_PATTERN='^[0-9a-f]{40}$'
+[[ "${IMAGE_TAG}" =~ ${IMAGE_TAG_PATTERN} ]] || {
+    echo "Image tag must be a full lowercase 40-character Git commit SHA." >&2
+    exit 1
+}
 
 if ! az account show >/dev/null 2>&1; then
     echo "Not logged in to Azure. Run 'az login' first." >&2
@@ -78,10 +95,10 @@ fi
 
 # Deterministic, non-identifying remote-state names (must match apply-infra.yml).
 STATE_RG="rg-${PREFIX}-tfstate"
-STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${PREFIX}" | sha256sum | cut -c1-16)"
+STATE_HASH="$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${PREFIX}" "${SCENARIO}" | sha256sum | cut -c1-16)"
 STATE_SA="sttf${STATE_HASH}"
 STATE_CONTAINER="tfstate"
-STATE_KEY="${PREFIX}-${ENVIRONMENT}.tfstate"
+STATE_KEY="${PREFIX}-${SCENARIO}-${ENVIRONMENT}.tfstate"
 
 echo "==> Ensuring remote state storage (${STATE_SA})"
 # The state resource group's location is immutable and independent of the app
@@ -91,11 +108,11 @@ echo "==> Ensuring remote state storage (${STATE_SA})"
 STATE_LOCATION="$(az group show --name "${STATE_RG}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
 STATE_LOCATION="${STATE_LOCATION:-${LOCATION}}"
 az group create --name "${STATE_RG}" --location "${STATE_LOCATION}" \
-    --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
+    --tags project=sre-agent-demo env="${ENVIRONMENT}" scenario="${SCENARIO}" managed_by=terraform --output none
 if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
     az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
         --location "${STATE_LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
-        --allow-blob-public-access false --https-only true \
+        --allow-blob-public-access false --allow-shared-key-access false --https-only true \
         --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
 fi
 SA_ID="$(az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" --query id -o tsv)"
@@ -119,6 +136,15 @@ terraform -chdir="${INFRA_DIR}" init -input=false -migrate-state -force-copy \
     -backend-config="key=${STATE_KEY}"
 
 # Preserve the immutable application resource-group location on reruns.
+STATE_RESOURCES="$(terraform -chdir="${INFRA_DIR}" state list 2>/dev/null || true)"
+if [[ -n "${STATE_RESOURCES}" ]]; then
+    EXISTING_SCENARIO="$(terraform -chdir="${INFRA_DIR}" output -raw scenario 2>/dev/null || true)"
+    [[ "${EXISTING_SCENARIO}" == "${SCENARIO}" ]] || {
+        echo "State scenario '${EXISTING_SCENARIO:-unknown}' does not match '${SCENARIO}'. In-place conversion is unsupported." >&2
+        exit 1
+    }
+fi
+
 EXISTING_RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name 2>/dev/null | tr -d '\r' || true)"
 if [[ -n "${EXISTING_RESOURCE_GROUP}" ]]; then
     EXISTING_LOCATION="$(az group show --name "${EXISTING_RESOURCE_GROUP}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
@@ -129,10 +155,10 @@ if [[ -n "${EXISTING_RESOURCE_GROUP}" ]]; then
 fi
 
 echo "==> terraform apply (phase 1: platform, no apps yet)"
-STATE_RESOURCES="$(terraform -chdir="${INFRA_DIR}" state list 2>/dev/null || true)"
 if ! grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}"; then
     terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
-        -var 'deploy_apps=false' -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
+        -var 'deploy_apps=false' -var "scenario=${SCENARIO}" -var "prefix=${PREFIX}" \
+        -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
 else
     echo "    Existing app deployment detected; preserving running revisions."
 fi
@@ -141,25 +167,26 @@ ACR_NAME="$(terraform -chdir="${INFRA_DIR}" output -raw acr_name)"
 ACR_LOGIN_SERVER="$(terraform -chdir="${INFRA_DIR}" output -raw acr_login_server)"
 echo "    ACR: ${ACR_LOGIN_SERVER}"
 
-if [[ "${SKIP_BUILD}" != "true" ]]; then
-    echo "==> Logging in to ACR"
-    az acr login --name "${ACR_NAME}"
-
-    for svc in "${SERVICES[@]}"; do
-        echo "==> Building ${svc} -> ${svc}:${IMAGE_TAG}"
-        docker build \
-            -t "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}" \
-            -t "${ACR_LOGIN_SERVER}/${svc}:latest" \
-            "${REPO_ROOT}/src/${svc}"
-        docker push "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}"
-        docker push "${ACR_LOGIN_SERVER}/${svc}:latest"
-    done
-fi
+echo "==> Publishing or reusing immutable ACR images"
+az acr login --name "${ACR_NAME}"
+DIGEST_FILE="$(mktemp)"
+trap 'rm -f "${DIGEST_FILE}"' EXIT
+export SKIP_BUILD
+bash "${SCRIPT_DIR}/publish-immutable-images.sh" \
+    "${ACR_NAME}" "${ACR_LOGIN_SERVER}" "${IMAGE_TAG}" "${DIGEST_FILE}" "${SERVICES[@]}"
+IMAGE_DIGESTS="$(jq -c . "${DIGEST_FILE}")"
 
 echo "==> terraform apply (phase 2: container apps + alert)"
 terraform -chdir="${INFRA_DIR}" apply -input=false -auto-approve \
     -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}" \
-    -var "prefix=${PREFIX}" -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
+    -var "image_digests=${IMAGE_DIGESTS}" \
+    -var "scenario=${SCENARIO}" -var "prefix=${PREFIX}" \
+    -var "environment=${ENVIRONMENT}" -var "location=${LOCATION}"
+
+[[ "$(terraform -chdir="${INFRA_DIR}" output -raw scenario)" == "${SCENARIO}" ]] || {
+    echo "Applied Terraform state does not match Scenario ${SCENARIO}." >&2
+    exit 1
+}
 
 FRONTEND_URL="$(terraform -chdir="${INFRA_DIR}" output -raw frontend_url)"
 RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name)"
@@ -172,6 +199,7 @@ echo " ContosoPay demo deployed"
 echo "============================================================"
 echo "  Frontend URL : ${FRONTEND_URL}"
 echo "  Resource grp : ${RESOURCE_GROUP}"
+echo "  Scenario     : ${SCENARIO}"
 [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "  Grafana      : ${GRAFANA}"
 [[ -n "${BROKER_ENDPOINT}" && "${BROKER_ENDPOINT}" != "null" ]] && echo "  MCP broker   : ${BROKER_ENDPOINT}"
 echo ""
@@ -184,9 +212,9 @@ echo ""
 echo " Next steps — connect the Azure SRE Agent (see docs/sre-agent-setup.md §1-5):"
 echo "  1. Go to https://sre.azure.com, create an SRE Agent, and point it at '${RESOURCE_GROUP}'."
 echo "  2. Connect this GitHub repo (Code Access) and Azure Monitor as the incident platform."
-echo "  3. Then pick a demo scenario and finish the wiring:"
-echo "       Scenario A (on-the-spot): docs/scenario-a-direct.md  — grant Privileged access,"
-echo "                                 then: scripts/trigger-incident-direct.sh"
-echo "       Scenario B (full GitOps): docs/scenario-b-gitops.md  — grant Reader + deny policy,"
-echo "                                 then: scripts/trigger-incident-gitops.sh (opens a PR)"
+if [[ "${SCENARIO}" == "A" ]]; then
+    echo "  3. Follow docs/scenario-a-direct.md and run scripts/trigger-incident-direct.sh."
+else
+    echo "  3. Follow docs/scenario-b-gitops.md and run scripts/trigger-incident-gitops.sh."
+fi
 echo ""

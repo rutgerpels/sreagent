@@ -1,36 +1,22 @@
 ###############################################################################
-# Optional Azure SRE Agents (Microsoft.App/agents), one per demo scenario.
-#
-#   * agent-a  (Scenario A — on-the-spot): accessLevel High  + Contributor,
-#              so it can mitigate Azure directly after approval.
-#   * agent-b  (Scenario B — full GitOps): accessLevel Low   + Reader only,
-#              so it must remediate by opening a PR.
-#
-# Both get Monitoring Contributor at subscription scope because Azure SRE Agent
-# requires it to manage the Azure Monitor alert lifecycle. Workload roles remain
-# scoped to the demo resource group, and both agents run in Review mode.
-#
-# Still manual after apply (no ARM/data-plane parity): GitHub Code Access &
-# Connector OAuth, the global Tool Access Policy deny, custom agents/knowledge,
-# and the incident response plan. See docs/scenario-*.md.
+# Optional Azure SRE Agent (Microsoft.App/agents): exactly one selected profile.
+# A is High/Contributor/Autonomous; B and C are Low/Reader/Review. Scenario B's
+# built-in GitHub MCP connector and short-lived fine-grained PAT are configured
+# manually. Scenario C uses separate manually managed GitHub Apps for Code
+# Access and the constrained remediation broker; Terraform accepts no PAT/key.
 ###############################################################################
 
 locals {
-  sre_agents_enabled = var.enable_sre_agents && var.sre_agent_sponsor_group_id != null
-
-  sre_agents = local.sre_agents_enabled ? {
-    "a-direct" = { access = "High", role = "Contributor" } # Scenario A — direct mitigation
-    "b-gitops" = { access = "Low", role = "Reader" }       # Scenario B — Reader workload access, PR remediation
+  sre_agents = var.enable_sre_agents ? {
+    (local.profile.agent_key) = local.profile.agent
   } : {}
 
   # Match the core resource-group roles assigned by the managed onboarding flow.
-  sre_agent_resource_group_roles = merge([
-    for key, agent in local.sre_agents : {
-      "${key}-access"            = { agent = key, role = agent.role }
-      "${key}-logs-reader"       = { agent = key, role = "Log Analytics Reader" }
-      "${key}-monitoring-reader" = { agent = key, role = "Monitoring Reader" }
-    }
-  ]...)
+  sre_agent_resource_group_roles = merge([for key, agent in local.sre_agents : {
+    "${key}-access"            = { agent = key, role = agent.role }
+    "${key}-logs-reader"       = { agent = key, role = "Log Analytics Reader" }
+    "${key}-monitoring-reader" = { agent = key, role = "Monitoring Reader" }
+  }]...)
 }
 
 resource "azurerm_user_assigned_identity" "agent" {
@@ -49,7 +35,7 @@ resource "azurerm_role_assignment" "agent" {
 }
 
 # Subscription scope is required by Azure SRE Agent to acknowledge and close
-# Azure Monitor alerts. No workload contributor role is granted at this scope.
+# Azure Monitor alerts. No workload Contributor role is granted at this scope.
 resource "azurerm_role_assignment" "agent_monitoring" {
   for_each             = local.sre_agents
   scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
@@ -77,7 +63,7 @@ resource "azapi_resource" "agent" {
     properties = {
       actionConfiguration = {
         accessLevel = each.value.access
-        mode        = "Review" # human approves; never Autonomous in this demo
+        mode        = each.value.mode
         identity    = azurerm_user_assigned_identity.agent[each.key].id
       }
       agentIdentity = {

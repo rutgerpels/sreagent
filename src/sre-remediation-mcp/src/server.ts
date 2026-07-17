@@ -1,17 +1,19 @@
-import { createApp } from './app';
-import { loadConfig } from './config';
+import { createApp } from './app.js';
+import { EntraAccessTokenVerifier } from './auth.js';
+import { loadConfig } from './config.js';
 import {
   GitHubRemediationClient,
-  KeyVaultPrivateKeyProvider
-} from './github';
+  KeyVaultAppJwtSigner
+} from './github.js';
 
 const config = loadConfig();
-const privateKeyProvider = new KeyVaultPrivateKeyProvider(
-  config.keyVaultUrl,
-  config.privateKeySecretName
+const appJwtSigner = new KeyVaultAppJwtSigner(config.privateKeyUri);
+const githubClient = new GitHubRemediationClient(config, appJwtSigner);
+const accessTokenVerifier = await EntraAccessTokenVerifier.create(
+  config.entraTenantId,
+  config.entraTokenAudience
 );
-const githubClient = new GitHubRemediationClient(config, privateKeyProvider);
-const app = createApp(config, githubClient);
+const app = createApp(config, githubClient, accessTokenVerifier);
 
 const listener = app.listen(config.port, () => {
   console.info(

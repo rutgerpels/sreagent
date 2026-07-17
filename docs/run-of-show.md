@@ -1,90 +1,128 @@
-# ContosoPay & Azure SRE Agent — Start Here
+# ContosoPay demo run-of-show
 
-Welcome. This repository deploys a small, realistic cloud-native application
-(**ContosoPay**) and shows how the **Azure SRE Agent** detects a production
-incident, explains its root cause, and helps you remediate it.
+ContosoPay demonstrates Azure SRE Agent incident detection, evidence-based root
+cause analysis, approval, remediation, proactive checks, and repeated-incident
+learning. The three scenarios use the same application and memory alert but
+select different immutable security profiles.
 
-This page tells you **what the demo is** and **which guide to follow**. You only
-need to read one scenario guide end to end — each is a complete A‑to‑Z setup.
+## Choose one profile
 
----
-
-## What you are deploying
-
-ContosoPay is a checkout application made of three small services running on
-**Azure Container Apps**:
-
-- **frontend** — the public web page where a customer places an order. This is
-  the only public application service.
-- **checkout-api** — receives the order from the frontend. Internal only.
-- **payment-service** — processes the payment. Internal only. This service
-  contains a **deliberately planted, switchable fault**: a slow memory leak that
-  is turned off by default and can be switched on for the demo.
-
-Supporting Azure services are deployed automatically: a container registry,
-Key Vault for secrets, Application Insights and Log Analytics for telemetry, an
-Azure Monitor alert that watches the payment service's memory, and (optionally)
-an Azure Managed Grafana dashboard.
-
-Everything is built with Terraform. No secrets are stored in the code; the
-application reads its secrets from Key Vault using a managed identity.
-
-The demo now has three modes. They use the same ContosoPay app and planted fault,
-but tell different security and operations stories:
-
-1. **Scenario A — Autonomous troubleshooting:** privileged agent, direct Azure
-   remediation after approval. Best for the "wow" moment.
-2. **Scenario B — Guarded GitOps with PAT and public endpoints:** Reader-level
-   agent, tool policy guardrails, short-lived PAT GitHub MCP connector, and PR
-   remediation. Best for a quick GitOps demo.
-3. **Scenario C — Private-network GitOps:** Reader-level agent, SRE Agent Azure
-   VNet integration, private Key Vault, BYO GitHub App Code Access, and
-   broker/API PR remediation. Best for enterprise/security audiences.
-
----
-
-## What the demo shows
-
-When you switch the planted fault on, the payment service's memory climbs
-predictably for roughly 8–12 minutes until its five-minute average crosses the
-threshold and an **Azure Monitor alert fires**. The averaging window filters
-ordinary transient spikes. Each leaking revision calibrates its allocation rate
-from its startup memory, keeping the timing stable across normal image and
-dependency changes. The Azure SRE Agent picks up that alert, investigates the
-telemetry, connects the memory growth to the change that caused it, and proposes
-a fix. You stay in control: the agent only acts after a human approves.
-
----
-
-## Choose your scenario
-
-The demo runs in **three scenarios**. Pick the one that fits your audience and
-follow that guide from top to bottom.
-
-| | **Scenario A — Autonomous troubleshooting** | **Scenario B — Public GitOps** | **Scenario C — Private-network GitOps** |
+| | Scenario A | Scenario B | Scenario C |
 | --- | --- | --- | --- |
-| **How the incident starts** | You run a small script that switches the fault on directly on the running service. | The incident Pull Request is pre-opened by the deploy workflow; you merge it and CI/CD deploys the change. | Same GitOps incident Pull Request as Scenario B. |
-| **How it is deployed** | One command from your machine (`scripts/deploy.*`). | Entirely through GitHub Actions. | Same GitHub Actions baseline as Scenario B, plus SRE Agent Azure VNet mode. |
-| **GitHub auth** | Code Access sign-in for context. | Code Access plus short-lived fine-grained PAT in the GitHub MCP connector. | BYO GitHub App for Code Access; no-PAT PR creation uses the broker/API. |
-| **Network posture** | Default/public control-plane paths. | Public GitHub/SRE connector paths for demo speed. | Dedicated delegated SRE Agent subnet and private Key Vault access. |
-| **What the agent may do** | Privileged resource access; direct Azure fix after approval. | Reader workload access; opens a remediation Pull Request through GitHub MCP. | Reader workload access; triggers a constrained broker/API that opens the remediation Pull Request. |
-| **Best for** | A fast, self-contained "watch the agent fix it" story. | A practical GitOps and guardrails story with minimal setup. | A regulated enterprise story with private networking and stronger identity controls. |
-| **Follow this guide** | [`scenario-a-direct.md`](scenario-a-direct.md) | [`scenario-b-gitops.md`](scenario-b-gitops.md) | [`scenario-c-private-gitops.md`](scenario-c-private-gitops.md) |
+| Story | Autonomous direct recovery | Fast enterprise GitOps | Private-network enterprise GitOps |
+| Agent profile | High / Contributor / Autonomous | Low / Reader / Review | Low / Reader / Review |
+| Control endpoints | Public | Public, RBAC and TLS protected | Private state, ACR, and Key Vault |
+| Deployment runner | GitHub-hosted or local wrapper | GitHub-hosted or local wrapper | Private self-hosted: `self-hosted`, `Linux`, `X64`, `azure-private`, `contosopay` |
+| Code context | Code Access | Code Access | Read-only BYO GitHub App for Code Access |
+| Write path | Direct Azure action after the configured approval | Built-in GitHub MCP connector with a short-lived fine-grained PAT | Entra-protected broker using a separate issues-write GitHub App |
+| Broker | None | None | Required and deployed by the normal workflow |
+| Guide | [Scenario A](scenario-a-direct.md) | [Scenario B](scenario-b-gitops.md) | [Scenario C](scenario-c-private-gitops.md) |
 
-All guides include everything you need: deploying the app, creating and
-connecting the SRE Agent, switching the fault on, watching the agent work, and
-resetting afterwards.
+**Code Access and GitHub writes are different capabilities.** Code Access
+indexes and correlates source. Scenario B adds the built-in GitHub MCP connector
+for branch/file/Pull Request writes. Scenario C instead uses a custom broker and
+a separate remediation GitHub App. Scenario A has neither write path.
 
-> **Tip:** switch the fault on, then use the next few minutes to walk through the
-> architecture and alert design before the agent begins its investigation.
+## Profile and state safety
 
----
+Terraform accepts one `scenario` value (`A`, `B`, or `C`) and derives the network,
+agent, runner, and broker profile. Resource names include the scenario. The state
+account hash includes subscription, prefix, and scenario; the state blob is
+`<prefix>-<scenario>-<environment>.tfstate`.
 
-## Reference material
+In-place scenario conversion is unsupported. To change scenarios, create the new
+isolated environment and state, validate it, then explicitly destroy the old
+scenario with the **destroy** workflow or matching teardown command. Never point
+a new profile at old state.
 
-- [`sre-agent-setup.md`](sre-agent-setup.md) — a deeper reference on the Azure
-  SRE Agent: prerequisites, regions and models, and permissions.
-  The scenario guides link to it where relevant; you do not need to read it
-  separately first.
-- [`aks-variant.md`](aks-variant.md) — optional notes for running the same demo
-  on Azure Kubernetes Service instead of Azure Container Apps.
+For push automation, set repository variable `DEPLOYMENT_SCENARIO` to the active
+profile. A workflow-dispatch scenario must match it. `apply-infra` and
+`deploy-apps` refuse to guess a profile for automatic runs. Workflow images use
+the full 40-character commit SHA.
+
+## Shared preparation
+
+1. Start from a healthy `main` branch where
+   `infra/leak.auto.tfvars` contains `enable_slow_leak = false`.
+2. Configure GitHub Actions Azure OIDC variables. Never add an Azure client
+   secret.
+3. Set `DEPLOYMENT_SCENARIO` to the selected profile.
+4. Deploy the selected profile.
+5. Open the frontend, place a test order, and enable steady traffic.
+6. Create or connect the matching SRE Agent and add the demo resources, logs,
+   code, and Azure Monitor incident platform.
+7. Configure the scenario's response plan and tool policy before arming the
+   incident.
+
+## Live presentation
+
+### 1. Establish the healthy baseline
+
+Show:
+
+- the public frontend;
+- internal-only checkout and payment services;
+- stable payment-service memory;
+- Application Insights or Grafana telemetry;
+- the selected scenario profile and state isolation.
+
+### 2. Arm the incident
+
+- **Scenario A:** run `scripts/trigger-incident-direct.*`.
+- **Scenario B or C:** merge the incident Pull Request produced by the deploy
+  workflow or `scripts/trigger-incident-gitops.*`.
+
+Memory rises over approximately 8–12 minutes. Use this time to explain the alert's
+five-minute average and the scenario's security boundary.
+
+### 3. Investigate
+
+Show the Azure Monitor incident and the agent's evidence:
+
+- working-set memory trend;
+- affected payment-service revision;
+- leak feature flag;
+- deployment commit or Pull Request;
+- source and runbook context.
+
+### 4. Remediate with the scenario boundary
+
+- **A:** the agent performs a direct Azure remediation in Autonomous mode within
+  the configured approval controls. Typical actions are disabling the fault,
+  restarting the revision, or changing the scale setting.
+- **B:** the hard tool policy denies direct Azure mutation. The agent uses the
+  built-in GitHub MCP connector to open an unmerged Pull Request that sets
+  `enable_slow_leak = false`. A human reviews and merges it.
+- **C:** the hard tool policy denies direct Azure mutation. The agent calls the
+  custom MCP broker. The broker's remediation GitHub App creates a constrained
+  issue; the Scenario C-only workflow validates it and opens the unmerged
+  one-file Pull Request. A human reviews and merges it.
+
+The remediation issue and `sre-remediation-pr` workflow belong only to Scenario
+C. Scenario B opens the Pull Request directly through its built-in connector.
+
+### 5. Verify and repeat
+
+Show the new healthy revision, flattened memory, and resolved alert. Re-arm the
+incident to demonstrate faster pattern recognition. Optionally configure a
+scheduled health check to report memory, active alerts, and revision health.
+
+## Reset and teardown
+
+Reset the fault through the same operational boundary used by the scenario:
+
+- Scenario A: direct reset script.
+- Scenario B: GitHub MCP remediation Pull Request or reset trigger Pull Request.
+- Scenario C: broker remediation or reset trigger Pull Request.
+
+Destroy the exact scenario state after the demo. Remove temporary Scenario B PATs.
+For Scenario C, remove or rotate the remediation GitHub App key and uninstall the
+two GitHub Apps if they are no longer required.
+
+## References
+
+- [Azure SRE Agent run modes](https://learn.microsoft.com/azure/sre-agent/run-modes)
+- [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
+- [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
+- [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration)
+- [Container Apps networking](https://learn.microsoft.com/azure/container-apps/networking)
