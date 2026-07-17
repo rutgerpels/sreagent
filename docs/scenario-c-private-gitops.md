@@ -51,7 +51,8 @@ Key Vault key import are ready.
 
 Azure SRE Agent network integration requires a subnet dedicated to the agent.
 Do not reuse the Container Apps environment subnet, private endpoint subnet, or
-self-hosted runner subnet.
+self-hosted runner subnet. The demo Terraform now creates this subnet in the
+regional app VNet by default.
 
 Subnet requirements from
 [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration):
@@ -65,20 +66,19 @@ Subnet requirements from
 
 If your network team owns VNet changes, ask them for a subnet that meets those
 requirements and can resolve/reach the demo Key Vault private endpoint. If you
-can create it yourself, use a pattern like this:
+use the Terraform-managed VNet, set `sre_agent_subnet_address_prefix` in
+`terraform.tfvars` to a non-overlapping `/28` or larger CIDR. The example uses:
+
+```hcl
+sre_agent_subnet_address_prefix = "10.100.0.96/28"
+```
+
+After apply, use these outputs in the SRE Agent portal:
 
 ```bash
-NETWORK_RG="<network-resource-group>"
-VNET_NAME="<vnet-name>"
-SUBNET_NAME="snet-sre-agent"
-ADDRESS_PREFIX="10.42.8.0/28"
-
-az network vnet subnet create \
-  --resource-group "$NETWORK_RG" \
-  --vnet-name "$VNET_NAME" \
-  --name "$SUBNET_NAME" \
-  --address-prefixes "$ADDRESS_PREFIX" \
-  --delegations Microsoft.App/environments
+terraform -chdir=infra output app_vnet_name
+terraform -chdir=infra output sre_agent_subnet_name
+terraform -chdir=infra output sre_agent_subnet_id
 ```
 
 Confirm private Key Vault resolution from that VNet path:

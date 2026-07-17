@@ -37,6 +37,21 @@ output "container_app_environment" {
   value       = azurerm_container_app_environment.this.name
 }
 
+output "app_vnet_name" {
+  description = "Terraform-managed application VNet name."
+  value       = azurerm_virtual_network.app.name
+}
+
+output "sre_agent_subnet_name" {
+  description = "Dedicated delegated subnet for SRE Agent Azure VNet network integration."
+  value       = azurerm_subnet.sre_agent.name
+}
+
+output "sre_agent_subnet_id" {
+  description = "Dedicated delegated subnet ID for SRE Agent Azure VNet network integration."
+  value       = azurerm_subnet.sre_agent.id
+}
+
 output "frontend_url" {
   description = "Public HTTPS URL of the frontend. The Entra-protected broker is the only other public endpoint when enabled."
   value       = var.deploy_apps ? "https://${azurerm_container_app.app["frontend"].ingress[0].fqdn}" : null

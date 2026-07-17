@@ -135,6 +135,11 @@ Azure VNet mode requires a dedicated subnet:
 - in the same region as the SRE Agent resource;
 - not shared with Container Apps, private endpoints, runners, or other services.
 
+Terraform creates this subnet in the demo VNet as
+`sre_agent_subnet_address_prefix` and prints `app_vnet_name`,
+`sre_agent_subnet_name`, and `sre_agent_subnet_id` after apply. Use those
+outputs when selecting the subnet in the SRE Agent portal.
+
 Network integration controls outbound egress only. Platform services still use
 the SRE Agent managed infrastructure, and public services such as GitHub SaaS
 either need allowed FQDN egress from your VNet or the relevant SRE Agent infra
