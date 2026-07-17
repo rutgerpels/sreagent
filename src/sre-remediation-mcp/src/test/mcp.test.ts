@@ -2,16 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createApp } from '../app';
-import type { BrokerConfig } from '../config';
-import type { RemediationClient } from '../mcp';
+import { createApp } from '../app.js';
+import type { BrokerConfig } from '../config.js';
+import type { RemediationClient } from '../mcp.js';
 
 const principalId = '11111111-1111-1111-1111-111111111111';
 const config: BrokerConfig = {
   port: 8080,
   allowedCallerPrincipalId: principalId,
-  keyVaultUrl: 'https://example.vault.azure.net',
-  privateKeySecretName: 'github-app-private-key',
+  entraTenantId: '22222222-2222-2222-2222-222222222222',
+  entraTokenAudience: '33333333-3333-3333-3333-333333333333',
+  privateKeyUri: 'https://example.vault.azure.net/keys/github-app-signing-key',
   githubAppId: '1234',
   githubAppInstallationId: '5678',
   githubAppBotLogin: 'example-app[bot]',
@@ -38,7 +39,11 @@ const remediationClient: RemediationClient = {
 };
 
 test('serves the constrained tools over stateless Streamable HTTP', async () => {
-  const app = createApp(config, remediationClient);
+  const app = createApp(config, remediationClient, {
+    async verify() {
+      return { oid: principalId, tid: config.entraTenantId };
+    }
+  });
   const listener = app.listen(0);
   await new Promise<void>(resolve => listener.once('listening', resolve));
   const address = listener.address();
@@ -50,7 +55,10 @@ test('serves the constrained tools over stateless Streamable HTTP', async () => 
     new URL(`http://127.0.0.1:${address.port}/mcp`),
     {
       requestInit: {
-        headers: { 'x-ms-client-principal-id': principalId }
+        headers: {
+          'x-ms-token-aad-access-token': 'platform-access-token',
+          'x-ms-client-principal-id': principalId
+        }
       }
     }
   );

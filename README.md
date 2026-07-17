@@ -1,192 +1,259 @@
-# ContosoPay — Azure SRE Agent Demo (cloud-native)
+# ContosoPay and Azure SRE Agent
 
-A self-contained, reproducible demo that showcases the **Azure SRE Agent** on a realistic
-cloud-native checkout app running on **Azure Container Apps**, with GitHub Actions CI/CD (OIDC),
-Application Insights telemetry, Azure Monitor alerting, and Azure Managed Grafana.
+ContosoPay is a reproducible Azure SRE Agent demo built from three small
+Node.js/TypeScript services on Azure Container Apps:
 
-The app (**ContosoPay**) is three tiny Node.js/TypeScript microservices. `payment-service`
-contains a **feature-flagged, recoverable memory leak** so the SRE Agent has a real incident to
-detect, correlate to a GitHub change, explain, and remediate. The demo ships in **three scenarios**:
-autonomous direct remediation, public-endpoint GitOps, and private-network enterprise GitOps
-(see [Demo scenarios](#demo-scenarios)).
+- `frontend` is the public checkout application.
+- `checkout-api` is available only through internal Container Apps ingress.
+- `payment-service` is internal and contains a feature-flagged, recoverable
+  memory leak.
 
-> Built per [`.github/copilot-instructions.md`](.github/copilot-instructions.md). Terraform-only
-> IaC, no secrets in source, managed identity + Key Vault + OIDC throughout.
+The environment includes Azure Container Registry, Key Vault, Application
+Insights, Log Analytics, Azure Monitor alerting, and optional Azure Managed
+Grafana. Terraform owns the Azure resources; GitHub Actions uses OpenID Connect
+(OIDC), not stored Azure credentials.
+
+Start with the [scenario chooser](docs/run-of-show.md), then follow one scenario
+guide:
+
+- [Scenario A: autonomous direct remediation](docs/scenario-a-direct.md)
+- [Scenario B: public-endpoint GitOps](docs/scenario-b-gitops.md)
+- [Scenario C: private-network GitOps](docs/scenario-c-private-gitops.md)
+
+## Immutable deployment profiles
+
+The single Terraform variable `scenario` selects one immutable derived profile.
+It is not a collection of independent security toggles.
+
+| Profile | SRE Agent | Network and runner | GitHub remediation |
+| --- | --- | --- | --- |
+| **A** | High access, Contributor, Autonomous mode | Public control endpoints; GitHub-hosted workflow jobs or the local wrapper | Direct Azure remediation; no GitOps write connector and no broker |
+| **B** | Low access, Reader, Review mode | Public endpoints protected by RBAC and TLS; GitHub-hosted workflow jobs or the local wrapper | Built-in GitHub MCP connector with a short-lived fine-grained PAT; no broker |
+| **C** | Low access, Reader, Review mode | Private ACR, Key Vault, and state endpoints; dedicated SRE Agent subnet; private self-hosted runner | Entra-protected custom MCP broker using a separate remediation GitHub App; no PAT for writes |
+
+Resource names and tags include the selected scenario. Remote state is isolated
+too:
+
+- the state storage-account hash includes subscription, prefix, and scenario;
+- the blob key is `<prefix>-<scenario>-<environment>.tfstate`.
+
+**Never change `scenario` in an existing state.** In-place profile conversion is
+unsupported and is rejected by the deployment paths. To adopt another profile:
+
+1. deploy the new scenario, which creates a separate environment and state;
+2. validate the new environment;
+3. explicitly destroy the old scenario with the same scenario, prefix, and
+   environment values that created it.
+
+The state resource group can contain isolated state accounts or blobs for other
+profiles. Do not delete it indiscriminately.
 
 ## Architecture
 
-```
-Internet ──TLS──► frontend (public, ACA external ingress)
-                      │ internal ingress only
-                      ▼
-                 checkout-api (internal) ──► payment-service (internal, planted leak)
-                      │                          │
-          Managed Identity (user-assigned) per app
-                      ▼
-   Key Vault (RBAC, Private Link) · App Insights + Log Analytics
-   Premium ACR (Private Link, admin disabled)
-                      ▼
-   Azure Monitor alert ──► (SRE Agent scanner polls the Alerts API every ~1 min)
-   Azure Managed Grafana ──► dashboards over App Insights / Log Analytics
+```text
+Internet --TLS--> frontend (external ingress)
+                     |
+                     | internal HTTPS
+                     v
+                checkout-api ---> payment-service
+                                      |
+                                      | feature flag
+                                      v
+                               deterministic slow leak
 
-   Optional hardening ──► remediation MCP broker (public ACA)
-                              │ GitHub App installation token
-                              ▼
-                       fixed remediation issue
-
-   GitHub PR ──merge──► self-hosted runner VNet
-                              │ global VNet peering
-                              ▼
-                       regional application VNet
-                              │ OIDC + private endpoints
-                              ▼
-                       Terraform / ACR / Key Vault
+Managed identities --> Key Vault (RBAC)
+Managed identities --> ACR pull (admin disabled)
+OpenTelemetry ------> Application Insights and Log Analytics
+Azure Monitor ------> memory alert ------> Azure SRE Agent
 ```
 
-By default only **frontend** is publicly reachable. When the optional
-remediation broker is enabled, it is the sole exception: its HTTPS endpoint must
-be reachable by the managed Azure SRE Agent, but Container Apps authentication
-rejects callers without the dedicated Entra audience and the broker allows only
-the exact agent managed identity. Application services remain internal. In the
-CI/CD path shown above, Terraform state is reached through a private endpoint in
-the runner VNet; Key Vault and ACR private endpoints live in the application
-VNet and are reachable over global VNet peering. Terraform state remains in an
-**LRS storage account** bootstrapped by the deploy workflow.
+Scenarios A and B keep the deployment control endpoints public so a GitHub-hosted
+runner or the local deployment wrapper can reach them. Authentication remains
+RBAC-based and transport remains TLS-only.
 
-## Prerequisites
+Scenario C adds a regional VNet, private endpoints for ACR and Key Vault, private
+Terraform-state access from a peered runner VNet, and a dedicated delegated SRE
+Agent subnet. The required runner labels are:
 
-- [Azure CLI](https://learn.microsoft.com/cli/azure/) (`az login`, contributor on the target sub)
-- [Terraform](https://developer.hashicorp.com/terraform) >= 1.9
-- [Docker](https://www.docker.com/) (daemon running — builds the app images and optional broker)
-- A Bash shell (Linux/macOS/WSL/Git Bash) **or** PowerShell 7+ on Windows
-- For GitHub CI/CD: a Linux self-hosted runner with the labels `azure-private` and `contosopay`,
-  attached to the VNet configured by the runner networking Terraform variables.
+```text
+[self-hosted, Linux, X64, azure-private, contosopay]
+```
 
-## Quick start
+The Scenario C remediation broker is the only application endpoint besides the
+frontend with external ingress. This is deliberate: a single Container Apps
+environment must keep the frontend public, while per-app internal ingress and
+environment-level private endpoints do not provide the managed SRE Agent with
+the required inbound reachability. The broker therefore uses external HTTPS,
+Container Apps built-in authentication (Easy Auth), a dedicated Entra audience,
+an allow-list containing the exact SRE Agent principal, and application-level
+RS256 token verification against the tenant issuer, audience, and exact managed
+identity object ID. The broker accepts only Easy Auth's token-store
+`X-MS-TOKEN-AAD-ACCESS-TOKEN` header and requires the platform principal header
+to match the cryptographically verified `oid` claim. The business services
+remain internal.
+
+See the official documentation for
+[Container Apps networking](https://learn.microsoft.com/azure/container-apps/networking),
+[Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication),
+and
+[Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration).
+
+## Deployment
+
+### GitHub Actions
+
+The manual **deploy** workflow supports A, B, and C. Select the scenario
+explicitly. A and B use GitHub-hosted runners; C uses the labeled private
+self-hosted runner.
+
+Configure these nonsecret repository variables for OIDC:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `DEPLOYMENT_SCENARIO`
+- `SRE_AGENT_SPONSOR_GROUP_ID`
+
+`DEPLOYMENT_SCENARIO` must be exactly `A`, `B`, or `C`. It is the target for
+automatic `apply-infra` and `deploy-apps` runs. A manual workflow-dispatch
+selection must match the repository variable. This prevents a manual run and
+subsequent push automation from targeting different profiles.
+
+The deployment workflows provision exactly one SRE Agent for the selected
+profile. `SRE_AGENT_SPONSOR_GROUP_ID` is the Entra sponsor group object ID.
+Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME` variables override
+the default `MicrosoftFoundry` / `gpt-5` model configuration.
+
+The workflows reject a missing or invalid automatic-deployment scenario and
+verify the scenario stored in state. Each full commit-SHA image is published
+once, write/delete locked in ACR, resolved to a `sha256` manifest digest, and
+deployed by digest. Do not use mutable tags such as `latest`.
+
+Partially created application state from an older tag-based revision has no
+trusted digest map for recovery. Replace that isolated scenario environment
+rather than guessing image ownership.
+
+For Scenario A, set **Open incident PR** to `false`; use the direct incident
+script instead. Scenarios B and C use the incident Pull Request flow.
+
+### Local wrapper for A or B
+
+The local wrapper supports Scenario A and B only. It uses the signed-in Azure
+user and Azure AD data-plane authentication for state. It defaults the
+publication tag to the current full commit SHA, locks it, and deploys its
+resolved manifest digest:
 
 ```bash
-# 1. Configure variables (no secrets — placeholders only)
-cp terraform.tfvars.example terraform.tfvars   # then edit prefix/location if you like
-
-# 2. Single-command deploy: terraform + build/push images + wire revisions
-./scripts/deploy.sh        # bash
-# or
-pwsh ./scripts/deploy.ps1  # PowerShell
+./scripts/deploy.sh --scenario A
+./scripts/deploy.sh --scenario B
 ```
 
-The script prints the public **frontend URL** and a "next steps" block for connecting the
-Azure SRE Agent. This local script is the path used by **Scenario A**.
+```powershell
+pwsh ./scripts/deploy.ps1 -Scenario A
+pwsh ./scripts/deploy.ps1 -Scenario B
+```
 
-> **Prefer full CI/CD?** **Scenarios B and C** deploy the same environment
-> entirely through GitHub Actions (the **deploy** workflow) with no local
-> Terraform or Docker. Start with [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md)
-> for the public PAT demo or [`docs/scenario-c-private-gitops.md`](docs/scenario-c-private-gitops.md)
-> for the private-network enterprise path.
+Scenario C must use the normal **deploy** workflow from the private runner
+because its state, ACR, and Key Vault endpoints are private.
 
-### Tear down
+### Destroy one profile
+
+Use the manual **destroy** workflow and select the exact scenario, prefix, and
+environment. Its confirmation value is
+`<prefix>-<scenario>-<environment>`. Alternatively, for a locally deployed A or
+B profile:
 
 ```bash
-./scripts/teardown.sh      # terraform destroy -auto-approve
+./scripts/teardown.sh --scenario A
 ```
 
-## Demo scenarios
+The teardown verifies the scenario recorded in state before destroying.
 
-The same environment runs **three demo experiences**. Pick one per run — they
-only differ in agent autonomy, GitOps guardrails, and network posture.
+## Scenario C GitHub identities and key custody
 
-| | **Scenario A — Autonomous** | **Scenario B — Public GitOps** | **Scenario C — Private GitOps** |
-|---|---|---|---|
-| **Trigger** | Script pokes the live app | Pull Request + CI deploys the change | Pull Request + CI deploys the change |
-| **Command** | `scripts/trigger-incident-direct.*` | `scripts/trigger-incident-gitops.*` | `scripts/trigger-incident-gitops.*` |
-| **Agent Azure access** | **Privileged** (read/write) | **Reader** (read-only) | **Reader** (read-only) |
-| **GitHub auth** | Code Access context | Code Access + short-lived fine-grained PAT via GitHub MCP | Code Access with BYO GitHub App; no-PAT PR path uses the broker/API |
-| **Network posture** | Default public control paths | Public GitHub/SRE connector paths | SRE Agent Azure VNet mode + private Key Vault |
-| **Remediation** | Agent fixes Azure directly after approval | Agent opens a remediation PR; a human merges it | Agent triggers broker/API; workflow opens a remediation PR for human review |
-| **Best for** | A fast, self-contained "watch it fix" moment | GitOps guardrails with minimal setup | Enterprise private-network setup |
-| **Full A-to-Z guide** | [`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) | [`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) | [`docs/scenario-c-private-gitops.md`](docs/scenario-c-private-gitops.md) |
+Scenario C uses two separate GitHub Apps:
 
-New here? Start with [`docs/run-of-show.md`](docs/run-of-show.md) — it explains the
-demo and points you to the right scenario guide. Each scenario guide is a complete,
-self-contained walkthrough (deploy → create and connect the agent → run the
-incident → reset). [`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the
-agent reference the guides link to for background.
+1. a read-only bring-your-own App for SRE Agent **Code Access**;
+2. an issues-write remediation App used only by the broker.
 
-### Scenario A — trigger on the spot
+Code Access provides repository context and correlation. It is not the
+write-capable broker credential. The remediation App has only Metadata read and
+Issues read/write on this repository. It creates a constrained remediation
+issue; the Scenario C-only `sre-remediation-pr` workflow validates that issue and
+uses its short-lived `GITHUB_TOKEN` to open an unmerged one-file Pull Request.
+
+The remediation App PEM is imported once, from the private network, as a
+non-exportable RSA Key Vault **key** with only the `sign` operation:
 
 ```bash
-./scripts/trigger-incident-direct.sh        # az containerapp update — flips ENABLE_SLOW_LEAK on the live app
-# or: pwsh ./scripts/trigger-incident-direct.ps1
+./scripts/configure-github-app-key.sh \
+  --vault-name "<scenario-c-vault>" \
+  --private-key "./remediation-app.pem" \
+  --key-name "github-app-signing-key"
 ```
 
-Memory in `payment-service` climbs for roughly 8–12 minutes, the Azure Monitor alert fires, and the
-SRE Agent (granted **Privileged** access) proposes a direct mitigation you approve in the agent UI.
-
-### Scenario B/C — trigger via a Pull Request (GitOps)
-
-When you stand up the environment with the **`deploy` GitHub Actions workflow**, it
-**auto-opens the incident PR** (setting `enable_slow_leak=true`) at the end of the run — it waits
-in the **Pull requests** tab, ready to merge. To open one manually (or after a reset), run:
-
-```bash
-./scripts/trigger-incident-gitops.sh        # opens a PR setting enable_slow_leak=true in infra/leak.auto.tfvars
-# or: pwsh ./scripts/trigger-incident-gitops.ps1
+```powershell
+pwsh ./scripts/configure-github-app-key.ps1 `
+  -VaultName "<scenario-c-vault>" `
+  -PrivateKeyPath "./remediation-app.pem" `
+  -KeyName "github-app-signing-key"
 ```
 
-The deploy workflow (or the script) opens a **Pull Request** flipping the planted-fault flag.
-**Merging it** runs the
-`apply-infra` GitHub Actions workflow, which `terraform apply`s the change (remote state) and
-deploys the leak — no one edits the live app by hand. **Remediation is GitOps
-too:** the agent is limited to **Reader-level workload access**, with a required
-global Tool Access Policy that denies direct mutation tools. Scenario B uses a
-short-lived PAT GitHub MCP connector for demo speed. Scenario C uses SRE Agent
-Azure VNet mode, BYO GitHub App Code Access, and the broker/API path for
-no-PAT Pull Request creation. A human merges the remediation PR, CI redeploys, and memory recovers. See
-[`agent/`](agent/) for the committable agent config.
+The script never opens public network access. It temporarily grants the signed-in
+operator **Key Vault Crypto Officer**, imports the key, and removes that temporary
+assignment. Terraform grants the broker a custom role containing only key
+metadata read and sign data actions. The broker receives only the key URI,
+creates a `CryptographyClient`, and asks Key Vault to perform RS256 signing. It
+never reads or downloads the private key.
 
-## Repository layout
+Use only these names:
+
+- Terraform: `sre_remediation_github_app_private_key_name`
+- repository variable: `SRE_GITHUB_APP_PRIVATE_KEY_NAME`
+- broker setting: `GITHUB_APP_PRIVATE_KEY_KEY_URI`
+- Terraform output: `sre_remediation_broker_key_uri`
+
+Do not upload the PEM as a Key Vault secret and do not place it in Terraform,
+GitHub Actions, repository files, or shell history. See
+[Key Vault key operations](https://learn.microsoft.com/azure/key-vault/keys/about-keys-details),
+[Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide),
+[GitHub App JWT authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app),
+and
+[GitHub App installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
+
+## Security invariants
+
+- CI/CD authenticates to Azure with OIDC only; no Azure client secret or
+  credentials JSON is stored.
+- No credential, PAT, PEM, tenant ID, subscription ID, or customer-identifying
+  value is committed.
+- Key Vault uses Azure RBAC, purge protection, and soft delete.
+- ACR admin and anonymous access are disabled; pulls use managed identity.
+- Role assignments are least-privilege and resource-scoped except where the
+  managed SRE Agent requires broader monitoring scope.
+- Ingress is TLS-only. `checkout-api` and `payment-service` are never public.
+- Scenario B's PAT is fine-grained, single-repository, minimum-permission, and
+  short-lived; revoke it after the demo.
+- Scenario C performs no PAT-based GitHub writes.
+
+## Repository map
 
 | Path | Purpose |
-|------|---------|
-| `infra/` | All Terraform (`azurerm`) — RG, identities, private networking, ACR, Key Vault, observability, ACA, alerts, Grafana |
-| `infra/agents.tf` | **Optional** SRE Agents (`azapi`, autonomous=High / GitOps=Reader) — off unless `enable_sre_agents=true` |
-| `infra/leak.auto.tfvars` | **GitOps source of truth** for the planted-leak flag (committed, non-secret) |
-| `src/frontend` | Public SPA + Node server |
-| `src/checkout-api` | Internal API (orders) |
-| `src/payment-service` | Internal API with the planted, flag-gated memory leak |
-| `src/sre-remediation-mcp` | Optional Entra-protected two-tool remediation broker; GitHub App key is read from Key Vault via managed identity |
-| `scripts/` | `deploy`, `teardown`, `trigger-incident-direct` (Scenario A), `trigger-incident-gitops` (Scenarios B/C) |
-| `agent/` | Committable SRE Agent GitOps config (tool-access policy, custom agent, runbook) |
-| `docs/run-of-show.md` | Start here — what the demo is and which scenario guide to follow |
-| `docs/scenario-a-direct.md` | Scenario A — complete A-to-Z autonomous troubleshooting guide |
-| `docs/scenario-b-gitops.md` | Scenario B — public-endpoint GitOps guide with PAT shortcut |
-| `docs/scenario-c-private-gitops.md` | Scenario C — enterprise GitOps guide with SRE Agent VNet integration |
-| `docs/sre-agent-setup.md` | Azure SRE Agent reference (prerequisites, regions, permissions) |
-| `docs/aks-variant.md` | Optional AKS deployment notes |
-| `.github/workflows/deploy.yml` | **Full environment deploy via CI/CD** (`workflow_dispatch`) — state bootstrap, platform, build/push, apps |
-| `.github/workflows/deploy-apps.yml` | OIDC build + push + revision update (on `src/**`) |
-| `.github/workflows/apply-infra.yml` | OIDC `terraform apply` on merge (deploys flag/IaC changes); computes remote-state backend automatically |
-| `.github/workflows/sre-remediation-pr.yml` | Scenario C broker path: converts a trusted remediation issue into a one-file, unmerged PR |
+| --- | --- |
+| `infra/` | Scenario-derived Terraform profiles and Azure resources |
+| `src/` | Three services plus the Scenario C-only broker |
+| `.github/workflows/deploy.yml` | Full scenario-aware deployment |
+| `.github/workflows/apply-infra.yml` | Scenario-aware infrastructure and flag apply |
+| `.github/workflows/deploy-apps.yml` | Full-SHA image build and app update |
+| `.github/workflows/destroy.yml` | Verified profile-specific teardown |
+| `.github/workflows/sre-remediation-pr.yml` | Scenario C-only issue-to-PR remediation |
+| `scripts/` | Local A/B deploy, teardown, incident triggers, and Scenario C key import |
+| `agent/` | Tool policy, custom-agent prompts, and runbook |
+| `docs/` | Scenario guides and SRE Agent reference |
 
-## Security
+## Further reading
 
-- No secrets in source. All secrets live in **Azure Key Vault**; apps and the
-  broker read them via **managed identity**. The GitHub App key never
-  enters Terraform state. CI/CD uses **OIDC federation**, never stored credentials.
-- ACR admin user disabled · private endpoints for state, ACR, and Key Vault · Key Vault RBAC +
-  purge protection · TLS-only ingress · least-privilege role assignments · diagnostic settings to
-  Log Analytics.
-
-## Connecting the Azure SRE Agent
-
-The SRE Agent is a **managed service** configured at <https://sre.azure.com>.
-By default you create it in the portal; `infra/agents.tf` can optionally provision
-the agent resource and Azure RBAC when `enable_sre_agents = true`. Pick a scenario
-and follow its complete A-to-Z guide —
-[`docs/scenario-a-direct.md`](docs/scenario-a-direct.md) (autonomous),
-[`docs/scenario-b-gitops.md`](docs/scenario-b-gitops.md) (public GitOps), or
-[`docs/scenario-c-private-gitops.md`](docs/scenario-c-private-gitops.md)
-(private-network GitOps). Each guide covers deploying
-the app, creating and connecting the agent, running the incident, and resetting.
-[`docs/sre-agent-setup.md`](docs/sre-agent-setup.md) is the agent reference (prerequisites,
-regions/models, permissions). The committable GitOps agent config
-(deny-Azure-writes policy, GitOps custom agent, runbook) lives in [`agent/`](agent/).
+- [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
+- [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
+- [GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)
+- [Fine-grained personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)

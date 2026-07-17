@@ -1,268 +1,294 @@
 name: destroy
 
-# Tear down the ContosoPay environment that `deploy` (Scenario B) stood up.
-#
-# This is the CI/CD mirror of scripts/teardown.* -- it runs `terraform destroy`
-# against the SAME remote state the deploy pipeline writes to, over OIDC (no
-# stored credentials). It removes every resource Terraform manages: the Container
-# Apps, ACR, Key Vault, alert rule, identities, observability, etc.
-#
-# It is intentionally manual (workflow_dispatch) and guarded: you must type the
-# resource prefix into the `confirm` box, otherwise the run aborts. This prevents
-# an accidental teardown of a live demo environment.
-#
-# Resilience: the normal path retries after deleting orphaned Container Apps if
-# the environment delete hits 409 ManagedEnvironmentHasContainerApps (state drift
-# from a cancelled/re-run apply). For a badly drifted environment, set
-# `force_delete_rg` to nuke the env resource group(s) directly and reset state.
-#
-# Prerequisites are identical to deploy.yml -- the same deployment identity and
-# GitHub Actions *variables* must already be set:
-#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-# Optional (defaults shown): TF_PREFIX (contosopay), TF_ENVIRONMENT (demo),
-#   TF_LOCATION (swedencentral).
-#
-# Note: the Key Vault has purge protection enabled, so it is soft-deleted (not
-# purged) and ages out after its retention window. The random name suffix means
-# this never blocks a future deploy.
-
+# Manual teardown of one scenario-isolated environment. Force recovery reads the
+# raw state blob and never evaluates Terraform or optional deployment metadata.
 on:
   workflow_dispatch:
     inputs:
-      confirm:
-        description: "Type the resource prefix to confirm destruction (e.g. contosopay)"
+      scenario:
+        description: "Deployment scenario"
+        type: choice
         required: true
+        options: [A, B, C]
       prefix:
         description: "Resource name prefix"
         required: false
         default: "contosopay"
       environment:
-        description: "Environment label (dev | demo | test)"
+        description: "Environment label"
         required: false
         default: "demo"
-      location:
-        description: "Azure region"
-        required: false
-        default: "swedencentral"
-      delete_state_storage:
-        description: "Also delete the remote Terraform state storage RG after destroy"
+      confirm:
+        description: "Type <prefix>-<scenario>-<environment> to confirm"
+        required: true
+      force_delete_rg:
+        description: "Recovery only: delete the exact resource group recorded in verified state, then reset that state"
         type: boolean
         required: false
         default: false
-      force_delete_rg:
-        description: "Nuke: delete the env resource group(s) rg-<prefix>-<env>-* directly and reset remote state. Use when terraform destroy is stuck on orphaned resources / drifted state."
+      delete_state_storage:
+        description: "Delete this scenario/environment state blob after destroy (the shared state account is retained)"
         type: boolean
         required: false
         default: false
 
 permissions:
-  id-token: write # required for OIDC
   contents: read
 
 concurrency:
-  group: deploy-environment # share with deploy.yml so the two never overlap
+  group: deployment-${{ inputs.scenario }}-${{ inputs.prefix }}-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   destroy:
-    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
+    runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
     env:
       ARM_USE_OIDC: "true"
-      ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
+      ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
-      TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
-      TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
-      TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
-      TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
-      TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-      TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
-      TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
-      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
+      DEPLOYMENT_SCENARIO: ${{ inputs.scenario }}
+      TF_PREFIX: ${{ inputs.prefix }}
+      TF_ENVIRONMENT: ${{ inputs.environment }}
+      IMAGE_TAG: ${{ github.sha }}
+      REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
+      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
+      SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
     steps:
-      - name: Validate confirmation
+      - name: Validate destruction request
+        shell: bash
         env:
-          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+          FORCE_DELETE_RG: ${{ inputs.force_delete_rg }}
         run: |
           set -euo pipefail
-          if [[ "${CONFIRM_INPUT}" != "${TF_PREFIX}" ]]; then
-            echo "::error::Confirmation does not match prefix '${TF_PREFIX}'. Aborting." >&2
-            exit 1
+          readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
+          readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
+          readonly SCENARIO_PATTERN='^(A|B|C)$'
+          [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, or C."; exit 1; }
+          [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${TF_PREFIX}'."; exit 1; }
+          [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${TF_ENVIRONMENT}'."; exit 1; }
+          [[ "${CONFIRM_INPUT}" == "${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}" ]] || { echo "::error::Confirmation does not match the selected profile."; exit 1; }
+          for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
+            [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required."; exit 1; }
+          done
+          if [[ "${FORCE_DELETE_RG}" != "true" ]]; then
+            readonly SHA_PATTERN='^[0-9a-f]{40}$'
+            [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
+            [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::Dispatch scenario '${DEPLOYMENT_SCENARIO}' does not match repository profile '${REPOSITORY_SCENARIO}'."; exit 1; }
+            [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
+            [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required for Terraform destroy."; exit 1; }
+            {
+              echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
+              echo "TF_VAR_enable_sre_agents=true"
+              echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
+              echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
+              echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
+            } >> "${GITHUB_ENV}"
           fi
-          echo "Confirmation matched prefix '${TF_PREFIX}'. Proceeding with destroy."
 
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: ${{ inputs.force_delete_rg == false }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Configure Scenario C private networking
+        if: ${{ inputs.scenario == 'C' && inputs.force_delete_rg == false }}
+        shell: bash
+        env:
+          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
+          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+          RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
+          APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
+          APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
+        run: |
+          {
+            echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
+            echo "TF_VAR_runner_vnet_name=${RUNNER_VNET_NAME}"
+            echo "TF_VAR_runner_private_endpoint_subnet_name=${RUNNER_PE_SUBNET_NAME}"
+            echo "TF_VAR_app_vnet_address_space=${APP_VNET_ADDRESS_SPACE}"
+            echo "TF_VAR_app_private_endpoint_subnet_address_prefix=${APP_PE_SUBNET_PREFIX}"
+            echo "TF_VAR_container_apps_subnet_address_prefix=${CONTAINER_APPS_SUBNET_PREFIX}"
+            echo "TF_VAR_sre_agent_subnet_address_prefix=${SRE_AGENT_SUBNET_PREFIX}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Configure Scenario C broker metadata
+        if: ${{ inputs.scenario == 'C' && inputs.force_delete_rg == false }}
+        shell: bash
+        env:
+          ENTRA_CLIENT_ID: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
+          TOKEN_AUDIENCE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
+          TOKEN_SCOPE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
+          GITHUB_APP_ID: ${{ vars.SRE_GITHUB_APP_ID }}
+          GITHUB_APP_INSTALLATION_ID: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
+          GITHUB_APP_BOT_LOGIN: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
+          PRIVATE_KEY_NAME: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_NAME || 'github-app-signing-key' }}
+        run: |
+          set -euo pipefail
+          for value in ENTRA_CLIENT_ID TOKEN_AUDIENCE TOKEN_SCOPE GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_BOT_LOGIN; do
+            [[ -n "${!value}" ]] || { echo "::error::Scenario C destroy requires repository variable ${value} so Terraform can load the existing configuration."; exit 1; }
+          done
+          {
+            echo "TF_VAR_sre_remediation_entra_api_client_id=${ENTRA_CLIENT_ID}"
+            echo "TF_VAR_sre_remediation_entra_token_audience=${TOKEN_AUDIENCE}"
+            echo "TF_VAR_sre_remediation_entra_token_scope=${TOKEN_SCOPE}"
+            echo "TF_VAR_sre_remediation_github_app_id=${GITHUB_APP_ID}"
+            echo "TF_VAR_sre_remediation_github_app_installation_id=${GITHUB_APP_INSTALLATION_ID}"
+            echo "TF_VAR_sre_remediation_github_app_bot_login=${GITHUB_APP_BOT_LOGIN}"
+            echo "TF_VAR_sre_remediation_github_repository_owner=${GITHUB_REPOSITORY_OWNER}"
+            echo "TF_VAR_sre_remediation_github_repository_name=${GITHUB_REPOSITORY#*/}"
+            echo "TF_VAR_sre_remediation_github_app_private_key_name=${PRIVATE_KEY_NAME}"
+          } >> "${GITHUB_ENV}"
 
       - name: Azure login (OIDC)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        if: ${{ inputs.force_delete_rg == false }}
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
 
-      - name: Compute backend config
+      - name: Resolve scenario-isolated backend
         id: backend
+        shell: bash
         run: |
           set -euo pipefail
-          # Deterministic, non-identifying remote-state names (match deploy.yml / scripts/deploy.*).
+          STATE_HASH="$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${TF_PREFIX}" "${DEPLOYMENT_SCENARIO}" | sha256sum | cut -c1-16)"
           STATE_RG="rg-${TF_PREFIX}-tfstate"
-          STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${TF_PREFIX}" | sha256sum | cut -c1-16)"
           STATE_SA="sttf${STATE_HASH}"
-          STATE_CONTAINER="tfstate"
-          STATE_KEY="${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
-
-          # Don't hard-fail when state storage is missing: the force-delete path
-          # works off resource-group name patterns and needs no state at all.
-          if az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
-            echo "state_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "state_exists=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Remote state storage '${STATE_SA}' not found; skipping terraform destroy."
-          fi
-
+          STATE_KEY="${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}.tfstate"
+          az storage account show -n "${STATE_SA}" -g "${STATE_RG}" >/dev/null 2>&1 || { echo "::error::Selected scenario backend does not exist."; exit 1; }
+          EXISTS="$(az storage blob exists --account-name "${STATE_SA}" --container-name tfstate --name "${STATE_KEY}" --auth-mode login --query exists -o tsv)"
+          [[ "${EXISTS}" == true ]] || { echo "::error::Selected scenario state blob does not exist; refusing unverified destruction."; exit 1; }
           {
             echo "state_rg=${STATE_RG}"
             echo "state_sa=${STATE_SA}"
-            echo "state_container=${STATE_CONTAINER}"
             echo "state_key=${STATE_KEY}"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT}"
 
-      # ---------------------------------------------------------------------
-      # Normal path: terraform destroy, made resilient to orphaned Container
-      # Apps. If state has drifted (apps exist in Azure but not in state), the
-      # Container App Environment delete returns 409 ManagedEnvironmentHasContainerApps.
-      # We catch that, delete any Container Apps still in the app RG, and retry.
-      # ---------------------------------------------------------------------
-      - name: Terraform init (remote state)
-        if: ${{ github.event.inputs.force_delete_rg != 'true' && steps.backend.outputs.state_exists == 'true' }}
+      - name: Terraform init and verify scenario
+        if: ${{ inputs.force_delete_rg == false }}
         working-directory: infra
+        shell: bash
         run: |
           set -euo pipefail
           terraform init -input=false \
             -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
             -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
-            -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
+            -backend-config="container_name=tfstate" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
+          terraform state list | grep -Fxq 'azurerm_resource_group.this' || { echo "::error::Selected state has no environment to destroy."; exit 1; }
+          ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)" || { echo "::error::State has no scenario output; unverified destruction and in-place conversion are forbidden."; exit 1; }
+          [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
+          {
+            echo "TF_LOCATION=$(terraform output -raw location)"
+            echo "APP_RESOURCE_GROUP=$(terraform output -raw resource_group_name)"
+          } >> "${GITHUB_ENV}"
 
       - name: Terraform destroy
-        if: ${{ github.event.inputs.force_delete_rg != 'true' && steps.backend.outputs.state_exists == 'true' }}
+        if: ${{ inputs.force_delete_rg == false }}
         working-directory: infra
+        shell: bash
         run: |
           set -euo pipefail
-          # deploy_apps=true + a placeholder image_tag so the configuration matches
-          # the deployed state; destroy removes everything tracked in state regardless.
-          STATE_RESOURCES="$(terraform state list)"
-          if grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_RESOURCES}"; then
-            APP_RG="$(terraform output -raw resource_group_name)"
-            LOCATION="$(terraform output -raw location)" || {
-              echo "::error::Existing environment location could not be read from Terraform state." >&2
-              exit 1
-            }
-          else
-            APP_RG=""
-            LOCATION="${TF_LOCATION}"
-          fi
-
+          [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
           destroy() {
             terraform destroy -input=false -auto-approve \
-              -var 'deploy_apps=true' \
-              -var 'image_tag=destroy' \
-              -var "prefix=${TF_PREFIX}" \
-              -var "environment=${TF_ENVIRONMENT}" \
-              -var "location=${LOCATION}"
+              -var 'deploy_apps=false' -var "image_tag=${IMAGE_TAG}" \
+              -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
+              -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
           }
-
-          if destroy; then
-            exit 0
-          fi
-
-          echo "::warning::terraform destroy failed. Removing any orphaned Container Apps in '${APP_RG}' and retrying."
-          if [[ -n "${APP_RG}" ]] && az group show -n "${APP_RG}" >/dev/null 2>&1; then
-            # Use the generic resource API so no az containerapp extension is required.
-            for id in $(az resource list -g "${APP_RG}" \
-                          --resource-type Microsoft.App/containerApps \
-                          --query "[].id" -o tsv 2>/dev/null || true); do
-              echo "  deleting orphaned Container App: ${id}"
-              az resource delete --ids "${id}" 2>/dev/null || true
-            done
-          fi
+          if destroy; then exit 0; fi
+          echo "::warning::Terraform destroy failed; deleting orphaned Container Apps in the verified resource group and retrying."
+          for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/containerApps --query '[].id' -o tsv 2>/dev/null || true); do
+            az resource delete --ids "${id}" || true
+          done
           destroy
 
-      # ---------------------------------------------------------------------
-      # Force path: nuke the environment resource group(s) directly. This does
-      # not rely on Terraform state, so it recovers a badly drifted environment.
-      # Names are rg-<prefix>-<env>-<suffix>, so we match on that prefix.
-      # ---------------------------------------------------------------------
-      - name: Force delete resource group(s)
-        if: ${{ github.event.inputs.force_delete_rg == 'true' }}
+      - name: Force delete exact verified resource group
+        if: ${{ inputs.force_delete_rg }}
+        shell: bash
         run: |
           set -euo pipefail
-          PATTERN="rg-${TF_PREFIX}-${TF_ENVIRONMENT}-"
-          echo "==> Nuke mode: deleting resource groups starting with '${PATTERN}'"
-          mapfile -t RGS < <(az group list --query "[?starts_with(name, '${PATTERN}')].name" -o tsv)
-          if [[ ${#RGS[@]} -eq 0 ]]; then
-            echo "No matching resource groups found (already gone)."
-          else
-            for rg in "${RGS[@]}"; do
-              echo "  deleting ${rg}"
-              az group delete -n "${rg}" --yes
-            done
-          fi
-
-      - name: Reset remote state after force delete
-        if: ${{ github.event.inputs.force_delete_rg == 'true' && steps.backend.outputs.state_exists == 'true' }}
-        run: |
-          set -euo pipefail
-          echo "==> Resetting remote state so the next deploy generates a fresh suffix"
-          # Break any stale lock lease first, then delete the state blob.
-          az storage blob lease break \
+          command -v jq >/dev/null 2>&1 || { echo "::error::Force recovery requires jq on the selected runner."; exit 1; }
+          STATE_FILE="${RUNNER_TEMP}/verified-force-destroy.tfstate"
+          az storage blob download \
             --account-name "${{ steps.backend.outputs.state_sa }}" \
-            --container-name "${{ steps.backend.outputs.state_container }}" \
-            --blob-name "${{ steps.backend.outputs.state_key }}" \
-            --auth-mode login 2>/dev/null || true
-          az storage blob delete \
-            --account-name "${{ steps.backend.outputs.state_sa }}" \
-            --container-name "${{ steps.backend.outputs.state_container }}" \
+            --container-name tfstate \
             --name "${{ steps.backend.outputs.state_key }}" \
-            --auth-mode login 2>/dev/null || true
+            --file "${STATE_FILE}" \
+            --auth-mode login \
+            --overwrite \
+            --output none
+          jq -e '.version == 4 and (.resources | type == "array")' "${STATE_FILE}" >/dev/null || { echo "::error::Selected blob is not a supported Terraform state."; exit 1; }
+          ACTUAL_SCENARIO="$(jq -er '.outputs.scenario.value' "${STATE_FILE}")" || { echo "::error::State has no scenario output."; exit 1; }
+          [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
+          RG_JSON="$(jq -ce '
+            [.resources[]
+             | select(.mode == "managed" and .type == "azurerm_resource_group" and .name == "this")
+             | .instances[].attributes]
+            | if length == 1 then .[0] else error("expected one managed resource group") end
+          ' "${STATE_FILE}")"
+          APP_RESOURCE_GROUP="$(jq -er '.name' <<< "${RG_JSON}")"
+          STATE_RG_ID="$(jq -er '.id' <<< "${RG_JSON}")"
+          EXPECTED_RG_ID="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}"
+          [[ "${STATE_RG_ID,,}" == "${EXPECTED_RG_ID,,}" ]] || { echo "::error::State resource group ID is outside the authenticated subscription."; exit 1; }
+          jq -e \
+            --arg scenario "${DEPLOYMENT_SCENARIO}" \
+            --arg environment "${TF_ENVIRONMENT}" \
+            '.tags.project == "sre-agent-demo"
+             and .tags.managed_by == "terraform"
+             and .tags.scenario == $scenario
+             and .tags.env == $environment' \
+            <<< "${RG_JSON}" >/dev/null || { echo "::error::State resource group tags do not match the requested scenario profile."; exit 1; }
 
-      - name: Delete remote state storage (optional)
-        if: ${{ github.event.inputs.delete_state_storage == 'true' && steps.backend.outputs.state_exists == 'true' }}
+          LIVE_RG="$(az group show --name "${APP_RESOURCE_GROUP}" --output json)"
+          LIVE_RG_ID="$(jq -er '.id' <<< "${LIVE_RG}")"
+          [[ "${LIVE_RG_ID,,}" == "${STATE_RG_ID,,}" ]] || { echo "::error::Live resource group ID does not match verified state."; exit 1; }
+          jq -e \
+            --arg scenario "${DEPLOYMENT_SCENARIO}" \
+            --arg environment "${TF_ENVIRONMENT}" \
+            '.tags.project == "sre-agent-demo"
+             and .tags.managed_by == "terraform"
+             and .tags.scenario == $scenario
+             and .tags.env == $environment' \
+            <<< "${LIVE_RG}" >/dev/null || { echo "::error::Live resource group tags do not match verified state."; exit 1; }
+
+          az group delete --name "${APP_RESOURCE_GROUP}" --yes
+          [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
+          az storage blob lease break --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --blob-name "${{ steps.backend.outputs.state_key }}" --auth-mode login 2>/dev/null || true
+          az storage blob delete --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --name "${{ steps.backend.outputs.state_key }}" --auth-mode login
+
+      - name: Delete isolated state blob after normal destroy
+        if: ${{ success() && inputs.force_delete_rg == false && inputs.delete_state_storage }}
+        shell: bash
         run: |
           set -euo pipefail
-          az network private-endpoint delete \
-            --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-            --name "pe-${{ steps.backend.outputs.state_sa }}-blob" 2>/dev/null || true
-          echo "==> Deleting remote state resource group ${{ steps.backend.outputs.state_rg }}"
-          az group delete --name "${{ steps.backend.outputs.state_rg }}" --yes
+          az storage blob lease break --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --blob-name "${{ steps.backend.outputs.state_key }}" --auth-mode login 2>/dev/null || true
+          az storage blob delete --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --name "${{ steps.backend.outputs.state_key }}" --auth-mode login
 
       - name: Summary
         if: ${{ always() }}
+        shell: bash
         run: |
           {
-            echo "## ContosoPay environment destroy"
+            echo "## Scenario ${DEPLOYMENT_SCENARIO} destroy"
             echo ""
-            if [[ "${{ job.status }}" == "success" ]]; then
-              echo "Terraform destroy completed for prefix \`${TF_PREFIX}\` (env \`${TF_ENVIRONMENT}\`)."
-            else
-              echo "Destroy did not complete cleanly -- check the job logs above."
-            fi
-            echo ""
-            if [[ "${{ github.event.inputs.delete_state_storage }}" == "true" ]]; then
-              echo "Remote state storage RG \`${{ steps.backend.outputs.state_rg }}\` deletion was requested (running asynchronously)."
-            else
-              echo "Remote state storage was kept. Re-run with **delete_state_storage** to remove it too."
-            fi
-            echo ""
-            echo "> Key Vault has purge protection, so it is soft-deleted (not purged) and ages out after its retention window."
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "Profile: \`${TF_PREFIX}/${TF_ENVIRONMENT}\`"
+            echo "Status: \`${{ job.status }}\`"
+            echo "The state account is retained because it can contain other environments for this scenario."
+            echo "Key Vault purge protection can retain soft-deleted vault data until its retention period expires."
+          } >> "${GITHUB_STEP_SUMMARY}"

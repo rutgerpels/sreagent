@@ -3,10 +3,14 @@ import { z } from 'zod';
 const configSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   ALLOWED_CALLER_PRINCIPAL_ID: z.string().uuid(),
-  KEY_VAULT_URL: z.string().url().startsWith('https://'),
-  GITHUB_APP_PRIVATE_KEY_SECRET_NAME: z
+  ENTRA_TENANT_ID: z.string().uuid(),
+  ENTRA_TOKEN_AUDIENCE: z.string().regex(
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+  ),
+  GITHUB_APP_PRIVATE_KEY_KEY_URI: z
     .string()
-    .regex(/^[0-9A-Za-z-]{1,127}$/),
+    .url()
+    .regex(/^https:\/\/[0-9A-Za-z-]+\.vault\.azure\.net\/keys\/[0-9A-Za-z-]{1,127}$/),
   GITHUB_APP_ID: z.string().regex(/^[1-9][0-9]*$/),
   GITHUB_APP_INSTALLATION_ID: z.string().regex(/^[1-9][0-9]*$/),
   GITHUB_APP_BOT_LOGIN: z
@@ -21,8 +25,9 @@ const configSchema = z.object({
 export type BrokerConfig = {
   port: number;
   allowedCallerPrincipalId: string;
-  keyVaultUrl: string;
-  privateKeySecretName: string;
+  entraTenantId: string;
+  entraTokenAudience: string;
+  privateKeyUri: string;
   githubAppId: string;
   githubAppInstallationId: string;
   githubAppBotLogin: string;
@@ -38,8 +43,9 @@ export function loadConfig(
     port: parsed.PORT,
     allowedCallerPrincipalId:
       parsed.ALLOWED_CALLER_PRINCIPAL_ID.toLowerCase(),
-    keyVaultUrl: parsed.KEY_VAULT_URL,
-    privateKeySecretName: parsed.GITHUB_APP_PRIVATE_KEY_SECRET_NAME,
+    entraTenantId: parsed.ENTRA_TENANT_ID.toLowerCase(),
+    entraTokenAudience: parsed.ENTRA_TOKEN_AUDIENCE.toLowerCase(),
+    privateKeyUri: parsed.GITHUB_APP_PRIVATE_KEY_KEY_URI,
     githubAppId: parsed.GITHUB_APP_ID,
     githubAppInstallationId: parsed.GITHUB_APP_INSTALLATION_ID,
     githubAppBotLogin: parsed.GITHUB_APP_BOT_LOGIN,

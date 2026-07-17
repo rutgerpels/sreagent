@@ -12,13 +12,13 @@ resource "azurerm_key_vault" "this" {
   rbac_authorization_enabled    = true
   purge_protection_enabled      = true
   soft_delete_retention_days    = 7
-  public_network_access_enabled = false
+  public_network_access_enabled = !local.profile.private_network_enabled
   tags                          = local.tags
 
-  # Data-plane access uses the private endpoint in the runner VNet. Azure RBAC
-  # remains the authorization boundary; no access policies or public IP rules.
+  # A/B permit hosted/local deployment over the public endpoint while Azure
+  # RBAC remains mandatory. C denies public traffic and uses Private Link.
   network_acls {
-    default_action = "Deny"
+    default_action = local.profile.private_network_enabled ? "Deny" : "Allow"
     bypass         = "AzureServices"
   }
 }

@@ -1,13 +1,14 @@
 import express, { type Express, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { BrokerConfig } from './config';
-import { authorizeCaller } from './auth';
-import { createMcpServer, type RemediationClient } from './mcp';
+import type { BrokerConfig } from './config.js';
+import { authorizeCaller, type AccessTokenVerifier } from './auth.js';
+import { createMcpServer, type RemediationClient } from './mcp.js';
 
 export function createApp(
   config: BrokerConfig,
-  githubClient: RemediationClient
+  githubClient: RemediationClient,
+  accessTokenVerifier: AccessTokenVerifier
 ): Express {
   const app = express();
   app.disable('x-powered-by');
@@ -27,7 +28,10 @@ export function createApp(
     response.status(200).json({ status: 'ok' });
   });
 
-  app.use('/mcp', authorizeCaller(config.allowedCallerPrincipalId));
+  app.use(
+    '/mcp',
+    authorizeCaller(config.allowedCallerPrincipalId, accessTokenVerifier)
+  );
 
   app.post('/mcp', async (request: Request, response: Response) => {
     const server = createMcpServer(githubClient);

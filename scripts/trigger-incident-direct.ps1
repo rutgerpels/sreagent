@@ -71,8 +71,31 @@ function Get-TfOutput {
     return $value.Trim()
 }
 
-if (-not $ResourceGroup) { $ResourceGroup = Get-TfOutput -Name 'resource_group_name' }
-if (-not $PaymentApp) { $PaymentApp = Get-TfOutput -Name 'payment_app_name' }
+$scenario = Get-TfOutput -Name 'scenario'
+if ($scenario -ne 'A') {
+    throw "Direct incident mutation is restricted to Scenario A; current Terraform state is Scenario $scenario."
+}
+
+$expectedResourceGroup = Get-TfOutput -Name 'resource_group_name'
+$expectedPaymentApp = Get-TfOutput -Name 'payment_app_name'
+if ($ResourceGroup -and $ResourceGroup -ne $expectedResourceGroup) {
+    throw 'The ResourceGroup argument must match Terraform state; cross-environment mutation is forbidden.'
+}
+if ($PaymentApp -and $PaymentApp -ne $expectedPaymentApp) {
+    throw 'The PaymentApp argument must match Terraform state; cross-environment mutation is forbidden.'
+}
+$ResourceGroup = $expectedResourceGroup
+$PaymentApp = $expectedPaymentApp
+
+$liveScenario = az group show --name $ResourceGroup --query tags.scenario --output tsv
+if ($LASTEXITCODE -ne 0 -or $liveScenario.Trim() -ne 'A') {
+    throw 'The live resource group is not tagged as Scenario A; refusing direct mutation.'
+}
+$appId = az containerapp show --name $PaymentApp --resource-group $ResourceGroup --query id --output tsv
+$expectedAppSuffix = "/resourceGroups/$ResourceGroup/providers/Microsoft.App/containerApps/$PaymentApp"
+if ($LASTEXITCODE -ne 0 -or -not $appId.EndsWith($expectedAppSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The live payment app does not match the state-owned resource.'
+}
 
 $action = if ($Reset.IsPresent) { 'disable' } else { 'enable' }
 Write-Host "==> Will $action the leak directly on '$PaymentApp' (rg: $ResourceGroup)" -ForegroundColor Cyan

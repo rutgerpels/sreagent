@@ -43,13 +43,36 @@ done
 
 command -v az >/dev/null 2>&1 || { echo "az not found on PATH. Install the Azure CLI and run 'az login'." >&2; exit 1; }
 
-# Resolve RG / payment app from terraform outputs unless explicitly provided.
-if [[ -z "${RESOURCE_GROUP}" ]]; then
-    RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name)"
-fi
-if [[ -z "${PAYMENT_APP}" ]]; then
-    PAYMENT_APP="$(terraform -chdir="${INFRA_DIR}" output -raw payment_app_name)"
-fi
+SCENARIO="$(terraform -chdir="${INFRA_DIR}" output -raw scenario)"
+[[ "${SCENARIO}" == "A" ]] || {
+    echo "Direct incident mutation is restricted to Scenario A; current Terraform state is Scenario ${SCENARIO}." >&2
+    exit 1
+}
+
+EXPECTED_RESOURCE_GROUP="$(terraform -chdir="${INFRA_DIR}" output -raw resource_group_name)"
+EXPECTED_PAYMENT_APP="$(terraform -chdir="${INFRA_DIR}" output -raw payment_app_name)"
+[[ -z "${RESOURCE_GROUP}" || "${RESOURCE_GROUP}" == "${EXPECTED_RESOURCE_GROUP}" ]] || {
+    echo "The resource-group argument must match Terraform state; cross-environment mutation is forbidden." >&2
+    exit 1
+}
+[[ -z "${PAYMENT_APP}" || "${PAYMENT_APP}" == "${EXPECTED_PAYMENT_APP}" ]] || {
+    echo "The payment-app argument must match Terraform state; cross-environment mutation is forbidden." >&2
+    exit 1
+}
+RESOURCE_GROUP="${EXPECTED_RESOURCE_GROUP}"
+PAYMENT_APP="${EXPECTED_PAYMENT_APP}"
+
+LIVE_SCENARIO="$(az group show --name "${RESOURCE_GROUP}" --query tags.scenario --output tsv)"
+[[ "${LIVE_SCENARIO}" == "A" ]] || {
+    echo "The live resource group is not tagged as Scenario A; refusing direct mutation." >&2
+    exit 1
+}
+APP_ID="$(az containerapp show --name "${PAYMENT_APP}" --resource-group "${RESOURCE_GROUP}" --query id --output tsv)"
+EXPECTED_APP_SUFFIX="/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${PAYMENT_APP}"
+[[ "${APP_ID,,}" == *"${EXPECTED_APP_SUFFIX,,}" ]] || {
+    echo "The live payment app does not match the state-owned resource." >&2
+    exit 1
+}
 
 echo "==> Applying ENABLE_SLOW_LEAK=${DESIRED} directly to '${PAYMENT_APP}' (rg: ${RESOURCE_GROUP})"
 az containerapp update \

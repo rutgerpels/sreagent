@@ -1,68 +1,103 @@
 # AKS variant (optional)
 
-The default demo runs on **Azure Container Apps** (scale-to-zero, built-in internal
-ingress, KEDA scale rules). For a Kubernetes-native audience you can run the same three
-ContosoPay images on **AKS**. This document outlines the differences; it is not wired
-into the default Terraform.
+The implemented default is Azure Container Apps. This document is an
+architecture mapping for a future Azure Kubernetes Service variant; the
+repository's Terraform, deployment workflows, and trigger scripts do not deploy
+AKS.
 
-## Why ACA is the default
+## Why Container Apps is the default
 
-- Internal ingress and managed TLS out of the box (no ingress controller to run).
-- KEDA scale rules are first-class, which maps cleanly to the "raise the scale rule"
-  mitigation the SRE Agent proposes.
-- Scale-to-zero keeps demo cost low.
+- Built-in external and internal ingress with managed TLS.
+- First-class KEDA scale rules for the scale-mitigation demonstration.
+- Consumption pricing and scale-to-zero.
+- Built-in authentication for the Scenario C broker.
+- A smaller operational footprint for a one-command demo.
 
-## What changes on AKS
+## Service mapping
 
-| Concern | Container Apps (default) | AKS variant |
-|---------|--------------------------|-------------|
-| Compute | `azurerm_container_app` | `azurerm_kubernetes_cluster` + Deployments |
-| Ingress | Built-in external/internal ingress | NGINX or Application Gateway Ingress Controller; `ClusterIP` for internal services |
-| Identity | User-assigned MI per app | **Workload Identity** (federated) per service account |
-| ACR pull | `AcrPull` on the app MI | `AcrPull` on the kubelet identity, or workload identity |
-| Key Vault | `secretRef` → Key Vault | **Secret Store CSI driver** with the Key Vault provider |
-| Scale | KEDA HTTP scale rule | HPA (CPU/memory) or KEDA add-on |
-| Telemetry | OpenTelemetry → App Insights | Same app code; optionally the App Insights / OpenTelemetry add-on |
+| Concern | Container Apps implementation | AKS equivalent |
+| --- | --- | --- |
+| Compute | `azurerm_container_app` | `azurerm_kubernetes_cluster` and Deployments |
+| Public entry | External frontend ingress | One public ingress for frontend |
+| Internal services | Internal app ingress | `ClusterIP` Services for checkout and payment |
+| Identity | User-assigned managed identity per app | Microsoft Entra Workload ID per service account |
+| ACR pull | `AcrPull` on app identity | `AcrPull` on kubelet identity or workload identity |
+| Key Vault | Managed-identity Key Vault references | Secrets Store CSI Driver with Key Vault provider |
+| Scale | Container Apps KEDA rule | HPA or KEDA |
+| Telemetry | OpenTelemetry to Application Insights | Same app instrumentation plus Container Insights |
+| Broker authentication | Container Apps Easy Auth plus principal validation | Entra-aware ingress/proxy plus exact principal validation |
 
-## Sketch of the AKS resources (not included by default)
+Only frontend is public. Checkout, payment, and any cluster management endpoints
+remain private.
 
-```hcl
-resource "azurerm_kubernetes_cluster" "this" {
-  name                = "aks-${local.suffix}"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
-  dns_prefix          = "contosopay"
+## Preserve the scenario profiles
 
-  default_node_pool {
-    name       = "system"
-    node_count = 2
-    vm_size    = "Standard_B2s"   # local-redundant, cost-conscious (R3)
-  }
+An AKS implementation must retain the same immutable `scenario` contract:
 
-  identity { type = "SystemAssigned" }
+| Scenario | Agent and remediation | Network and runner |
+| --- | --- | --- |
+| A | High / Contributor / Autonomous; direct AKS remediation; no write connector or broker | Public authenticated control endpoints; GitHub-hosted or local deployment |
+| B | Low / Reader / Review; built-in GitHub MCP writes the remediation Pull Request; no broker | Public authenticated control endpoints; GitHub-hosted deployment |
+| C | Low / Reader / Review; separate Code Access and remediation GitHub Apps through the broker | Private registry, vault, state, and cluster API paths; labeled private runner |
 
-  oidc_issuer_enabled       = true
-  workload_identity_enabled = true
-  tags                      = local.tags
-}
-```
+State-account naming and blob keys must include the scenario. Never convert one
+scenario's AKS state in place. Deploy a new isolated profile, validate it, then
+destroy the previous state explicitly.
 
-Then, per service:
+## Incident mapping
 
-- A `Deployment` + `Service` (`ClusterIP` for `checkout-api` / `payment-service`,
-  and an ingress only for `frontend`).
-- A `ServiceAccount` federated to a user-assigned identity (workload identity).
-- The Secret Store CSI driver to project the App Insights connection string from
-  Key Vault.
+The application images and `ENABLE_SLOW_LEAK` behavior are reusable, but the
+current trigger scripts call Azure Container Apps APIs and therefore need AKS
+counterparts.
 
-## Demonstrating the same incident
+- **Scenario A trigger:** patch the payment Deployment's feature-flag environment
+  value and roll a new ReplicaSet.
+- **Scenario B/C trigger:** merge the same
+  `infra/leak.auto.tfvars` Pull Request, with AKS Terraform translating it into
+  the Deployment environment value.
+- **Restart mitigation:** `kubectl rollout restart
+  deployment/payment-service`.
+- **Scale mitigation:** raise HPA/KEDA capacity.
+- **Durable fix:** set the GitOps flag to `false` and roll a healthy Deployment.
 
-The application code is identical, so the planted leak, the `ENABLE_SLOW_LEAK` flag,
-and both trigger scripts (`scripts/trigger-incident-direct.sh` for Scenario A,
-`scripts/trigger-incident-gitops.sh` for Scenario B) behave the same. The two mitigations map to:
+The Azure Monitor alert would use Container Insights or managed Prometheus memory
+telemetry for the `payment-service` workload rather than the Container Apps
+`WorkingSetBytes` metric.
 
-- **Restart**: `kubectl rollout restart deployment/payment-service` (or delete the pod).
-- **Scale**: raise the HPA `maxReplicas` / KEDA trigger.
+## Scenario C broker on AKS
 
-The Azure Monitor alert targets the cluster's container insights memory metric for the
-`payment-service` workload instead of the Container Apps `WorkingSetBytes` metric.
+Preserve the same security model:
+
+- two separate GitHub Apps;
+- no PAT for writes;
+- remediation App private key imported as a non-exportable, sign-only Key Vault
+  RSA key;
+- broker workload identity has only key metadata read and sign data actions;
+- broker calls Key Vault cryptography and never downloads the key;
+- Entra authentication and exact SRE Agent principal validation;
+- only the fixed remediation issue and status tools;
+- Scenario C-only issue-to-Pull Request workflow.
+
+The broker endpoint must be reachable by the managed Azure SRE Agent through a
+supported HTTPS ingress path. Do not expose the Kubernetes API, checkout, or
+payment services to solve broker reachability.
+
+## Security requirements
+
+- Terraform only for infrastructure.
+- GitHub Actions OIDC only; no stored Azure credentials.
+- Full commit-SHA publication tags, locked in ACR and deployed by manifest digest.
+- Workload identity and least-privilege RBAC.
+- Key Vault RBAC and purge protection.
+- ACR admin and anonymous access disabled.
+- TLS for every ingress.
+- Private cluster and data-plane endpoints for Scenario C.
+- No committed PAT, PEM, kubeconfig, subscription ID, or tenant ID.
+
+## References
+
+- [Microsoft Entra Workload ID on AKS](https://learn.microsoft.com/azure/aks/workload-identity-overview)
+- [Secrets Store CSI Driver for AKS](https://learn.microsoft.com/azure/aks/csi-secrets-store-driver)
+- [Azure Monitor Container Insights](https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview)
+- [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration)
+- [GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)

@@ -1,36 +1,21 @@
 name: deploy
 
-# Full GitOps deploy of the ContosoPay environment from CI/CD.
-#
-# This is the Scenario B "deploy from the beginning with CI/CD" entry point. It
-# does exactly what scripts/deploy.* does locally, but in GitHub Actions over
-# OIDC (no stored credentials):
-#   1. Bootstrap the remote Terraform state storage (idempotent).
-#   2. terraform apply (phase 1): platform only -- no apps yet (images don't exist).
-#   3. Build + push app images and the optional MCP broker to ACR.
-#   4. terraform apply (phase 2): Container Apps + alert, on the new tag.
-#   5. Publish the resulting URLs / names to the job summary.
-#
-# Run it from the Actions tab (Run workflow). It is intentionally manual
-# (workflow_dispatch) so a fresh environment is only ever stood up on purpose.
-#
-# One-time bootstrap the operator must do first (see docs/scenario-b-gitops.md
-# "Part 0"): create the deployment identity, add federated credentials trusting
-# this repo, grant it Contributor + Storage Blob Data Contributor on the
-# subscription, and set these GitHub Actions *variables*:
-#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-# Optional (defaults shown): TF_PREFIX (contosopay), TF_ENVIRONMENT (demo),
-#   TF_LOCATION (swedencentral).
-
+# Manual, scenario-aware bootstrap and deployment. Each scenario has an isolated
+# backend and immutable image tag. Existing state can never be converted in place.
 on:
   workflow_dispatch:
     inputs:
+      scenario:
+        description: "Deployment scenario"
+        type: choice
+        required: true
+        options: [A, B, C]
       prefix:
         description: "Resource name prefix"
         required: false
         default: "contosopay"
       environment:
-        description: "Environment label (dev | demo | test)"
+        description: "Environment label"
         required: false
         default: "demo"
       location:
@@ -38,200 +23,227 @@ on:
         required: false
         default: "swedencentral"
       open_incident_pr:
-        description: "After deploy, auto-open the incident PR that arms the memory leak (Scenario B). Set to false to skip."
+        description: "Open the PR that arms the memory-leak incident"
         type: boolean
         required: false
-        default: true
+        default: false
 
 permissions:
-  id-token: write # required for OIDC
   contents: read
 
 concurrency:
-  group: deploy-environment
+  group: deployment-${{ inputs.scenario }}-${{ inputs.prefix }}-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: [self-hosted, Linux, X64, azure-private, contosopay]
-    timeout-minutes: 60
+    runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write
     env:
       ARM_USE_OIDC: "true"
-      ARM_USE_AZUREAD: "true" # AAD auth for the state blob (no account keys)
+      ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_PREFIX: ${{ github.event.inputs.prefix || vars.TF_PREFIX || 'contosopay' }}
-      TF_ENVIRONMENT: ${{ github.event.inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
-      TF_LOCATION: ${{ github.event.inputs.location || vars.TF_LOCATION || 'swedencentral' }}
-      TF_VAR_runner_vnet_resource_group: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
-      TF_VAR_runner_vnet_name: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
-      TF_VAR_runner_private_endpoint_subnet_name: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-      TF_VAR_app_vnet_address_space: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
-      TF_VAR_app_private_endpoint_subnet_address_prefix: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
-      TF_VAR_container_apps_subnet_address_prefix: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
-      TF_VAR_enable_sre_remediation_broker: ${{ vars.ENABLE_SRE_REMEDIATION_BROKER || 'false' }}
-      TF_VAR_sre_remediation_allowed_caller_principal_id: ${{ vars.SRE_REMEDIATION_CALLER_PRINCIPAL_ID }}
-      TF_VAR_sre_remediation_entra_api_client_id: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
-      TF_VAR_sre_remediation_entra_token_audience: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
-      TF_VAR_sre_remediation_entra_token_scope: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
-      TF_VAR_sre_remediation_github_app_id: ${{ vars.SRE_GITHUB_APP_ID }}
-      TF_VAR_sre_remediation_github_app_installation_id: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
-      TF_VAR_sre_remediation_github_app_bot_login: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
-      TF_VAR_sre_remediation_github_repository_owner: ${{ github.repository_owner }}
-      TF_VAR_sre_remediation_github_repository_name: ${{ github.event.repository.name }}
-      TF_VAR_sre_remediation_github_app_private_key_secret_name: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_SECRET_NAME || 'github-app-private-key' }}
+      DEPLOYMENT_SCENARIO: ${{ inputs.scenario }}
+      TF_PREFIX: ${{ inputs.prefix }}
+      TF_ENVIRONMENT: ${{ inputs.environment }}
+      TF_LOCATION: ${{ inputs.location }}
+      IMAGE_TAG: ${{ github.sha }}
+      REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
+      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
+      SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Validate healthy demo baseline
+      - name: Validate deployment request
+        shell: bash
         run: |
           set -euo pipefail
-          LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
-          if [[ "${LEAK_STATE}" != "false" ]]; then
-            {
-              echo "## Invalid demo baseline"
-              echo ""
-              echo "\`infra/leak.auto.tfvars\` must contain \`enable_slow_leak = false\` before a full deploy."
-              echo "The incident is introduced later by the Pull Request created by \`arm-incident\`."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error file=infra/leak.auto.tfvars::Expected enable_slow_leak = false, found '${LEAK_STATE:-missing or invalid}'."
+          readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
+          readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
+          readonly SHA_PATTERN='^[0-9a-f]{40}$'
+          readonly SCENARIO_PATTERN='^(A|B|C)$'
+          [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, or C."; exit 1; }
+          [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
+          [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::Dispatch scenario '${DEPLOYMENT_SCENARIO}' does not match repository profile '${REPOSITORY_SCENARIO}'."; exit 1; }
+          [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${TF_PREFIX}'."; exit 1; }
+          [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${TF_ENVIRONMENT}'."; exit 1; }
+          [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full immutable commit SHA."; exit 1; }
+          if [[ "${DEPLOYMENT_SCENARIO}" == "A" && "${{ inputs.open_incident_pr }}" == "true" ]]; then
+            echo "::error::Scenario A uses only the direct incident trigger; it cannot open a GitOps incident PR."
             exit 1
           fi
+          for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
+            [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required for OIDC."; exit 1; }
+          done
+          [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required to provision the selected SRE Agent."; exit 1; }
+          LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
+          [[ "${LEAK_STATE}" == "false" ]] || { echo "::error file=infra/leak.auto.tfvars::A full deployment requires enable_slow_leak = false."; exit 1; }
+          {
+            echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
+            echo "TF_VAR_enable_sre_agents=true"
+            echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
+            echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
+            echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
+          } >> "${GITHUB_ENV}"
+
+      # Only Scenario C receives private-runner network configuration.
+      - name: Configure Scenario C private networking
+        if: ${{ inputs.scenario == 'C' }}
+        shell: bash
+        env:
+          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
+          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+          RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
+          APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
+          APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
+        run: |
+          {
+            echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
+            echo "TF_VAR_runner_vnet_name=${RUNNER_VNET_NAME}"
+            echo "TF_VAR_runner_private_endpoint_subnet_name=${RUNNER_PE_SUBNET_NAME}"
+            echo "TF_VAR_app_vnet_address_space=${APP_VNET_ADDRESS_SPACE}"
+            echo "TF_VAR_app_private_endpoint_subnet_address_prefix=${APP_PE_SUBNET_PREFIX}"
+            echo "TF_VAR_container_apps_subnet_address_prefix=${CONTAINER_APPS_SUBNET_PREFIX}"
+            echo "TF_VAR_sre_agent_subnet_address_prefix=${SRE_AGENT_SUBNET_PREFIX}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Validate and configure Scenario C broker metadata
+        if: ${{ inputs.scenario == 'C' }}
+        shell: bash
+        env:
+          ENTRA_CLIENT_ID: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
+          TOKEN_AUDIENCE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
+          TOKEN_SCOPE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
+          GITHUB_APP_ID: ${{ vars.SRE_GITHUB_APP_ID }}
+          GITHUB_APP_INSTALLATION_ID: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
+          GITHUB_APP_BOT_LOGIN: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
+          PRIVATE_KEY_NAME: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_NAME || 'github-app-signing-key' }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for value in ENTRA_CLIENT_ID TOKEN_AUDIENCE TOKEN_SCOPE GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_BOT_LOGIN; do
+            [[ -n "${!value}" ]] || missing+=("${value}")
+          done
+          if (( ${#missing[@]} )); then
+            {
+              echo "## Scenario C manual setup required before deployment"
+              echo ""
+              echo "The broker metadata variables are incomplete: \`${missing[*]}\`."
+              echo "Create the dedicated Entra API registration and broker GitHub App manually, install the App, then set the corresponding non-secret repository variables. No undocumented API is called by this workflow."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error::Missing Scenario C broker metadata: ${missing[*]}"
+            exit 1
+          fi
+          [[ "${TOKEN_AUDIENCE,,}" == "${ENTRA_CLIENT_ID,,}" ]] || { echo "::error::Broker v2 token audience must equal the Entra API client ID."; exit 1; }
+          [[ "${TOKEN_SCOPE,,}" == "api://${ENTRA_CLIENT_ID,,}/.default" ]] || { echo "::error::Broker scope must be api://<Entra client ID>/.default."; exit 1; }
+          {
+            echo "TF_VAR_sre_remediation_entra_api_client_id=${ENTRA_CLIENT_ID}"
+            echo "TF_VAR_sre_remediation_entra_token_audience=${TOKEN_AUDIENCE}"
+            echo "TF_VAR_sre_remediation_entra_token_scope=${TOKEN_SCOPE}"
+            echo "TF_VAR_sre_remediation_github_app_id=${GITHUB_APP_ID}"
+            echo "TF_VAR_sre_remediation_github_app_installation_id=${GITHUB_APP_INSTALLATION_ID}"
+            echo "TF_VAR_sre_remediation_github_app_bot_login=${GITHUB_APP_BOT_LOGIN}"
+            echo "TF_VAR_sre_remediation_github_repository_owner=${GITHUB_REPOSITORY_OWNER}"
+            echo "TF_VAR_sre_remediation_github_repository_name=${GITHUB_REPOSITORY#*/}"
+            echo "TF_VAR_sre_remediation_github_app_private_key_name=${PRIVATE_KEY_NAME}"
+          } >> "${GITHUB_ENV}"
 
       - name: Azure login (OIDC)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
 
-      - name: Compute backend config + bootstrap state storage
+      - name: Bootstrap scenario-isolated backend
         id: backend
+        shell: bash
         run: |
           set -euo pipefail
-          # Deterministic, non-identifying remote-state names (match scripts/deploy.*).
+          readonly PRIVATE_IPV4_PATTERN='^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
           STATE_RG="rg-${TF_PREFIX}-tfstate"
-          STATE_HASH="$(printf '%s' "${ARM_SUBSCRIPTION_ID}-${TF_PREFIX}" | sha256sum | cut -c1-16)"
+          STATE_HASH="$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${TF_PREFIX}" "${DEPLOYMENT_SCENARIO}" | sha256sum | cut -c1-16)"
           STATE_SA="sttf${STATE_HASH}"
           STATE_CONTAINER="tfstate"
-          STATE_KEY="${TF_PREFIX}-${TF_ENVIRONMENT}.tfstate"
-
-          echo "==> Ensuring remote state storage (${STATE_SA})"
-          # The state resource group's location is immutable and independent of
-          # the app region -- if it already exists (e.g. an earlier deploy in
-          # another region), reuse its location so changing TF_LOCATION doesn't
-          # fail with InvalidResourceGroupLocation.
-          STATE_LOCATION="$(az group show --name "${STATE_RG}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
+          STATE_KEY="${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}.tfstate"
+          STATE_LOCATION="$(az group show -n "${STATE_RG}" --query location -o tsv 2>/dev/null | tr -d '\r' || true)"
           STATE_LOCATION="${STATE_LOCATION:-${TF_LOCATION}}"
-          az group create --name "${STATE_RG}" --location "${STATE_LOCATION}" \
-            --tags project=sre-agent-demo env="${TF_ENVIRONMENT}" managed_by=terraform --output none
-          if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" >/dev/null 2>&1; then
-            az storage account create --name "${STATE_SA}" --resource-group "${STATE_RG}" \
-              --location "${STATE_LOCATION}" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
-              --allow-blob-public-access false --https-only true \
-              --public-network-access Disabled --default-action Deny \
-              --tags project=sre-agent-demo env="${TF_ENVIRONMENT}" managed_by=terraform --output none
-          fi
 
-          STATE_ID="$(az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" --query id -o tsv)"
-          STATE_PE="pe-${STATE_SA}-blob"
-          STATE_ZONE="privatelink.blob.core.windows.net"
-          STATE_LINK="${TF_VAR_runner_vnet_name}-blob"
-          VNET_ID="$(az network vnet show \
-            --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-            --name "${TF_VAR_runner_vnet_name}" --query id -o tsv)"
+          az group create -n "${STATE_RG}" -l "${STATE_LOCATION}" --tags project=sre-agent-demo managed_by=github-actions --output none
+          if ! az storage account show -n "${STATE_SA}" -g "${STATE_RG}" >/dev/null 2>&1; then
+            if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then public_access=Disabled; default_action=Deny; else public_access=Enabled; default_action=Allow; fi
+            az storage account create -n "${STATE_SA}" -g "${STATE_RG}" -l "${STATE_LOCATION}" \
+              --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+              --allow-blob-public-access false --allow-shared-key-access false --https-only true \
+              --public-network-access "${public_access}" --default-action "${default_action}" \
+              --tags project=sre-agent-demo scenario="${DEPLOYMENT_SCENARIO}" managed_by=github-actions --output none
+          fi
+          STATE_ID="$(az storage account show -n "${STATE_SA}" -g "${STATE_RG}" --query id -o tsv)"
+          DEPLOYER_OBJECT_ID="$(az ad sp show --id "${ARM_CLIENT_ID}" --query id -o tsv)"
+          az role assignment create \
+            --assignee-object-id "${DEPLOYER_OBJECT_ID}" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Data Contributor" \
+            --scope "${STATE_ID}" \
+            --output none 2>/dev/null || true
 
-          if ! az network private-dns zone show \
-               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-               --name "${STATE_ZONE}" >/dev/null 2>&1; then
-            az network private-dns zone create \
-              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-              --name "${STATE_ZONE}" --output none
-          fi
-          if ! az network private-dns link vnet show \
-               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-               --zone-name "${STATE_ZONE}" --name "${STATE_LINK}" >/dev/null 2>&1; then
-            az network private-dns link vnet create \
-              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-              --zone-name "${STATE_ZONE}" --name "${STATE_LINK}" \
-              --virtual-network "${VNET_ID}" --registration-enabled false --output none
-          fi
-          if ! az network private-endpoint show \
-               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-               --name "${STATE_PE}" >/dev/null 2>&1; then
-            az network private-endpoint create \
-              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-              --name "${STATE_PE}" \
-              --vnet-name "${TF_VAR_runner_vnet_name}" \
-              --subnet "${TF_VAR_runner_private_endpoint_subnet_name}" \
-              --private-connection-resource-id "${STATE_ID}" \
-              --group-id blob \
-              --connection-name "${STATE_PE}-connection" \
-              --output none
-          fi
-          if ! az network private-endpoint dns-zone-group show \
-               --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-               --endpoint-name "${STATE_PE}" --name blob-zone >/dev/null 2>&1; then
-            STATE_ZONE_ID="$(az network private-dns zone show \
-              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-              --name "${STATE_ZONE}" --query id -o tsv)"
-            az network private-endpoint dns-zone-group create \
-              --resource-group "${TF_VAR_runner_vnet_resource_group}" \
-              --endpoint-name "${STATE_PE}" --name blob-zone \
-              --private-dns-zone "${STATE_ZONE_ID}" --zone-name blob --output none
-          fi
-
-          az storage account update --name "${STATE_SA}" --resource-group "${STATE_RG}" \
-            --public-network-access Disabled --default-action Deny --output none
-
-          resolved="false"
-          for _ in $(seq 1 12); do
-            STATE_IP="$(getent ahostsv4 "${STATE_SA}.blob.core.windows.net" | awk 'NR == 1 { print $1 }' || true)"
-            if [[ "${STATE_IP}" == 10.* || "${STATE_IP}" == 172.1[6-9].* || \
-                  "${STATE_IP}" == 172.2?.* || "${STATE_IP}" == 172.3[01].* || \
-                  "${STATE_IP}" == 192.168.* ]]; then
-              resolved="true"
-              break
+          if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then
+            az storage account update -n "${STATE_SA}" -g "${STATE_RG}" --public-network-access Disabled --default-action Deny --output none
+            STATE_PE="pe-${STATE_SA}-blob"
+            STATE_ZONE="privatelink.blob.core.windows.net"
+            STATE_LINK="${TF_VAR_runner_vnet_name}-blob"
+            VNET_ID="$(az network vnet show -g "${TF_VAR_runner_vnet_resource_group}" -n "${TF_VAR_runner_vnet_name}" --query id -o tsv)"
+            az network private-dns zone show -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_ZONE}" >/dev/null 2>&1 || \
+              az network private-dns zone create -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_ZONE}" --output none
+            az network private-dns link vnet show -g "${TF_VAR_runner_vnet_resource_group}" -z "${STATE_ZONE}" -n "${STATE_LINK}" >/dev/null 2>&1 || \
+              az network private-dns link vnet create -g "${TF_VAR_runner_vnet_resource_group}" -z "${STATE_ZONE}" -n "${STATE_LINK}" -v "${VNET_ID}" -e false --output none
+            az network private-endpoint show -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_PE}" >/dev/null 2>&1 || \
+              az network private-endpoint create -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_PE}" --vnet-name "${TF_VAR_runner_vnet_name}" --subnet "${TF_VAR_runner_private_endpoint_subnet_name}" --private-connection-resource-id "${STATE_ID}" --group-id blob --connection-name "${STATE_PE}-connection" --output none
+            if ! az network private-endpoint dns-zone-group show -g "${TF_VAR_runner_vnet_resource_group}" --endpoint-name "${STATE_PE}" -n blob-zone >/dev/null 2>&1; then
+              STATE_ZONE_ID="$(az network private-dns zone show -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_ZONE}" --query id -o tsv)"
+              az network private-endpoint dns-zone-group create -g "${TF_VAR_runner_vnet_resource_group}" --endpoint-name "${STATE_PE}" -n blob-zone --private-dns-zone "${STATE_ZONE_ID}" --zone-name blob --output none
             fi
-            sleep 10
-          done
-          [[ "${resolved}" == "true" ]] || {
-            echo "::error::State storage did not resolve to a private IP from the self-hosted runner." >&2
-            exit 1
-          }
-
-          created="false"
-          last_err=""
-          for _ in $(seq 1 12); do
-            if last_err="$(az storage container create --name "${STATE_CONTAINER}" --account-name "${STATE_SA}" \
-              --auth-mode login --output none 2>&1)"; then created="true"; break; fi
-            sleep 10
-          done
-          if [[ "${created}" != "true" ]]; then
-            echo "::error::Could not create state container '${STATE_CONTAINER}' on '${STATE_SA}' after 12 retries (~2 minutes)." >&2
-            echo "Last az CLI error was:" >&2
-            echo "${last_err}" >&2
-            echo "Check the OIDC identity's Storage Blob Data Contributor role and the Blob private endpoint/DNS." >&2
-            exit 1
+            for _ in $(seq 1 12); do
+              STATE_IP="$(getent ahostsv4 "${STATE_SA}.blob.core.windows.net" | awk 'NR == 1 {print $1}' || true)"
+              [[ "${STATE_IP}" =~ ${PRIVATE_IPV4_PATTERN} ]] && break
+              sleep 10
+            done
+            [[ "${STATE_IP:-}" =~ ${PRIVATE_IPV4_PATTERN} ]] || { echo "::error::Scenario C state endpoint did not resolve privately."; exit 1; }
+          else
+            az storage account update -n "${STATE_SA}" -g "${STATE_RG}" --public-network-access Enabled --default-action Allow --output none
           fi
 
+          created=false
+          for _ in $(seq 1 12); do
+            if az storage container create -n "${STATE_CONTAINER}" --account-name "${STATE_SA}" --auth-mode login --output none; then created=true; break; fi
+            sleep 10
+          done
+          [[ "${created}" == true ]] || { echo "::error::Could not create the remote state container using OIDC."; exit 1; }
           {
             echo "state_rg=${STATE_RG}"
             echo "state_sa=${STATE_SA}"
             echo "state_container=${STATE_CONTAINER}"
             echo "state_key=${STATE_KEY}"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT}"
 
-      - name: Terraform init (remote state)
+      - name: Terraform init
         working-directory: infra
+        shell: bash
         run: |
           set -euo pipefail
           terraform init -input=false \
@@ -240,196 +252,194 @@ jobs:
             -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
-      - name: Terraform apply (phase 1 -- platform, no apps yet)
-        id: platform
+      - name: Apply platform and enforce state profile
         working-directory: infra
+        shell: bash
         run: |
           set -euo pipefail
-          STATE_RESOURCES="$(terraform state list)"
-          if grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_RESOURCES}"; then
-            LOCATION="$(terraform output -raw location)" || {
-              echo "::error::Existing state has a resource group but its location output could not be read." >&2
+          STATE_RESOURCES="$(terraform state list 2>/dev/null || true)"
+          if [[ -n "${STATE_RESOURCES}" ]]; then
+            if ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)"; then
+              [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || {
+                echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested scenario '${DEPLOYMENT_SCENARIO}'. In-place conversion is forbidden."
+                exit 1
+              }
+              TF_LOCATION="$(terraform output -raw location)"
+              echo "TF_LOCATION=${TF_LOCATION}" >> "${GITHUB_ENV}"
+            elif grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}"; then
+              echo "::error::Existing application state has no scenario output. In-place conversion is unsupported; destroy it with its original workflow first."
               exit 1
-            }
-          else
-            LOCATION="${TF_LOCATION}"
+            else
+              echo "Recovering incomplete ${DEPLOYMENT_SCENARIO} platform state that predates stored outputs."
+            fi
           fi
-          echo "Deploying in region: ${LOCATION}"
-          # Subsequent steps must use the immutable location recorded in state.
-          echo "TF_LOCATION=${LOCATION}" >> "$GITHUB_ENV"
-
-          if grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}"; then
-            echo "Existing app deployment detected; preserving running revisions."
-          else
-            terraform apply -input=false -auto-approve \
-              -var 'deploy_apps=false' \
-              -var "prefix=${TF_PREFIX}" \
-              -var "environment=${TF_ENVIRONMENT}" \
-              -var "location=${LOCATION}"
-          fi
-
-      - name: Build and push images
-        working-directory: infra
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          ACR_NAME="$(terraform output -raw acr_name)"
-          ACR_LOGIN_SERVER="$(terraform output -raw acr_login_server)"
-          az acr login --name "${ACR_NAME}"
-          SERVICES=(frontend checkout-api payment-service sre-remediation-mcp)
-          for svc in "${SERVICES[@]}"; do
-            docker build \
-              -t "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}" \
-              -t "${ACR_LOGIN_SERVER}/${svc}:latest" \
-              "../src/${svc}"
-            docker push "${ACR_LOGIN_SERVER}/${svc}:${IMAGE_TAG}"
-            docker push "${ACR_LOGIN_SERVER}/${svc}:latest"
+          HAS_APPS=false
+          grep -q '^azurerm_container_app\.app\[' <<< "${STATE_RESOURCES}" && HAS_APPS=true
+          required_resources=(
+            azurerm_resource_group.this
+            azurerm_container_registry.this
+            azurerm_key_vault.this
+            azurerm_container_app_environment.this
+          )
+          platform_complete=true
+          for resource in "${required_resources[@]}"; do
+            grep -Fxq "${resource}" <<< "${STATE_RESOURCES}" || platform_complete=false
+          done
+          for output in scenario location acr_name acr_login_server key_vault_name resource_group_name; do
+            terraform output -raw "${output}" >/dev/null 2>&1 || platform_complete=false
           done
 
-      - name: Terraform apply (phase 2 -- container apps + alert)
-        working-directory: infra
-        env:
-          IMAGE_TAG: ${{ github.sha }}
+          if [[ "${HAS_APPS}" == false ]]; then
+            echo "Applying or recovering the ${DEPLOYMENT_SCENARIO} platform before image publication."
+            terraform apply -input=false -auto-approve \
+              -var 'deploy_apps=false' -var "image_tag=${IMAGE_TAG}" \
+              -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
+              -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
+          elif [[ "${platform_complete}" == false ]]; then
+            PREVIOUS_DIGESTS="$(terraform output -json image_digests 2>/dev/null | jq -c .)" || {
+              echo "::error::Partial application state has no prior digest map. Digest migration requires a clean scenario deployment."
+              exit 1
+            }
+            echo "Recovering incomplete platform resources while preserving existing digest-pinned applications."
+            terraform apply -input=false -auto-approve \
+              -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}" \
+              -var "image_digests=${PREVIOUS_DIGESTS}" \
+              -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
+              -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
+          else
+            echo "Existing ${DEPLOYMENT_SCENARIO} applications detected; preserving running revisions until immutable images are available."
+          fi
+          STATE_RESOURCES="$(terraform state list)"
+          for resource in "${required_resources[@]}"; do
+            grep -Fxq "${resource}" <<< "${STATE_RESOURCES}" || { echo "::error::Required platform resource ${resource} remains absent after recovery."; exit 1; }
+          done
+          for output in scenario location acr_name acr_login_server key_vault_name resource_group_name; do
+            terraform output -raw "${output}" >/dev/null || { echo "::error::Required platform output ${output} remains absent after recovery."; exit 1; }
+          done
+          ACTUAL_SCENARIO="$(terraform output -raw scenario)"
+          [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Terraform created an unexpected scenario '${ACTUAL_SCENARIO}'."; exit 1; }
+
+      - name: Build and push immutable images
+        id: images
+        shell: bash
         run: |
           set -euo pipefail
-          terraform apply -input=false -auto-approve \
-            -var 'deploy_apps=true' \
-            -var "image_tag=${IMAGE_TAG}" \
-            -var "prefix=${TF_PREFIX}" \
-            -var "environment=${TF_ENVIRONMENT}" \
-            -var "location=${TF_LOCATION}"
+          ACR_NAME="$(terraform -chdir=infra output -raw acr_name)"
+          ACR_LOGIN_SERVER="$(terraform -chdir=infra output -raw acr_login_server)"
+          az acr login --name "${ACR_NAME}"
+          services=(frontend checkout-api payment-service)
+          [[ "${DEPLOYMENT_SCENARIO}" == "C" ]] && services+=(sre-remediation-mcp)
+          DIGEST_FILE="${RUNNER_TEMP}/image-digests.json"
+          bash scripts/publish-immutable-images.sh \
+            "${ACR_NAME}" "${ACR_LOGIN_SERVER}" "${IMAGE_TAG}" "${DIGEST_FILE}" "${services[@]}"
+          DIGESTS="$(jq -c . "${DIGEST_FILE}")"
+          echo "image_digests=${DIGESTS}" >> "${GITHUB_OUTPUT}"
+          echo "TF_VAR_image_digests=${DIGESTS}" >> "${GITHUB_ENV}"
 
-      - name: Publish outputs
+      - name: Verify Scenario C remediation key prerequisite
+        if: ${{ inputs.scenario == 'C' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_VAULT_NAME="$(terraform -chdir=infra output -raw key_vault_name)"
+          bash scripts/verify-remediation-key.sh "${KEY_VAULT_NAME}" "${TF_VAR_sre_remediation_github_app_private_key_name}"
+
+      - name: Apply applications
         working-directory: infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario changed before application apply."; exit 1; }
+          terraform apply -input=false -auto-approve \
+            -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}" \
+            -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
+            -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
+          [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Applied state scenario mismatch."; exit 1; }
+
+      - name: Publish deployment outputs and manual boundaries
+        working-directory: infra
+        shell: bash
         run: |
           set -euo pipefail
           FRONTEND_URL="$(terraform output -raw frontend_url)"
           RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
           ACR_NAME="$(terraform output -raw acr_name)"
           KEY_VAULT_NAME="$(terraform output -raw key_vault_name)"
-          FRONTEND_APP="$(terraform output -raw frontend_app_name)"
-          CHECKOUT_APP="$(terraform output -raw checkout_app_name)"
-          PAYMENT_APP="$(terraform output -raw payment_app_name)"
-          BROKER_APP="$(terraform output -raw sre_remediation_broker_app_name 2>/dev/null || true)"
-          BROKER_ENDPOINT="$(terraform output -raw sre_remediation_broker_endpoint_url 2>/dev/null || true)"
-          GRAFANA="$(terraform output -raw grafana_endpoint 2>/dev/null || true)"
           {
-            echo "## ContosoPay environment deployed"
+            echo "## Scenario ${DEPLOYMENT_SCENARIO} deployed"
             echo ""
-            echo "| Output | Value |"
-            echo "| --- | --- |"
-            echo "| Frontend URL | ${FRONTEND_URL} |"
-            echo "| Resource group | ${RESOURCE_GROUP} |"
-            echo "| Key Vault name | ${KEY_VAULT_NAME} |"
-            [[ -n "${GRAFANA}" && "${GRAFANA}" != "null" ]] && echo "| Grafana | ${GRAFANA} |"
-            [[ -n "${BROKER_ENDPOINT}" && "${BROKER_ENDPOINT}" != "null" ]] && echo "| SRE remediation MCP endpoint | ${BROKER_ENDPOINT} |"
-            echo ""
-            echo "### Set these GitHub Actions *variables* so deploy-apps.yml can ship code changes:"
-            echo ""
-            echo "| Variable | Value |"
-            echo "| --- | --- |"
-            echo "| AZURE_RESOURCE_GROUP | ${RESOURCE_GROUP} |"
-            echo "| ACR_NAME | ${ACR_NAME} |"
-            echo "| FRONTEND_APP | ${FRONTEND_APP} |"
-            echo "| CHECKOUT_APP | ${CHECKOUT_APP} |"
-            echo "| PAYMENT_APP | ${PAYMENT_APP} |"
-            if [[ -n "${BROKER_APP}" && "${BROKER_APP}" != "null" ]]; then
-              echo "| SRE_REMEDIATION_BROKER_APP | ${BROKER_APP} |"
+            echo "- Environment: \`${TF_PREFIX}/${TF_ENVIRONMENT}\`"
+            echo "- Immutable image tag: \`${IMAGE_TAG}\`"
+            echo "- Resource group: \`${RESOURCE_GROUP}\`"
+            echo "- ACR: \`${ACR_NAME}\`"
+            echo "- Frontend: ${FRONTEND_URL}"
+            if [[ "${DEPLOYMENT_SCENARIO}" == "A" ]]; then
+              echo ""
+              echo "### Manual boundary"
+              echo "Configure the SRE portal for direct/autonomous Azure remediation. Scenario A has no GitOps write connector and no broker."
+            elif [[ "${DEPLOYMENT_SCENARIO}" == "B" ]]; then
+              echo ""
+              echo "### Manual boundary"
+              echo "Configure the built-in GitHub MCP connector in the SRE portal with a short-lived fine-grained PAT. Create and rotate that PAT manually; this workflow never receives it. Scenario B never deploys the broker."
+            else
+              BROKER_APP="$(terraform output -raw sre_remediation_broker_app_name)"
+              BROKER_ENDPOINT="$(terraform output -raw sre_remediation_broker_endpoint_url)"
+              BROKER_KEY_URI="$(terraform output -raw sre_remediation_broker_key_uri)"
+              [[ -n "${BROKER_APP}" && "${BROKER_APP}" != null && -n "${BROKER_ENDPOINT}" && "${BROKER_ENDPOINT}" != null ]] || { echo "::error::Expected broker outputs are absent. Expected sre_remediation_broker_app_name and sre_remediation_broker_endpoint_url."; exit 1; }
+              echo "- Broker app: \`${BROKER_APP}\`"
+              echo "- Broker endpoint: ${BROKER_ENDPOINT}"
+              echo ""
+              echo "### Scenario C manual prerequisites"
+              echo "Terraform-supported broker infrastructure and the broker image are deployed. Complete only these unsupported/manual boundaries:"
+              echo "1. Create/configure the two least-privilege GitHub Apps and install them on this repository."
+              echo "2. Import the broker App PEM key material once into Key Vault \`${KEY_VAULT_NAME}\` to the Key Vault key URI \`${BROKER_KEY_URI}\`; never put the PEM in GitHub Actions."
+              echo "3. Complete the dedicated Entra application registration/consent if it was not already created for the metadata supplied to this run."
+              echo "4. Configure the SRE portal connector and restrictive tool policy for the broker endpoint."
+              echo ""
+              echo "No undocumented GitHub, Azure, or SRE portal API is called by this workflow."
             fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-  # After the environment is up, open the Scenario B "arm the leak" Pull Request
-  # so the demo is fully in-place: a fresh fork can deploy and immediately have
-  # the incident PR waiting to be merged -- no local machine or script required.
-  #
-  # This reuses scripts/trigger-incident-gitops.sh (single source of truth for
-  # the PR title/body/branch naming) and is guarded so re-running deploy will not
-  # pile up duplicate incident PRs.
   arm-incident:
     needs: deploy
-    if: ${{ github.event.inputs.open_incident_pr != 'false' }}
+    if: ${{ inputs.open_incident_pr && inputs.scenario != 'A' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # push the incident branch
-      pull-requests: write # open the incident PR
+      contents: write
+      pull-requests: write
+    env:
+      DEPLOYMENT_SCENARIO: ${{ inputs.scenario }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0 # trigger-incident-gitops.sh branches from origin/<base>
+          fetch-depth: 0
 
-      - name: Configure git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Open incident PR (arm the memory leak)
+      - name: Open incident PR
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-
-          # Idempotency guard: don't open a second incident PR if one is already
-          # open (branch prefix is fixed by the trigger script).
-          existing="$(gh pr list --state open --json headRefName \
-            --jq '[.[] | select(.headRefName | startswith("Feature/trigger-memory-leak-"))] | length')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          existing="$(gh pr list --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("Feature/trigger-memory-leak-"))] | length')"
           if [[ "${existing}" -gt 0 ]]; then
-            {
-              echo "## Demo incident PR"
-              echo ""
-              echo "An incident PR that arms the memory leak is already open; not opening another."
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "An incident PR is already open." >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
-
-          # Push the incident branch via the shared script (single source of truth
-          # for the flag edit + branch/commit conventions). --no-pr means it only
-          # pushes; we create the PR below so we can fall back gracefully.
           BRANCH="Feature/trigger-memory-leak-$(date -u +%Y%m%d%H%M%S)"
           chmod +x ./scripts/trigger-incident-gitops.sh
           ./scripts/trigger-incident-gitops.sh --base "${BASE_BRANCH}" --branch "${BRANCH}" --no-pr
-
-          if ! git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null; then
-            {
-              echo "## Demo incident PR was not created"
-              echo ""
-              echo "The trigger produced no incident branch. Confirm that"
-              echo "\`infra/leak.auto.tfvars\` on \`${BASE_BRANCH}\` contains \`enable_slow_leak = false\`, then rerun \`deploy\`."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Incident branch '${BRANCH}' was not pushed; no Pull Request can be created."
-            exit 1
-          fi
-
+          git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null || { echo "::error::Incident branch was not pushed."; exit 1; }
           TITLE="demo(payment-service): enable slow memory leak (enable_slow_leak=true)"
-          BODY="Arms the ContosoPay demo incident (Scenario B). Merging this PR runs the \`apply-infra\` workflow, which \`terraform apply\`s \`enable_slow_leak = true\` so payment-service memory climbs until the Azure Monitor alert fires."
+          BODY="Arms the ContosoPay Scenario ${DEPLOYMENT_SCENARIO} incident. Merging applies the leak flag through the scenario-isolated infrastructure workflow."
           COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/${BASE_BRANCH}...${BRANCH}?expand=1"
-
-          # gh pr create fails if "Allow GitHub Actions to create and approve pull
-          # requests" is disabled (default on a fresh fork). Don't fail the deploy:
-          # the branch is pushed, so surface a one-click compare link instead.
           if url="$(gh pr create --base "${BASE_BRANCH}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}" 2>/tmp/pr.err)"; then
-            {
-              echo "## Demo incident PR is armed and waiting"
-              echo ""
-              echo "A Pull Request that sets \`enable_slow_leak = true\` in \`infra/leak.auto.tfvars\` has been opened."
-              echo "**Merge it during the demo** to trigger the ContosoPay memory-leak incident (Scenario B)."
-              echo ""
-              echo "PR: ${url}"
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Scenario ${DEPLOYMENT_SCENARIO} incident PR: ${url}" >> "${GITHUB_STEP_SUMMARY}"
           else
-            {
-              echo "## Demo incident branch pushed (open the PR manually)"
-              echo ""
-              echo "The incident branch \`${BRANCH}\` was pushed, but this workflow could not open the PR automatically:"
-              echo ""
-              echo "> $(cat /tmp/pr.err)"
-              echo ""
-              echo "This usually means **\"Allow GitHub Actions to create and approve pull requests\"** is off."
-              echo "Enable it under **Settings > Actions > General > Workflow permissions**, or just open the PR now:"
-              echo ""
-              echo "[Open the incident PR](${COMPARE})"
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Incident branch pushed; open the PR manually: ${COMPARE}" >> "${GITHUB_STEP_SUMMARY}"
+            echo "::warning::GitHub Actions could not open the PR; repository workflow settings may disallow it."
           fi

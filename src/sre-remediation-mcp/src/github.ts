@@ -1,8 +1,13 @@
-import { createSign } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { DefaultAzureCredential } from '@azure/identity';
-import { SecretClient } from '@azure/keyvault-secrets';
+import {
+  CryptographyClient,
+  KeyClient,
+  type KeyVaultKey
+} from '@azure/keyvault-keys';
+import type { TokenCredential } from '@azure/core-auth';
 import { z } from 'zod';
-import type { BrokerConfig } from './config';
+import type { BrokerConfig } from './config.js';
 
 const ISSUE_TITLE = '[SRE] Remediate ContosoPay slow memory leak';
 const ISSUE_LABEL = 'sre-remediation';
@@ -41,6 +46,11 @@ const commentSchema = z.object({
   user: z.object({ login: z.string() })
 });
 
+const labelSchema = z.object({
+  name: z.string(),
+  color: z.string()
+});
+
 const issueListSchema = z.array(issueSchema);
 const commentListSchema = z.array(commentSchema);
 
@@ -51,23 +61,35 @@ export type RemediationStatus =
   | 'not-needed'
   | 'failed';
 
-export interface PrivateKeyProvider {
-  getPrivateKey(): Promise<string>;
+export interface AppJwtSigner {
+  signDigest(digest: Uint8Array): Promise<Uint8Array>;
 }
 
-export class KeyVaultPrivateKeyProvider implements PrivateKeyProvider {
-  private readonly client: SecretClient;
+export class KeyVaultAppJwtSigner implements AppJwtSigner {
+  private readonly credential: TokenCredential;
+  private readonly keyClient: KeyClient;
+  private readonly keyName: string;
 
-  constructor(vaultUrl: string, private readonly secretName: string) {
-    this.client = new SecretClient(vaultUrl, new DefaultAzureCredential());
+  constructor(keyUri: string, credential: TokenCredential = new DefaultAzureCredential()) {
+    const parsed = new URL(keyUri);
+    const keyMatch = parsed.pathname.match(/^\/keys\/([0-9A-Za-z-]{1,127})$/);
+    if (
+      parsed.protocol !== 'https:' ||
+      !parsed.hostname.endsWith('.vault.azure.net') ||
+      !keyMatch
+    ) {
+      throw new Error('GitHub App signing key URI must be an unversioned Azure Key Vault key URI');
+    }
+    this.credential = credential;
+    this.keyName = keyMatch[1];
+    this.keyClient = new KeyClient(parsed.origin, credential);
   }
 
-  async getPrivateKey(): Promise<string> {
-    const secret = await this.client.getSecret(this.secretName);
-    if (!secret.value) {
-      throw new Error(`Key Vault secret '${this.secretName}' has no value`);
-    }
-    return secret.value;
+  async signDigest(digest: Uint8Array): Promise<Uint8Array> {
+    const key: KeyVaultKey = await this.keyClient.getKey(this.keyName);
+    const client = new CryptographyClient(key, this.credential);
+    const signature = await client.sign('RS256', digest);
+    return signature.result;
   }
 }
 
@@ -75,14 +97,39 @@ type Fetch = typeof fetch;
 
 export class GitHubRemediationClient {
   private cachedToken?: { value: string; refreshAfter: number };
+  private createIssueInFlight?: Promise<{
+    issueNumber: number;
+    issueUrl: string;
+    created: boolean;
+  }>;
 
   constructor(
     private readonly config: BrokerConfig,
-    private readonly privateKeyProvider: PrivateKeyProvider,
+    private readonly appJwtSigner: AppJwtSigner,
     private readonly fetchImplementation: Fetch = fetch
   ) {}
 
   async createRemediationIssue(): Promise<{
+    issueNumber: number;
+    issueUrl: string;
+    created: boolean;
+  }> {
+    if (this.createIssueInFlight) {
+      return this.createIssueInFlight;
+    }
+
+    const operation = this.createRemediationIssueOnce();
+    this.createIssueInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.createIssueInFlight === operation) {
+        this.createIssueInFlight = undefined;
+      }
+    }
+  }
+
+  private async createRemediationIssueOnce(): Promise<{
     issueNumber: number;
     issueUrl: string;
     created: boolean;
@@ -96,6 +143,7 @@ export class GitHubRemediationClient {
       };
     }
 
+    await this.ensureRemediationLabel();
     const issue = await this.githubRequest(
       `/repos/${this.repositoryPath()}/issues`,
       issueSchema,
@@ -183,8 +231,38 @@ export class GitHubRemediationClient {
       issue.user.login !== this.config.githubAppBotLogin ||
       !labels.includes(ISSUE_LABEL)
     ) {
-      throw new Error('Issue is not a valid Scenario B remediation request');
+      throw new Error('Issue is not a valid Scenario C remediation request');
     }
+  }
+
+  private async ensureRemediationLabel(): Promise<void> {
+    const labelPath = `/repos/${this.repositoryPath()}/labels/${encodeURIComponent(ISSUE_LABEL)}`;
+    const existing = await this.githubFetch(labelPath);
+    if (existing.ok) {
+      const label = labelSchema.parse(await existing.json());
+      if (label.name !== ISSUE_LABEL) {
+        throw new Error('GitHub returned an unexpected remediation label');
+      }
+      return;
+    }
+    if (existing.status !== 404) {
+      throw new Error(
+        `GitHub label lookup failed with status ${existing.status}`
+      );
+    }
+
+    await this.githubRequest(
+      `/repos/${this.repositoryPath()}/labels`,
+      labelSchema,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          name: ISSUE_LABEL,
+          color: 'b60205',
+          description: 'Fixed-contract Scenario C SRE remediation request'
+        })
+      }
+    );
   }
 
   private repositoryPath(): string {
@@ -196,8 +274,19 @@ export class GitHubRemediationClient {
     schema: z.ZodType<T>,
     init: RequestInit = {}
   ): Promise<T> {
+    const response = await this.githubFetch(path, init);
+    if (!response.ok) {
+      throw new Error(`GitHub API request failed with status ${response.status}`);
+    }
+    return schema.parse(await response.json());
+  }
+
+  private async githubFetch(
+    path: string,
+    init: RequestInit = {}
+  ): Promise<Response> {
     const token = await this.getInstallationToken();
-    const response = await this.fetchImplementation(
+    return this.fetchImplementation(
       `https://api.github.com${path}`,
       {
         ...init,
@@ -212,10 +301,6 @@ export class GitHubRemediationClient {
         signal: AbortSignal.timeout(10_000)
       }
     );
-    if (!response.ok) {
-      throw new Error(`GitHub API request failed with status ${response.status}`);
-    }
-    return schema.parse(await response.json());
   }
 
   private async getInstallationToken(): Promise<string> {
@@ -259,7 +344,6 @@ export class GitHubRemediationClient {
   }
 
   private async createAppJwt(): Promise<string> {
-    const privateKey = await this.privateKeyProvider.getPrivateKey();
     const now = Math.floor(Date.now() / 1000);
     const header = encodeJson({ alg: 'RS256', typ: 'JWT' });
     const payload = encodeJson({
@@ -268,10 +352,9 @@ export class GitHubRemediationClient {
       iss: this.config.githubAppId
     });
     const unsignedToken = `${header}.${payload}`;
-    const signer = createSign('RSA-SHA256');
-    signer.update(unsignedToken);
-    signer.end();
-    return `${unsignedToken}.${signer.sign(privateKey, 'base64url')}`;
+    const digest = createHash('sha256').update(unsignedToken, 'utf8').digest();
+    const signature = await this.appJwtSigner.signDigest(digest);
+    return `${unsignedToken}.${Buffer.from(signature).toString('base64url')}`;
   }
 }
 

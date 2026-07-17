@@ -1,6 +1,6 @@
 name: sre-remediation-pr
 
-# Scenario B remediation proposed from a narrowly authenticated issue. This
+# Scenario C remediation proposed from a narrowly authenticated issue. This
 # workflow only changes the GitOps leak flag and opens a PR for human review;
 # it never writes directly to Azure.
 on:
@@ -19,16 +19,12 @@ concurrency:
 jobs:
   propose-remediation:
     if: >-
+      vars.DEPLOYMENT_SCENARIO == 'C' &&
       github.event.issue.title == '[SRE] Remediate ContosoPay slow memory leak' &&
       contains(github.event.issue.labels.*.name, 'sre-remediation') &&
       contains(github.event.issue.body, '<!-- sre-remediation:payment-slow-leak -->') &&
-      (
-        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association) ||
-        (
-          github.event.issue.user.type == 'Bot' &&
-          github.event.issue.user.login == vars.SRE_GITHUB_APP_BOT_LOGIN
-        )
-      )
+      github.event.issue.user.type == 'Bot' &&
+      github.event.issue.user.login == vars.SRE_GITHUB_APP_BOT_LOGIN
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -181,7 +177,7 @@ jobs:
             --base main \
             --head "${HEAD_BRANCH}" \
             --title "fix(infra): disable slow memory leak" \
-            --body "Azure SRE Agent Scenario B remediation: sets \`enable_slow_leak = false\` in \`infra/leak.auto.tfvars\`. Merge after human review to apply the healthy GitOps state through the existing infrastructure workflow.")"
+            --body "Azure SRE Agent Scenario C remediation: sets \`enable_slow_leak = false\` in \`infra/leak.auto.tfvars\`. Merge after human review to apply the healthy GitOps state through the existing infrastructure workflow.")"
 
           PR_STATE="$(gh pr view "${PR_URL}" --repo "${GH_REPO}" --json state --jq '.state')"
           if [[ "${PR_STATE}" != "OPEN" ]]; then
