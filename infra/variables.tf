@@ -81,6 +81,21 @@ variable "container_apps_subnet_address_prefix" {
   }
 }
 
+variable "sre_agent_subnet_address_prefix" {
+  description = "Dedicated /28-or-larger subnet prefix for SRE Agent Azure VNet network integration."
+  type        = string
+  default     = "10.100.0.96/28"
+
+  validation {
+    condition = (
+      can(cidrhost(var.sre_agent_subnet_address_prefix, 0)) &&
+      can(tonumber(split("/", var.sre_agent_subnet_address_prefix)[1])) &&
+      tonumber(split("/", var.sre_agent_subnet_address_prefix)[1]) <= 28
+    )
+    error_message = "sre_agent_subnet_address_prefix must be a valid /28-or-larger CIDR prefix."
+  }
+}
+
 variable "subscription_id" {
   description = "Target subscription ID. If null, ARM_SUBSCRIPTION_ID env var is used."
   type        = string
