@@ -59,7 +59,7 @@ Subnet requirements from
 
 | Requirement | Value |
 | --- | --- |
-| **Size** | `/28` or larger. Use `/26` if you expect larger fleets or bursty concurrent sessions. |
+| **Size** | `/27` or larger. Current service validation requires at least 27 usable IP addresses after the 5 Azure-reserved addresses. Use `/26` if you expect larger fleets or bursty concurrent sessions. |
 | **Delegation** | `Microsoft.App/environments` |
 | **Region** | Same region as the SRE Agent resource |
 | **Use** | Dedicated to SRE Agent network integration |
@@ -67,10 +67,10 @@ Subnet requirements from
 If your network team owns VNet changes, ask them for a subnet that meets those
 requirements and can resolve/reach the demo Key Vault private endpoint. If you
 use the Terraform-managed VNet, set `sre_agent_subnet_address_prefix` in
-`terraform.tfvars` to a non-overlapping `/28` or larger CIDR. The example uses:
+`terraform.tfvars` to a non-overlapping `/27` or larger CIDR. The example uses:
 
 ```hcl
-sre_agent_subnet_address_prefix = "10.100.0.96/28"
+sre_agent_subnet_address_prefix = "10.100.0.96/27"
 ```
 
 After apply, use these outputs in the SRE Agent portal:

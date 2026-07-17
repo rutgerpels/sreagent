@@ -130,7 +130,8 @@ Vault through private DNS, private endpoints, NSGs, UDRs, and firewalls.
 
 Azure VNet mode requires a dedicated subnet:
 
-- `/28` or larger;
+- `/27` or larger, because current service validation requires at least 27
+  usable IP addresses after the 5 Azure-reserved addresses;
 - delegated to `Microsoft.App/environments`;
 - in the same region as the SRE Agent resource;
 - not shared with Container Apps, private endpoints, runners, or other services.
