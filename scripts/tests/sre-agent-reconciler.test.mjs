@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   buildExtendedBody,
   desiredSubsetMatches,
+  extendedResourceMatches,
+  knowledgeIndexingState,
   loadDesiredState,
   parseExplicitBoolean,
   renderDesiredState,
@@ -25,6 +27,7 @@ test("loads the supported Scenario C desired state", () => {
     "log-analytics",
   ]);
   assert.equal(desired.subagents[0].name, "gitops-remediation");
+  assert.equal("agentType" in desired.subagents[0].properties, false);
   assert.match(
     desired.subagents[0].properties.instructions,
     /Never modify Azure resources directly/,
@@ -106,5 +109,152 @@ test("detects drift while allowing service-populated properties", () => {
       { name: "health", properties: { isEnabled: true } },
     ),
     false,
+  );
+});
+
+test("matches the live extended-resource response contract", () => {
+  assert.equal(
+    extendedResourceMatches(
+      "agents",
+      {
+        name: "gitops-remediation",
+        type: "ExtendedAgent",
+        tags: ["contosopay-scenario-c"],
+        properties: {
+          handoffDescription: "Investigates incidents.",
+          tools: ["SearchMemory"],
+          temperature: 0.2,
+          enableSkills: false,
+          allowedSkills: [],
+          mcpTools: null,
+          enableVanillaMode: false,
+        },
+      },
+      {
+        name: "gitops-remediation",
+        type: "ExtendedAgent",
+        properties: {
+          handoffDescription: "Investigates incidents.",
+          tools: ["SearchMemory"],
+          temperature: 0.2,
+          enableSkills: false,
+          allowedSkills: [],
+        },
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    extendedResourceMatches(
+      "incidentFilters",
+      {
+        name: "memory-leak",
+        type: "IncidentFilter",
+        tags: null,
+        properties: {
+          incidentPlatform: "AzMonitor",
+          priorities: ["Sev2"],
+          isEnabled: true,
+          mergeEnabled: true,
+        },
+      },
+      {
+        name: "memory-leak",
+        type: "IncidentFilter",
+        properties: {
+          incidentPlatform: "AzMonitor",
+          priorities: ["Sev2"],
+          isEnabled: true,
+        },
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    extendedResourceMatches(
+      "scheduledtasks",
+      {
+        name: "daily-health",
+        type: "ScheduledTask",
+        tags: null,
+        properties: {
+          description: "Daily health summary",
+          cronExpression: "0 8 * * *",
+          agentPrompt: "Summarize health.",
+          agentMode: "Review",
+          status: "Active",
+        },
+      },
+      {
+        name: "daily-health",
+        type: "ScheduledTask",
+        properties: {
+          description: "Daily health summary",
+          cronExpression: "0 8 * * *",
+          agentPrompt: "Summarize health.",
+          agentMode: "Review",
+        },
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    extendedResourceMatches(
+      "scheduledtasks",
+      {
+        name: "daily-health",
+        type: "ScheduledTask",
+        properties: { cronExpression: "0 9 * * *" },
+      },
+      {
+        name: "daily-health",
+        type: "ScheduledTask",
+        properties: { cronExpression: "0 8 * * *" },
+      },
+    ),
+    false,
+  );
+});
+
+test("accepts a successful knowledge execution while the indexer remains active", () => {
+  assert.equal(
+    knowledgeIndexingState(
+      { enabled: true, documentRetrievalEnabled: true },
+      {
+        status: "Running",
+        lastExecution: {
+          status: "Success",
+          documentsProcessed: 1,
+          documentsFailed: 0,
+          itemErrors: [],
+        },
+        warnings: ["A nonfatal indexing warning."],
+        errors: [],
+      },
+    ),
+    "succeeded",
+  );
+  assert.equal(
+    knowledgeIndexingState(
+      { enabled: true },
+      {
+        status: "Running",
+        lastExecution: {
+          status: "Success",
+          documentsProcessed: 0,
+          documentsFailed: 1,
+          itemErrors: ["failed"],
+        },
+        errors: [],
+      },
+    ),
+    "failed",
+  );
+  assert.equal(
+    knowledgeIndexingState(
+      { enabled: true },
+      { status: "Running", lastExecution: { status: "Running" }, errors: [] },
+    ),
+    "pending",
   );
 });

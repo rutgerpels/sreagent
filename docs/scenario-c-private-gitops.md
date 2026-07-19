@@ -21,10 +21,10 @@ features that do not yet expose a supported automation path.
 | App Insights, Log Analytics, Azure Monitor connectors | Terraform/AzAPI ARM children | Fully declarative |
 | Agent and connector RBAC | Terraform | Fully declarative |
 | Global tool policy | SRE Agent REST reconciler | Idempotent apply and verify |
-| `gitops-remediation` custom agent | SRE Agent REST reconciler | Idempotent apply and verify |
-| Sev2 memory response plan | SRE Agent REST reconciler | Idempotent apply and verify |
-| Scheduled health check | SRE Agent REST reconciler | Idempotent apply and verify |
-| GitOps runbook knowledge | SRE Agent REST reconciler | Delete known file, upload, verify |
+| `gitops-remediation` custom agent | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| Sev2 memory response plan | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| Scheduled health check | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| GitOps runbook knowledge | SRE Agent REST reconciler | Delete known file, upload, verify successful indexing |
 | GitHub Code Access | SRE Agent REST reconciler | Optional; requires externally issued GitHub App material |
 | GitHub App creation and private-key issuance | GitHub/operator | External bootstrap; GitHub has no noninteractive App-creation API |
 | Remote remediation MCP connector | Disabled | Supported remote HTTP managed-identity authentication is not currently documented |
@@ -56,9 +56,13 @@ deployment. It runs `verify` again after application deployment.
 
 The current SRE Agent templates support Bicep and Terraform. Bicep is slightly
 ahead as the native ARM authoring experience and may expose new preview
-properties first. It does not eliminate the second phase: global permissions,
-extended agents, schedules, knowledge, and Code Access still use the documented
-SRE Agent API.
+properties first. The ARM reference lists child types for subagents, incident
+filters, and scheduled tasks, but live deployment in this tenant returns
+`Agent Extensions are not available for this tenant` because that path is
+restricted to internal tenants. Microsoft's current Terraform backend therefore
+also deploys subagents through the data plane. Global permissions, extended
+agents, response plans, schedules, knowledge, and Code Access remain in the
+documented REST reconciliation phase for this portable enterprise profile.
 
 This repository retains Terraform because:
 
@@ -68,6 +72,18 @@ This repository retains Terraform because:
 - the documented ARM connectors are Terraform-owned child resources;
 - switching languages would add state and pipeline complexity without removing
   the REST reconciliation phase.
+
+The reconciler verifies the effective response contract rather than unsupported
+request-only fields. In the current preview, `agentType` is not part of the
+custom-agent REST envelope, `deepInvestigationEnabled` is not persisted for
+incident filters, and scheduled tasks ignore duplicate `name` and `isEnabled`
+properties. Those fields are intentionally absent from the desired state so
+successful API acceptance cannot mask configuration drift.
+
+Knowledge upload is verified through the documented upload response and
+`AgentMemory` indexer execution status. The preview status API does not expose a
+document-list operation or filenames, so verify-only runs can prove indexing
+health but cannot compare remote file contents byte for byte.
 
 The agent currently uses `Microsoft.App/agents@2025-05-01-preview` because that
 schema exposes the required VNet and sandbox properties. Re-evaluate the pinned

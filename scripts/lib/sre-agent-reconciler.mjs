@@ -52,6 +52,37 @@ export function desiredSubsetMatches(actual, desired) {
   return actual === desired;
 }
 
+export function extendedResourceMatches(kind, actual, item) {
+  const expected = buildExtendedBody(item.name, item.type, item.properties);
+  if (kind !== "agents") {
+    // Incident filters and scheduled tasks currently discard envelope tags.
+    delete expected.tags;
+  }
+  return desiredSubsetMatches(actual, expected);
+}
+
+export function knowledgeIndexingState(status, indexer) {
+  const execution = indexer.lastExecution ?? {};
+  const hasErrors =
+    (execution.documentsFailed ?? 0) > 0 ||
+    (execution.itemErrors?.length ?? 0) > 0 ||
+    (indexer.errors?.length ?? 0) > 0;
+  if (
+    status.enabled !== true ||
+    /^(failed|error)$/i.test(execution.status ?? "") ||
+    hasErrors
+  ) {
+    return "failed";
+  }
+  if (
+    execution.status === "Success" &&
+    (execution.documentsProcessed ?? 0) > 0
+  ) {
+    return "succeeded";
+  }
+  return "pending";
+}
+
 export function loadDesiredState(configDirectory, environment = process.env) {
   const directory = resolve(configDirectory);
   const manifest = readJson(resolve(directory, "manifest.json"));
@@ -170,7 +201,13 @@ export function renderDesiredState(desired) {
 }
 
 function az(argumentsList) {
-  const result = spawnSync("az", argumentsList, {
+  const command =
+    process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "az";
+  const commandArguments =
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", "az.cmd", ...argumentsList]
+      : argumentsList;
+  const result = spawnSync(command, commandArguments, {
     encoding: "utf8",
     shell: false,
     windowsHide: true,
@@ -420,8 +457,7 @@ async function verifyExtended(endpoint, token, kind, item) {
     token,
   );
   const actual = await response.json();
-  const expected = buildExtendedBody(item.name, item.type, item.properties);
-  if (!desiredSubsetMatches(actual, expected)) {
+  if (!extendedResourceMatches(kind, actual, item)) {
     throw new Error(
       `${kind}/${item.name} differs from declared desired state.`,
     );
@@ -488,6 +524,7 @@ async function verifyCodeAccess(endpoint, token, codeAccess) {
 }
 
 async function verifyKnowledge(endpoint, token, knowledge) {
+  if (knowledge.length === 0) return;
   for (let attempt = 1; attempt <= 12; attempt += 1) {
     const [statusResponse, indexerResponse] = await Promise.all([
       request(`${endpoint}/api/v1/AgentMemory/status`, token),
@@ -495,17 +532,14 @@ async function verifyKnowledge(endpoint, token, knowledge) {
     ]);
     const status = await statusResponse.json();
     const indexer = await indexerResponse.json();
-    const serialized = JSON.stringify({ status, indexer });
-    const failed = /"status"\s*:\s*"(failed|error)"/i.test(serialized);
-    const allPresent = knowledge.every((item) =>
-      serialized.includes(item.fileName),
-    );
-    if (!failed && allPresent) return;
-    if (failed) throw new Error("Knowledge indexing reported a failed state.");
+    const state = knowledgeIndexingState(status, indexer);
+    if (state === "succeeded") return;
+    if (state === "failed")
+      throw new Error("Knowledge indexing reported a failed state.");
     if (attempt < 12) await sleep(10_000);
   }
   throw new Error(
-    "Knowledge verification timed out before all declared files were indexed.",
+    "Knowledge verification timed out before indexing completed successfully.",
   );
 }
 
