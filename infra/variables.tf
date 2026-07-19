@@ -343,7 +343,7 @@ variable "sre_agent_model_provider" {
 variable "sre_agent_model_name" {
   description = "Default model name supported by the selected SRE Agent provider and region."
   type        = string
-  default     = "gpt-5"
+  default     = "Automatic"
 
   validation {
     condition     = length(trimspace(var.sre_agent_model_name)) > 0 && trimspace(var.sre_agent_model_name) == var.sre_agent_model_name

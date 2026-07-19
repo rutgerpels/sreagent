@@ -61,7 +61,7 @@ jobs:
       REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
       SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
-      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
       - name: Validate destruction request
         shell: bash

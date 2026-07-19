@@ -112,7 +112,7 @@ jobs:
       OPEN_INCIDENT_PR: ${{ inputs.open_incident_pr }}
       SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
-      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
