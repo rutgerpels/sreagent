@@ -185,10 +185,10 @@ jobs:
           if [[ "${CODE_ACCESS_ENABLED}" == "true" ]]; then
             [[ -n "${CODE_ACCESS_SECRET_NAME}" ]] || { echo "::error::SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME is required when Code Access is enabled."; exit 1; }
           fi
-          {
-            echo "TF_VAR_enable_sre_code_access=${CODE_ACCESS_ENABLED}"
-            echo "TF_VAR_sre_code_access_private_key_secret_name=${CODE_ACCESS_SECRET_NAME}"
-          } >> "${GITHUB_ENV}"
+          echo "TF_VAR_enable_sre_code_access=${CODE_ACCESS_ENABLED}" >> "${GITHUB_ENV}"
+          if [[ "${CODE_ACCESS_ENABLED}" == "true" ]]; then
+            echo "TF_VAR_sre_code_access_private_key_secret_name=${CODE_ACCESS_SECRET_NAME}" >> "${GITHUB_ENV}"
+          fi
 
       - name: Azure login (OIDC)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
