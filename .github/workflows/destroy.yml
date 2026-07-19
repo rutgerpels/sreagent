@@ -240,6 +240,27 @@ jobs:
              and .tags.env == $environment' \
             <<< "${LIVE_RG}" >/dev/null || { echo "::error::Live resource group tags do not match verified state."; exit 1; }
 
+          SHARED_PEERINGS="$(jq -ce --arg rgId "${STATE_RG_ID}" '
+            [.resources[]
+             | select(.mode == "managed"
+                 and .type == "azurerm_virtual_network_peering"
+                 and .name == "runner_to_app")
+             | .instances[].attributes
+             | select(.id != null and .remote_virtual_network_id != null)
+             | select((.remote_virtual_network_id | ascii_downcase)
+                 | startswith(($rgId | ascii_downcase) + "/providers/microsoft.network/virtualnetworks/"))]
+            | if length <= 1 then . else error("expected at most one shared runner peering") end
+          ' "${STATE_FILE}")"
+          while IFS= read -r peering_id; do
+            [[ "${peering_id,,}" == "/subscriptions/${ARM_SUBSCRIPTION_ID,,}/resourcegroups/"*"/providers/microsoft.network/virtualnetworks/"*"/virtualnetworkpeerings/peer-runner-to-app-"* ]] || {
+              echo "::error::Verified state contains an unexpected shared peering ID."
+              exit 1
+            }
+            if az resource show --ids "${peering_id}" --api-version 2024-05-01 >/dev/null 2>&1; then
+              az resource delete --ids "${peering_id}" --api-version 2024-05-01
+            fi
+          done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
+
           az group delete --name "${APP_RESOURCE_GROUP}" --yes
           [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
           az storage blob lease break --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --blob-name "${{ steps.backend.outputs.state_key }}" --auth-mode login 2>/dev/null || true
