@@ -124,9 +124,6 @@ resource "azapi_resource" "agent" {
           mode        = each.value.mode
           identity    = azurerm_user_assigned_identity.agent[each.key].id
         }
-        agentIdentity = {
-          initialSponsorGroupId = var.sre_agent_sponsor_group_id
-        }
         defaultModel = {
           name     = var.sre_agent_model_name
           provider = var.sre_agent_model_provider

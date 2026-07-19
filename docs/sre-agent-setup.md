@@ -142,7 +142,6 @@ See
 Automation still requires operator-supplied, nonsecret metadata and externally
 issued credentials:
 
-- Entra sponsor-group object ID;
 - GitHub App creation and installation;
 - GitHub App private-key issuance;
 - Key Vault insertion of the Code Access PEM secret;

@@ -29,6 +29,13 @@ features that do not yet expose a supported automation path.
 | GitHub App creation and private-key issuance | GitHub/operator | External bootstrap; GitHub has no noninteractive App-creation API |
 | Remote remediation MCP connector | Disabled | Supported remote HTTP managed-identity authentication is not currently documented |
 
+The optional `agentIdentity.initialSponsorGroupId` surface from the newer stable
+ARM schema is intentionally not enabled. Microsoft's current production
+Terraform and Bicep templates omit it, and the underlying Agent Identity
+platform is tenant restricted. Scenario C instead uses the documented
+system-assigned and user-assigned managed identities, which remain fully
+declarative and portable across supported SRE Agent tenants.
+
 The reconciler is:
 
 ```text
@@ -134,7 +141,6 @@ Configure these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 - `RUNNER_NETWORK_RG`
 - `RUNNER_VNET_NAME`
 - `RUNNER_PE_SUBNET_NAME`

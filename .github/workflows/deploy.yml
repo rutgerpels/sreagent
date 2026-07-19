@@ -56,7 +56,6 @@ jobs:
           ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
           ACTIVE_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
           ACTIVE_PREFIX: ${{ vars.TF_PREFIX }}
           ACTIVE_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
@@ -80,7 +79,6 @@ jobs:
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
             [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required for OIDC."; exit 1; }
           done
-          [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required to provision the selected SRE Agent."; exit 1; }
           LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
           [[ "${LEAK_STATE}" == "false" ]] || { echo "::error file=infra/leak.auto.tfvars::A full deployment requires enable_slow_leak = false."; exit 1; }
           if [[ -n "${ACTIVE_SCENARIO}" ]]; then
@@ -110,7 +108,6 @@ jobs:
       TF_LOCATION: ${{ inputs.location }}
       IMAGE_TAG: ${{ github.sha }}
       OPEN_INCIDENT_PR: ${{ inputs.open_incident_pr }}
-      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
       SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
@@ -139,13 +136,11 @@ jobs:
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
             [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required for OIDC."; exit 1; }
           done
-          [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required to provision the selected SRE Agent."; exit 1; }
           LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
           [[ "${LEAK_STATE}" == "false" ]] || { echo "::error file=infra/leak.auto.tfvars::A full deployment requires enable_slow_leak = false."; exit 1; }
           {
             echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
             echo "TF_VAR_enable_sre_agents=true"
-            echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
             echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
             echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
           } >> "${GITHUB_ENV}"

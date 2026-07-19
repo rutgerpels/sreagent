@@ -59,7 +59,6 @@ jobs:
       REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
       REPOSITORY_PREFIX: ${{ vars.TF_PREFIX }}
       REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
-      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
       SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
@@ -87,11 +86,9 @@ jobs:
             [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
             [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
-            [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required for Terraform destroy."; exit 1; }
             {
               echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
               echo "TF_VAR_enable_sre_agents=true"
-              echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
               echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
               echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
             } >> "${GITHUB_ENV}"

@@ -132,7 +132,6 @@ jobs:
       TF_PREFIX: ${{ needs.select-profile.outputs.prefix }}
       TF_ENVIRONMENT: ${{ needs.select-profile.outputs.environment }}
       IMAGE_TAG: ${{ github.sha }}
-      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
       SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
@@ -148,11 +147,9 @@ jobs:
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
             [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required."; exit 1; }
           done
-          [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required to preserve the selected SRE Agent."; exit 1; }
           {
             echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
             echo "TF_VAR_enable_sre_agents=true"
-            echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
             echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
             echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
           } >> "${GITHUB_ENV}"

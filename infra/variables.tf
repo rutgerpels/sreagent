@@ -311,22 +311,9 @@ variable "sre_remediation_github_app_private_key_name" {
 ###############################################################################
 
 variable "enable_sre_agents" {
-  description = "Provision exactly one SRE Agent using the selected scenario profile. Requires sre_agent_sponsor_group_id."
+  description = "Provision exactly one SRE Agent using the selected scenario profile."
   type        = bool
   default     = false
-}
-
-variable "sre_agent_sponsor_group_id" {
-  description = "Entra group object ID that sponsors the selected agent identity (required by Microsoft.App/agents)."
-  type        = string
-  default     = null
-
-  validation {
-    condition = var.sre_agent_sponsor_group_id == null ? !var.enable_sre_agents : can(
-      regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sre_agent_sponsor_group_id)
-    )
-    error_message = "sre_agent_sponsor_group_id must be null when unused or a valid Entra object ID; it is required when enable_sre_agents is true."
-  }
 }
 
 variable "sre_agent_model_provider" {

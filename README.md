@@ -112,7 +112,6 @@ Configure these nonsecret repository variables before dispatch:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 
 Do not set `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, or `TF_ENVIRONMENT` before the
 first deployment. Dispatch **deploy** with explicit A/B/C, prefix, and environment
@@ -145,9 +144,9 @@ Push-triggered `apply-infra` and `deploy-apps` behavior is fail closed:
   marker is absent, but it cannot disagree with an active scenario.
 
 The deployment workflows provision exactly one SRE Agent for the selected
-profile. `SRE_AGENT_SPONSOR_GROUP_ID` is the Entra sponsor group object ID.
-Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME` variables override
-the default `MicrosoftFoundry` / `gpt-5` model configuration.
+profile. Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME`
+variables override the default `MicrosoftFoundry` / `Automatic` model
+configuration.
 
 For Scenario C, Terraform/AzAPI also owns the agent VNet, sandbox, identities,
 telemetry, budget, incident platform, and first-party connector child resources.
