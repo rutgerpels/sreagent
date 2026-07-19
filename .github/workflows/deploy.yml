@@ -253,7 +253,7 @@ jobs:
               az network private-dns link vnet create -g "${TF_VAR_runner_vnet_resource_group}" -z "${STATE_ZONE}" -n "${STATE_LINK}" -v "${VNET_ID}" -e false --output none
             az network private-endpoint show -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_PE}" >/dev/null 2>&1 || \
               az network private-endpoint create -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_PE}" --vnet-name "${TF_VAR_runner_vnet_name}" --subnet "${TF_VAR_runner_private_endpoint_subnet_name}" --private-connection-resource-id "${STATE_ID}" --group-id blob --connection-name "${STATE_PE}-connection" --output none
-            if ! az network private-endpoint dns-zone-group show -g "${TF_VAR_runner_vnet_resource_group}" --endpoint-name "${STATE_PE}" -n blob-zone >/dev/null 2>&1; then
+            if [[ "$(az network private-endpoint dns-zone-group list -g "${TF_VAR_runner_vnet_resource_group}" --endpoint-name "${STATE_PE}" --query "length([?name=='blob-zone'])" -o tsv)" == "0" ]]; then
               STATE_ZONE_ID="$(az network private-dns zone show -g "${TF_VAR_runner_vnet_resource_group}" -n "${STATE_ZONE}" --query id -o tsv)"
               az network private-endpoint dns-zone-group create -g "${TF_VAR_runner_vnet_resource_group}" --endpoint-name "${STATE_PE}" -n blob-zone --private-dns-zone "${STATE_ZONE_ID}" --zone-name blob --output none
             fi
