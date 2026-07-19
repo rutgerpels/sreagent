@@ -46,9 +46,9 @@ resource "time_sleep" "wait_app_dependencies" {
 }
 
 ###############################################################################
-# Scenario C remediation broker identity. It exists in phase 1 even when
-# deploy_apps=false so ACR and Key Vault cryptographic RBAC can converge before
-# the broker image is deployed. Scenario A/B never create this identity.
+# Dormant Scenario C remediation broker identity. The current profile does not
+# create it because remote Streamable-HTTP MCP lacks the required managed-
+# identity authentication flow.
 ###############################################################################
 
 locals {

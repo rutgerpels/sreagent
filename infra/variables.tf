@@ -27,7 +27,7 @@ variable "location" {
 }
 
 variable "scenario" {
-  description = "Deployment security profile: A (autonomous/public), B (review/public GitHub MCP), or C (review/private custom broker)."
+  description = "Deployment security profile: A (autonomous/public), B (review/public GitHub MCP), or C (review/private code-first GitOps)."
   type        = string
   default     = "A"
 
@@ -93,7 +93,7 @@ variable "container_apps_subnet_address_prefix" {
 }
 
 variable "sre_agent_subnet_address_prefix" {
-  description = "Dedicated /27-or-larger subnet prefix for SRE Agent Azure VNet network integration."
+  description = "Dedicated /28-or-larger subnet prefix for Scenario C SRE Agent Azure VNet integration."
   type        = string
   default     = "10.100.0.96/27"
 
@@ -101,9 +101,9 @@ variable "sre_agent_subnet_address_prefix" {
     condition = (
       can(cidrhost(var.sre_agent_subnet_address_prefix, 0)) &&
       can(tonumber(split("/", var.sre_agent_subnet_address_prefix)[1])) &&
-      tonumber(split("/", var.sre_agent_subnet_address_prefix)[1]) <= 27
+      tonumber(split("/", var.sre_agent_subnet_address_prefix)[1]) <= 28
     )
-    error_message = "sre_agent_subnet_address_prefix must be a valid /27-or-larger CIDR prefix."
+    error_message = "sre_agent_subnet_address_prefix must be a valid /28-or-larger CIDR prefix."
   }
 }
 
@@ -121,18 +121,17 @@ variable "enable_grafana" {
 
 variable "deploy_apps" {
   description = <<-EOT
-    Whether to create the application Container Apps (including the Scenario C
-    broker when implied by the profile). The deploy script applies once with this
-    false to
-    create the platform/identities, pushes images, then applies again with this
-    true. Defaults to true so a normal re-apply is idempotent.
+    Whether to create the application Container Apps. The deploy script applies
+    once with this false to create the platform/identities, pushes images, then
+    applies again with this true. Defaults to true so a normal re-apply is
+    idempotent.
   EOT
   type        = bool
   default     = true
 }
 
 variable "image_tag" {
-  description = "Immutable container image tag pulled from ACR for application images, including the Scenario C broker."
+  description = "Immutable container image tag pulled from ACR for application images."
   type        = string
   default     = "0000000000000000000000000000000000000000"
 
@@ -150,7 +149,7 @@ variable "image_digests" {
   validation {
     condition = !var.deploy_apps || (
       length(setsubtract(
-        toset(var.scenario == "C" ? ["frontend", "checkout-api", "payment-service", "sre-remediation-mcp"] : ["frontend", "checkout-api", "payment-service"]),
+        toset(["frontend", "checkout-api", "payment-service"]),
         toset(keys(var.image_digests)),
       )) == 0 &&
       alltrue([
@@ -235,9 +234,9 @@ variable "frontend_allowed_ips" {
 }
 
 ###############################################################################
-# Scenario C-only Entra-protected SRE remediation MCP broker metadata.
-# Scenario C implies the broker; there is intentionally no independent toggle.
-# Both GitHub Apps and all key material are created/imported out of band.
+# Dormant Entra-protected SRE remediation MCP broker metadata.
+# The Scenario C profile keeps this broker disabled until remote Streamable-HTTP
+# MCP documents the required managed-identity authentication flow.
 ###############################################################################
 
 variable "sre_remediation_allowed_caller_principal_id" {
@@ -265,13 +264,13 @@ variable "sre_remediation_entra_token_scope" {
 }
 
 variable "sre_remediation_github_app_id" {
-  description = "GitHub App numeric ID used by the broker. Nonsecret metadata; required for Scenario C."
+  description = "GitHub App numeric ID reserved for the dormant broker. Nonsecret metadata."
   type        = string
   default     = null
 }
 
 variable "sre_remediation_github_app_installation_id" {
-  description = "GitHub App numeric installation ID used by the broker. Nonsecret metadata; required for Scenario C."
+  description = "GitHub App numeric installation ID reserved for the dormant broker. Nonsecret metadata."
   type        = string
   default     = null
 }
@@ -283,13 +282,13 @@ variable "sre_remediation_github_app_bot_login" {
 }
 
 variable "sre_remediation_github_repository_owner" {
-  description = "GitHub repository owner on which the broker may operate. Required for Scenario C."
+  description = "GitHub repository owner on which the dormant broker may operate."
   type        = string
   default     = null
 }
 
 variable "sre_remediation_github_repository_name" {
-  description = "GitHub repository name on which the broker may operate. Required for Scenario C."
+  description = "GitHub repository name on which the dormant broker may operate."
   type        = string
   default     = null
 }
@@ -307,7 +306,8 @@ variable "sre_remediation_github_app_private_key_name" {
 
 ###############################################################################
 # Optional: provision the selected scenario's one SRE Agent preview resource.
-# GitHub connections, tool policy, and response-plan setup remain manual.
+# Terraform owns its control plane; GitHub App credentials and data-plane policy
+# remain an explicit external bootstrap.
 ###############################################################################
 
 variable "enable_sre_agents" {
@@ -322,22 +322,66 @@ variable "sre_agent_sponsor_group_id" {
   default     = null
 
   validation {
-    condition = !var.enable_sre_agents || (
-      var.sre_agent_sponsor_group_id != null &&
-      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sre_agent_sponsor_group_id))
+    condition = var.sre_agent_sponsor_group_id == null ? !var.enable_sre_agents : can(
+      regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sre_agent_sponsor_group_id)
     )
-    error_message = "sre_agent_sponsor_group_id must be a valid Entra object ID when enable_sre_agents is true."
+    error_message = "sre_agent_sponsor_group_id must be null when unused or a valid Entra object ID; it is required when enable_sre_agents is true."
   }
 }
 
 variable "sre_agent_model_provider" {
-  description = "Default model provider for the agents (e.g. MicrosoftFoundry in Sweden Central / EU; Anthropic elsewhere)."
+  description = "Default documented SRE Agent model provider: MicrosoftFoundry or Anthropic."
   type        = string
   default     = "MicrosoftFoundry"
+
+  validation {
+    condition     = contains(["MicrosoftFoundry", "Anthropic"], var.sre_agent_model_provider)
+    error_message = "sre_agent_model_provider must be exactly MicrosoftFoundry or Anthropic."
+  }
 }
 
 variable "sre_agent_model_name" {
-  description = "Default model name for the agents."
+  description = "Default model name supported by the selected SRE Agent provider and region."
   type        = string
   default     = "gpt-5"
+
+  validation {
+    condition     = length(trimspace(var.sre_agent_model_name)) > 0 && trimspace(var.sre_agent_model_name) == var.sre_agent_model_name
+    error_message = "sre_agent_model_name must be a nonempty model name without leading or trailing whitespace."
+  }
+}
+
+variable "sre_agent_monthly_agent_unit_limit" {
+  description = "Positive whole-number monthly active-flow Azure Agent Unit cap for the Terraform-managed SRE Agent."
+  type        = number
+  default     = 10000
+
+  validation {
+    condition     = var.sre_agent_monthly_agent_unit_limit >= 1 && floor(var.sre_agent_monthly_agent_unit_limit) == var.sre_agent_monthly_agent_unit_limit
+    error_message = "sre_agent_monthly_agent_unit_limit must be a positive whole number."
+  }
+}
+
+variable "enable_sre_code_access" {
+  description = "Attach a dedicated secret-scoped identity for Scenario C GitHub App Code Access."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_sre_code_access || (var.scenario == "C" && var.enable_sre_agents)
+    error_message = "enable_sre_code_access can be true only for Scenario C with enable_sre_agents=true."
+  }
+}
+
+variable "sre_code_access_private_key_secret_name" {
+  description = "Name of the existing Key Vault secret containing the read-only Code Access GitHub App PEM."
+  type        = string
+  default     = null
+
+  validation {
+    condition = var.sre_code_access_private_key_secret_name == null ? !var.enable_sre_code_access : can(
+      regex("^[0-9A-Za-z-]{1,127}$", var.sre_code_access_private_key_secret_name)
+    )
+    error_message = "sre_code_access_private_key_secret_name is required when Code Access is enabled and must be a valid Key Vault secret name."
+  }
 }

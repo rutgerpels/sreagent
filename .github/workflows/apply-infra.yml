@@ -7,6 +7,11 @@ on:
     paths:
       - "infra/leak.auto.tfvars"
       - "infra/**.tf"
+      - "agent/scenario-c/**"
+      - "agent/knowledge/**"
+      - "agent/tool-access-policy.api.json"
+      - "scripts/lib/sre-agent-reconciler.mjs"
+      - "scripts/reconcile-sre-agent.*"
       - ".github/workflows/apply-infra.yml"
   workflow_dispatch:
     inputs:
@@ -180,34 +185,21 @@ jobs:
             echo "TF_VAR_sre_agent_subnet_address_prefix=${SRE_AGENT_SUBNET_PREFIX}"
           } >> "${GITHUB_ENV}"
 
-      - name: Configure Scenario C broker metadata
+      - name: Configure Scenario C Code Access inputs
         if: ${{ needs.select-profile.outputs.scenario == 'C' }}
         shell: bash
         env:
-          ENTRA_CLIENT_ID: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
-          TOKEN_AUDIENCE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
-          TOKEN_SCOPE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
-          GITHUB_APP_ID: ${{ vars.SRE_GITHUB_APP_ID }}
-          GITHUB_APP_INSTALLATION_ID: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
-          GITHUB_APP_BOT_LOGIN: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
-          PRIVATE_KEY_NAME: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_NAME || 'github-app-signing-key' }}
+          CODE_ACCESS_ENABLED: ${{ vars.SRE_CODE_ACCESS_ENABLED || 'false' }}
+          CODE_ACCESS_SECRET_NAME: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
         run: |
           set -euo pipefail
-          for value in ENTRA_CLIENT_ID TOKEN_AUDIENCE TOKEN_SCOPE GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_BOT_LOGIN; do
-            [[ -n "${!value}" ]] || { echo "::error::Scenario C requires repository variable ${value}."; exit 1; }
-          done
-          [[ "${TOKEN_AUDIENCE,,}" == "${ENTRA_CLIENT_ID,,}" ]] || { echo "::error::Broker v2 token audience must equal the Entra API client ID."; exit 1; }
-          [[ "${TOKEN_SCOPE,,}" == "api://${ENTRA_CLIENT_ID,,}/.default" ]] || { echo "::error::Broker scope must be api://<Entra client ID>/.default."; exit 1; }
+          [[ "${CODE_ACCESS_ENABLED}" == "true" || "${CODE_ACCESS_ENABLED}" == "false" ]] || { echo "::error::SRE_CODE_ACCESS_ENABLED must be true or false."; exit 1; }
+          if [[ "${CODE_ACCESS_ENABLED}" == "true" ]]; then
+            [[ -n "${CODE_ACCESS_SECRET_NAME}" ]] || { echo "::error::SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME is required when Code Access is enabled."; exit 1; }
+          fi
           {
-            echo "TF_VAR_sre_remediation_entra_api_client_id=${ENTRA_CLIENT_ID}"
-            echo "TF_VAR_sre_remediation_entra_token_audience=${TOKEN_AUDIENCE}"
-            echo "TF_VAR_sre_remediation_entra_token_scope=${TOKEN_SCOPE}"
-            echo "TF_VAR_sre_remediation_github_app_id=${GITHUB_APP_ID}"
-            echo "TF_VAR_sre_remediation_github_app_installation_id=${GITHUB_APP_INSTALLATION_ID}"
-            echo "TF_VAR_sre_remediation_github_app_bot_login=${GITHUB_APP_BOT_LOGIN}"
-            echo "TF_VAR_sre_remediation_github_repository_owner=${GITHUB_REPOSITORY_OWNER}"
-            echo "TF_VAR_sre_remediation_github_repository_name=${GITHUB_REPOSITORY#*/}"
-            echo "TF_VAR_sre_remediation_github_app_private_key_name=${PRIVATE_KEY_NAME}"
+            echo "TF_VAR_enable_sre_code_access=${CODE_ACCESS_ENABLED}"
+            echo "TF_VAR_sre_code_access_private_key_secret_name=${CODE_ACCESS_SECRET_NAME}"
           } >> "${GITHUB_ENV}"
 
       - name: Azure login (OIDC)
@@ -222,6 +214,12 @@ jobs:
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
+
+      - name: Setup Node.js for SRE Agent reconciliation
+        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
 
       - name: Resolve scenario-isolated backend
         id: backend
@@ -266,21 +264,12 @@ jobs:
           ACR_LOGIN_SERVER="$(terraform -chdir=infra output -raw acr_login_server)"
           az acr login --name "${ACR_NAME}"
           services=(frontend checkout-api payment-service)
-          [[ "${DEPLOYMENT_SCENARIO}" == C ]] && services+=(sre-remediation-mcp)
           DIGEST_FILE="${RUNNER_TEMP}/image-digests.json"
           bash scripts/publish-immutable-images.sh \
             "${ACR_NAME}" "${ACR_LOGIN_SERVER}" "${IMAGE_TAG}" "${DIGEST_FILE}" "${services[@]}"
           DIGESTS="$(jq -c . "${DIGEST_FILE}")"
           echo "image_digests=${DIGESTS}" >> "${GITHUB_OUTPUT}"
           echo "TF_VAR_image_digests=${DIGESTS}" >> "${GITHUB_ENV}"
-
-      - name: Verify Scenario C remediation key prerequisite
-        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          KEY_VAULT_NAME="$(terraform -chdir=infra output -raw key_vault_name)"
-          bash scripts/verify-remediation-key.sh "${KEY_VAULT_NAME}" "${TF_VAR_sre_remediation_github_app_private_key_name}"
 
       - name: Terraform apply
         working-directory: infra
@@ -293,6 +282,38 @@ jobs:
             -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
             -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch after apply."; exit 1; }
+
+      - name: Reconcile and verify Scenario C SRE Agent
+        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
+        shell: bash
+        env:
+          SRE_CODE_ACCESS_ENABLED: ${{ vars.SRE_CODE_ACCESS_ENABLED || 'false' }}
+          SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID }}
+          SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
+          SRE_CODE_ACCESS_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          SRE_REMEDIATION_CONNECTOR_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          RESOURCE_GROUP="$(terraform -chdir=infra output -raw resource_group_name)"
+          AGENT_NAME="$(terraform -chdir=infra output -json sre_agent_names | jq -r 'to_entries[0].value')"
+          export SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID
+          SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID="$(terraform -chdir=infra output -json sre_agent_identities | jq -r 'to_entries[0].value.code_access_resource_id // empty')"
+          if [[ "${SRE_CODE_ACCESS_ENABLED}" == "true" ]]; then
+            [[ -n "${SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME}" ]] || { echo "::error::SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME is required when Code Access is enabled."; exit 1; }
+            KEY_VAULT_NAME="$(terraform -chdir=infra output -raw key_vault_name)"
+            export SRE_CODE_ACCESS_PRIVATE_KEY_SECRET_URI="https://${KEY_VAULT_NAME}.vault.azure.net/secrets/${SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME}"
+          fi
+          node --test scripts/tests/sre-agent-reconciler.test.mjs
+          bash scripts/reconcile-sre-agent.sh \
+            --mode apply \
+            --subscription "${ARM_SUBSCRIPTION_ID}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --agent "${AGENT_NAME}"
+          bash scripts/reconcile-sre-agent.sh \
+            --mode verify \
+            --subscription "${ARM_SUBSCRIPTION_ID}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --agent "${AGENT_NAME}"
 
       - name: Summary
         working-directory: infra

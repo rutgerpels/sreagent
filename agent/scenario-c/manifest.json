@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "expectedAgent": {
+    "accessLevel": "Low",
+    "actionMode": "Review",
+    "incidentPlatform": "AzMonitor",
+    "requireVnet": true,
+    "connectors": [
+      "app-insights",
+      "azure-monitor",
+      "log-analytics"
+    ]
+  },
+  "toolPermissionsFile": "../tool-access-policy.api.json",
+  "subagents": [
+    {
+      "name": "gitops-remediation",
+      "instructionsFile": "gitops-remediation.instructions.md",
+      "properties": {
+        "handoffDescription": "Investigates ContosoPay memory incidents, correlates Azure telemetry with repository state, and proposes the exact GitOps remediation without mutating Azure.",
+        "handoffs": [],
+        "tools": [
+          "QueryAppInsightsUsingAppId",
+          "RunAzCliReadCommands",
+          "SearchMemory"
+        ],
+        "agentType": "Autonomous",
+        "temperature": 0.2,
+        "enableSkills": false,
+        "allowedSkills": []
+      }
+    }
+  ],
+  "incidentFilters": [
+    {
+      "name": "contosopay-memory-leak",
+      "properties": {
+        "incidentPlatform": "AzMonitor",
+        "isEnabled": true,
+        "priorities": [
+          "Sev2"
+        ],
+        "handlingAgent": "gitops-remediation",
+        "agentMode": "Review",
+        "deepInvestigationEnabled": true,
+        "maxAutomatedInvestigationAttempts": 3
+      }
+    }
+  ],
+  "scheduledTasks": [
+    {
+      "name": "daily-contosopay-health",
+      "properties": {
+        "name": "daily-contosopay-health",
+        "description": "Daily health summary for the ContosoPay demo resource group",
+        "cronExpression": "0 8 * * *",
+        "agentPrompt": "Summarize the last 24 hours of Azure Monitor incidents, fired alerts, Container Apps health, payment-service memory, and failed deployments for the managed ContosoPay resource group. Flag anything requiring human attention. Use read-only tools only.",
+        "agentMode": "Review",
+        "isEnabled": true
+      }
+    }
+  ],
+  "knowledge": [
+    {
+      "fileName": "gitops-runbook.md",
+      "path": "../knowledge/gitops-runbook.md",
+      "contentType": "text/markdown"
+    }
+  ],
+  "codeAccess": {
+    "domain": "github.com",
+    "repositoryName": "sreagent"
+  }
+}

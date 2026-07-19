@@ -123,34 +123,6 @@ jobs:
             echo "TF_VAR_sre_agent_subnet_address_prefix=${SRE_AGENT_SUBNET_PREFIX}"
           } >> "${GITHUB_ENV}"
 
-      - name: Configure Scenario C broker metadata
-        if: ${{ inputs.scenario == 'C' && inputs.force_delete_rg == false }}
-        shell: bash
-        env:
-          ENTRA_CLIENT_ID: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
-          TOKEN_AUDIENCE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
-          TOKEN_SCOPE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
-          GITHUB_APP_ID: ${{ vars.SRE_GITHUB_APP_ID }}
-          GITHUB_APP_INSTALLATION_ID: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
-          GITHUB_APP_BOT_LOGIN: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
-          PRIVATE_KEY_NAME: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_NAME || 'github-app-signing-key' }}
-        run: |
-          set -euo pipefail
-          for value in ENTRA_CLIENT_ID TOKEN_AUDIENCE TOKEN_SCOPE GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_BOT_LOGIN; do
-            [[ -n "${!value}" ]] || { echo "::error::Scenario C destroy requires repository variable ${value} so Terraform can load the existing configuration."; exit 1; }
-          done
-          {
-            echo "TF_VAR_sre_remediation_entra_api_client_id=${ENTRA_CLIENT_ID}"
-            echo "TF_VAR_sre_remediation_entra_token_audience=${TOKEN_AUDIENCE}"
-            echo "TF_VAR_sre_remediation_entra_token_scope=${TOKEN_SCOPE}"
-            echo "TF_VAR_sre_remediation_github_app_id=${GITHUB_APP_ID}"
-            echo "TF_VAR_sre_remediation_github_app_installation_id=${GITHUB_APP_INSTALLATION_ID}"
-            echo "TF_VAR_sre_remediation_github_app_bot_login=${GITHUB_APP_BOT_LOGIN}"
-            echo "TF_VAR_sre_remediation_github_repository_owner=${GITHUB_REPOSITORY_OWNER}"
-            echo "TF_VAR_sre_remediation_github_repository_name=${GITHUB_REPOSITORY#*/}"
-            echo "TF_VAR_sre_remediation_github_app_private_key_name=${PRIVATE_KEY_NAME}"
-          } >> "${GITHUB_ENV}"
-
       - name: Azure login (OIDC)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:

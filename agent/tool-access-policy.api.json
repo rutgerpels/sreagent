@@ -17,6 +17,9 @@
       "bash(az * restart *)",
       "bash(az * start *)",
       "bash(az * stop *)",
+      "bash(az keyvault secret show *)",
+      "bash(az keyvault secret download *)",
+      "bash(az rest *vault.azure.net/secrets*)",
       "bash(terraform * apply *)",
       "bash(terraform * destroy *)"
     ]
