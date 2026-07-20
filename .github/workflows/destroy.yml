@@ -249,14 +249,14 @@ jobs:
             --overwrite \
             --output none
           jq -e '.version == 4 and (.resources | type == "array")' "${STATE_FILE}" >/dev/null || { echo "::error::Selected blob is not a supported Terraform state."; exit 1; }
-          ACTUAL_SCENARIO="$(jq -er '.outputs.scenario.value' "${STATE_FILE}")" || { echo "::error::State has no scenario output."; exit 1; }
-          [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           RG_JSON="$(jq -ce '
             [.resources[]
              | select(.mode == "managed" and .type == "azurerm_resource_group" and .name == "this")
              | .instances[].attributes]
             | if length == 1 then .[0] else error("expected one managed resource group") end
           ' "${STATE_FILE}")"
+          ACTUAL_SCENARIO="$(jq -er '.tags.scenario' <<< "${RG_JSON}")" || { echo "::error::State resource group has no scenario tag; unverified destruction is forbidden."; exit 1; }
+          [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           APP_RESOURCE_GROUP="$(jq -er '.name' <<< "${RG_JSON}")"
           STATE_RG_ID="$(jq -er '.id' <<< "${RG_JSON}")"
           EXPECTED_RG_ID="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}"
@@ -323,10 +323,38 @@ jobs:
             done
           fi
 
-          az group delete --name "${APP_RESOURCE_GROUP}" --yes
-          [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
-          az storage blob lease break --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --blob-name "${{ steps.backend.outputs.state_key }}" --auth-mode login 2>/dev/null || true
-          az storage blob delete --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --name "${{ steps.backend.outputs.state_key }}" --auth-mode login
+          delete_state_blob() {
+            az storage blob lease break --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --blob-name "${{ steps.backend.outputs.state_key }}" --auth-mode login 2>/dev/null || true
+            az storage blob delete --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --name "${{ steps.backend.outputs.state_key }}" --auth-mode login
+          }
+          tolerate_stopped_sre_orphan() {
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+              return 1
+            fi
+            REMAINING="$(az resource list -g "${APP_RESOURCE_GROUP}" --output json 2>/dev/null || echo '[]')"
+            if [[ "$(jq 'length' <<< "${REMAINING}")" -ne 1 ]]; then
+              return 1
+            fi
+            AGENT_ID="$(jq -er '.[0] | select(.type == "Microsoft.App/agents") | .id' <<< "${REMAINING}")" || return 1
+            AGENT_JSON="$(az resource show --ids "${AGENT_ID}" --api-version 2025-05-01-preview --output json)"
+            jq -e '
+              .properties.powerState == "Stopped"
+              and .properties.runningState == "Stopped"
+              and (.properties.provisioningState == "Failed" or .properties.provisioningState == "Deleting")
+            ' <<< "${AGENT_JSON}" >/dev/null || return 1
+            echo "::warning::Azure left a stopped failed preview SRE Agent orphan after verified force delete: ${AGENT_ID}"
+            {
+              echo "Provider orphan retained: \`${AGENT_ID}\`"
+              echo "The verified resource group contains only this stopped preview SRE Agent after Azure provider deletion returned 409 Conflict."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          if az group delete --name "${APP_RESOURCE_GROUP}" --yes; then
+            [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || tolerate_stopped_sre_orphan || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
+          else
+            tolerate_stopped_sre_orphan || { echo "::error::Resource group deletion failed and the remaining resources are not a recognized SRE Agent provider orphan; retaining state."; exit 1; }
+          fi
+          delete_state_blob
 
       - name: Delete isolated state blob after normal destroy
         if: ${{ success() && inputs.force_delete_rg == false && inputs.delete_state_storage }}
