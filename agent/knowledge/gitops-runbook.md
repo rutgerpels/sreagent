@@ -42,10 +42,18 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
 
-Scenario C path: call `create_slow_leak_remediation_issue` instead. The broker
-creates only the fixed issue title, label, and body marker;
-`.github/workflows/sre-remediation-pr.yml` then opens the one-file remediation
-PR. Call `get_slow_leak_remediation_status` with the returned issue number.
+Scenario C currently has no agent-initiated GitHub write path. The remote
+Streamable-HTTP MCP connector is intentionally disabled because its documented
+authentication methods do not include the managed-identity flow required by the
+broker. Explain the exact one-file change, then require a human to run
+`scripts/trigger-incident-gitops.sh --reset` (or the PowerShell equivalent) and
+review the resulting Pull Request.
+
+Do not replace the disabled connector with a static bearer secret, PAT,
+anonymous access, or network-only trust. When a supported managed-identity flow
+becomes available, the broker may create the fixed issue shape and
+`.github/workflows/sre-remediation-pr.yml` may convert it into the same one-file
+Pull Request.
 
 Never use generic workflow dispatch, terminal `git`/`gh`, broader token
 discovery, or direct GitHub API calls for this remediation.

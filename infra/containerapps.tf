@@ -1,9 +1,8 @@
 ###############################################################################
-# Container Apps environment + ContosoPay apps and Scenario C broker.
-# The frontend is external; other workload apps are internal. Scenario C keeps
-# the environment public because managed SRE Agent cannot use a direct private
-# endpoint to a single Container App. Its broker uses external TLS ingress with
-# Easy Auth and exact caller-principal validation instead of broad VNet reach.
+# Container Apps environment + ContosoPay apps and dormant Scenario C broker.
+# The frontend is external; all other deployed applications are internal. The
+# broker resources remain in source for future product support but are disabled
+# by the immutable Scenario C profile.
 ###############################################################################
 
 resource "azurerm_container_app_environment" "this" {
@@ -75,6 +74,7 @@ resource "azurerm_container_app" "app" {
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
   tags                         = local.tags
 
   identity {

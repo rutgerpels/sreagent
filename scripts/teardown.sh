@@ -72,6 +72,7 @@ ACTUAL_SCENARIO="$(terraform -chdir="${INFRA_DIR}" output -raw scenario 2>/dev/n
 
 echo "==> terraform destroy"
 terraform -chdir="${INFRA_DIR}" destroy -input=false -auto-approve \
+    -var "deploy_apps=false" \
     -var "scenario=${SCENARIO}" \
     -var "prefix=${PREFIX}" \
     -var "environment=${ENVIRONMENT}"

@@ -53,7 +53,6 @@ Set these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 
 Do not configure a PAT or Azure client secret for deployment.
 

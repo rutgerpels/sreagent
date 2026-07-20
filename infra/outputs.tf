@@ -106,9 +106,44 @@ output "sre_agent_names" {
   value       = { for k, a in azapi_resource.agent : k => a.name }
 }
 
+output "sre_agent_ids" {
+  description = "Provisioned SRE Agent ARM resource IDs per scenario."
+  value       = { for k, a in azapi_resource.agent : k => a.id }
+}
+
+output "sre_agent_endpoints" {
+  description = "SRE Agent data-plane endpoints returned by ARM; empty unless agents are enabled."
+  value       = { for k, a in azapi_resource.agent : k => try(a.output.properties.agentEndpoint, null) }
+}
+
 output "sre_agent_identity_principal_ids" {
-  description = "Each SRE Agent's user-assigned identity principal id (for portal/data-plane wiring)."
+  description = "Each SRE Agent's user-assigned identity principal ID."
   value       = { for k, i in azurerm_user_assigned_identity.agent : k => i.principal_id }
+}
+
+output "sre_agent_identities" {
+  description = "Nonsecret managed-identity identifiers required for SRE Agent data-plane reconciliation."
+  value = {
+    for k, a in azapi_resource.agent : k => {
+      system_assigned_principal_id = try(a.output.identity.principalId, null)
+      user_assigned_resource_id    = azurerm_user_assigned_identity.agent[k].id
+      user_assigned_client_id      = azurerm_user_assigned_identity.agent[k].client_id
+      user_assigned_principal_id   = azurerm_user_assigned_identity.agent[k].principal_id
+      code_access_resource_id      = try(azurerm_user_assigned_identity.agent_code_access[k].id, null)
+      code_access_client_id        = try(azurerm_user_assigned_identity.agent_code_access[k].client_id, null)
+      code_access_principal_id     = try(azurerm_user_assigned_identity.agent_code_access[k].principal_id, null)
+    }
+  }
+}
+
+output "sre_agent_telemetry" {
+  description = "Nonsecret workspace-based telemetry identifiers for later SRE Agent data-plane reconciliation."
+  value = var.enable_sre_agents ? {
+    application_insights_resource_id = azurerm_application_insights.this.id
+    application_insights_app_id      = azurerm_application_insights.this.app_id
+    log_analytics_resource_id        = azurerm_log_analytics_workspace.this.id
+    log_analytics_workspace_id       = azurerm_log_analytics_workspace.this.workspace_id
+  } : null
 }
 
 output "sre_remediation_broker_enabled" {

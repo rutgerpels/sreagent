@@ -59,9 +59,8 @@ jobs:
       REPOSITORY_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
       REPOSITORY_PREFIX: ${{ vars.TF_PREFIX }}
       REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
-      SRE_AGENT_SPONSOR_GROUP_ID: ${{ vars.SRE_AGENT_SPONSOR_GROUP_ID }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
-      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'gpt-5' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:
       - name: Validate destruction request
         shell: bash
@@ -87,11 +86,9 @@ jobs:
             [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
             [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
-            [[ -n "${SRE_AGENT_SPONSOR_GROUP_ID}" ]] || { echo "::error::Repository variable SRE_AGENT_SPONSOR_GROUP_ID is required for Terraform destroy."; exit 1; }
             {
               echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
               echo "TF_VAR_enable_sre_agents=true"
-              echo "TF_VAR_sre_agent_sponsor_group_id=${SRE_AGENT_SPONSOR_GROUP_ID}"
               echo "TF_VAR_sre_agent_model_provider=${SRE_AGENT_MODEL_PROVIDER}"
               echo "TF_VAR_sre_agent_model_name=${SRE_AGENT_MODEL_NAME}"
             } >> "${GITHUB_ENV}"
@@ -121,34 +118,6 @@ jobs:
             echo "TF_VAR_app_private_endpoint_subnet_address_prefix=${APP_PE_SUBNET_PREFIX}"
             echo "TF_VAR_container_apps_subnet_address_prefix=${CONTAINER_APPS_SUBNET_PREFIX}"
             echo "TF_VAR_sre_agent_subnet_address_prefix=${SRE_AGENT_SUBNET_PREFIX}"
-          } >> "${GITHUB_ENV}"
-
-      - name: Configure Scenario C broker metadata
-        if: ${{ inputs.scenario == 'C' && inputs.force_delete_rg == false }}
-        shell: bash
-        env:
-          ENTRA_CLIENT_ID: ${{ vars.SRE_REMEDIATION_ENTRA_API_CLIENT_ID }}
-          TOKEN_AUDIENCE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE }}
-          TOKEN_SCOPE: ${{ vars.SRE_REMEDIATION_ENTRA_TOKEN_SCOPE }}
-          GITHUB_APP_ID: ${{ vars.SRE_GITHUB_APP_ID }}
-          GITHUB_APP_INSTALLATION_ID: ${{ vars.SRE_GITHUB_APP_INSTALLATION_ID }}
-          GITHUB_APP_BOT_LOGIN: ${{ vars.SRE_GITHUB_APP_BOT_LOGIN }}
-          PRIVATE_KEY_NAME: ${{ vars.SRE_GITHUB_APP_PRIVATE_KEY_NAME || 'github-app-signing-key' }}
-        run: |
-          set -euo pipefail
-          for value in ENTRA_CLIENT_ID TOKEN_AUDIENCE TOKEN_SCOPE GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_BOT_LOGIN; do
-            [[ -n "${!value}" ]] || { echo "::error::Scenario C destroy requires repository variable ${value} so Terraform can load the existing configuration."; exit 1; }
-          done
-          {
-            echo "TF_VAR_sre_remediation_entra_api_client_id=${ENTRA_CLIENT_ID}"
-            echo "TF_VAR_sre_remediation_entra_token_audience=${TOKEN_AUDIENCE}"
-            echo "TF_VAR_sre_remediation_entra_token_scope=${TOKEN_SCOPE}"
-            echo "TF_VAR_sre_remediation_github_app_id=${GITHUB_APP_ID}"
-            echo "TF_VAR_sre_remediation_github_app_installation_id=${GITHUB_APP_INSTALLATION_ID}"
-            echo "TF_VAR_sre_remediation_github_app_bot_login=${GITHUB_APP_BOT_LOGIN}"
-            echo "TF_VAR_sre_remediation_github_repository_owner=${GITHUB_REPOSITORY_OWNER}"
-            echo "TF_VAR_sre_remediation_github_repository_name=${GITHUB_REPOSITORY#*/}"
-            echo "TF_VAR_sre_remediation_github_app_private_key_name=${PRIVATE_KEY_NAME}"
           } >> "${GITHUB_ENV}"
 
       - name: Azure login (OIDC)
@@ -270,6 +239,27 @@ jobs:
              and .tags.scenario == $scenario
              and .tags.env == $environment' \
             <<< "${LIVE_RG}" >/dev/null || { echo "::error::Live resource group tags do not match verified state."; exit 1; }
+
+          SHARED_PEERINGS="$(jq -ce --arg rgId "${STATE_RG_ID}" '
+            [.resources[]
+             | select(.mode == "managed"
+                 and .type == "azurerm_virtual_network_peering"
+                 and .name == "runner_to_app")
+             | .instances[].attributes
+             | select(.id != null and .remote_virtual_network_id != null)
+             | select((.remote_virtual_network_id | ascii_downcase)
+                 | startswith(($rgId | ascii_downcase) + "/providers/microsoft.network/virtualnetworks/"))]
+            | if length <= 1 then . else error("expected at most one shared runner peering") end
+          ' "${STATE_FILE}")"
+          while IFS= read -r peering_id; do
+            [[ "${peering_id,,}" == "/subscriptions/${ARM_SUBSCRIPTION_ID,,}/resourcegroups/"*"/providers/microsoft.network/virtualnetworks/"*"/virtualnetworkpeerings/peer-runner-to-app-"* ]] || {
+              echo "::error::Verified state contains an unexpected shared peering ID."
+              exit 1
+            }
+            if az resource show --ids "${peering_id}" --api-version 2024-05-01 >/dev/null 2>&1; then
+              az resource delete --ids "${peering_id}" --api-version 2024-05-01
+            fi
+          done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
 
           az group delete --name "${APP_RESOURCE_GROUP}" --yes
           [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }

@@ -29,7 +29,7 @@ It is not a collection of independent security toggles.
 | --- | --- | --- | --- |
 | **A** | High access, Contributor, Autonomous mode | Public control endpoints; GitHub-hosted workflow jobs or the local wrapper | Direct Azure remediation; no GitOps write connector and no broker |
 | **B** | Low access, Reader, Review mode | Public endpoints protected by RBAC and TLS; GitHub-hosted workflow jobs or the local wrapper | Built-in GitHub MCP connector with a short-lived fine-grained PAT; no broker |
-| **C** | Low access, Reader, Review mode | Private ACR, Key Vault, and state endpoints; dedicated SRE Agent subnet; private self-hosted runner | Entra-protected custom MCP broker using a separate remediation GitHub App; no PAT for writes |
+| **C** | Low access, Reader, Review mode; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated SRE Agent egress subnet; private self-hosted runner | Read-only Code Access; agent-initiated writes disabled until remote HTTP MCP supports the required nonsecret authentication |
 
 Resource names and tags include the selected scenario. Remote state is isolated
 too:
@@ -85,18 +85,13 @@ Agent subnet. The required runner labels are:
 [self-hosted, Linux, X64, azure-private, contosopay]
 ```
 
-The Scenario C remediation broker is the only application endpoint besides the
-frontend with external ingress. This is deliberate: a single Container Apps
-environment must keep the frontend public, while per-app internal ingress and
-environment-level private endpoints do not provide the managed SRE Agent with
-the required inbound reachability. The broker therefore uses external HTTPS,
-Container Apps built-in authentication (Easy Auth), a dedicated Entra audience,
-an allow-list containing the exact SRE Agent principal, and application-level
-RS256 token verification against the tenant issuer, audience, and exact managed
-identity object ID. The broker accepts only Easy Auth's token-store
-`X-MS-TOKEN-AAD-ACCESS-TOKEN` header and requires the platform principal header
-to match the cryptographically verified `oid` claim. The business services
-remain internal.
+Scenario C keeps the constrained remediation broker source dormant because the
+managed service cannot reach per-app internal Container Apps ingress and current
+remote Streamable-HTTP connector documentation does not expose the
+managed-identity authentication flow required by the broker. The implementation
+does not deploy another public endpoint or downgrade to a static bearer secret,
+PAT, anonymous access, or network-only trust. The frontend is the only public
+application; `checkout-api` and `payment-service` remain internal.
 
 See the official documentation for
 [Container Apps networking](https://learn.microsoft.com/azure/container-apps/networking),
@@ -117,7 +112,6 @@ Configure these nonsecret repository variables before dispatch:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 
 Do not set `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, or `TF_ENVIRONMENT` before the
 first deployment. Dispatch **deploy** with explicit A/B/C, prefix, and environment
@@ -150,9 +144,15 @@ Push-triggered `apply-infra` and `deploy-apps` behavior is fail closed:
   marker is absent, but it cannot disagree with an active scenario.
 
 The deployment workflows provision exactly one SRE Agent for the selected
-profile. `SRE_AGENT_SPONSOR_GROUP_ID` is the Entra sponsor group object ID.
-Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME` variables override
-the default `MicrosoftFoundry` / `gpt-5` model configuration.
+profile. Optional `SRE_AGENT_MODEL_PROVIDER` and `SRE_AGENT_MODEL_NAME`
+variables override the default `MicrosoftFoundry` / `Automatic` model
+configuration.
+
+For Scenario C, Terraform/AzAPI also owns the agent VNet, sandbox, identities,
+telemetry, budget, incident platform, and first-party connector child resources.
+The workflow then runs `scripts/reconcile-sre-agent.sh` to apply and verify the
+global tool policy, custom agent, response plan, health schedule, knowledge, and
+optional Code Access from `agent/scenario-c/manifest.json`.
 
 Each full commit-SHA image is published once, write/delete locked in ACR, resolved
 to a `sha256` manifest digest, and deployed by digest. Do not use mutable tags
@@ -201,16 +201,23 @@ absent keeps push automation in its safe no-op state.
 
 ## Scenario C GitHub identities and key custody
 
-Scenario C uses two workload GitHub Apps:
+The Scenario C design separates two workload GitHub Apps:
 
 1. a read-only bring-your-own App for SRE Agent **Code Access**;
-2. an issues-write remediation App used only by the broker.
+2. a future issues-write remediation App used only by the dormant broker.
 
 Code Access provides repository context and correlation. It is not the
-write-capable broker credential. The remediation App has only Metadata read and
-Issues read/write on this repository. It creates a constrained remediation
-issue; the Scenario C-only `sre-remediation-pr` workflow validates that issue and
-uses its short-lived `GITHUB_TOKEN` to open an unmerged one-file Pull Request.
+write-capable broker credential. Store its PEM as a Key Vault secret and set
+`SRE_CODE_ACCESS_ENABLED`, `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID`, and
+`SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME` as nonsecret repository
+variables. The workflow passes only the secret URI and derives the agent managed
+identity from Terraform output.
+
+The proposed remediation App has only Metadata read and Issues read/write on
+this repository. Its broker source is retained but no broker resources are
+deployed until the service supports the required remote HTTP managed-identity
+authentication. In the current preview, a human initiates the one-file
+remediation Pull Request.
 
 The remediation App PEM is imported once, from the private network, as a
 non-exportable RSA Key Vault **key** with only the `sign` operation:
@@ -243,8 +250,9 @@ Use only these names:
 - broker setting: `GITHUB_APP_PRIVATE_KEY_KEY_URI`
 - Terraform output: `sre_remediation_broker_key_uri`
 
-Do not upload the PEM as a Key Vault secret and do not place it in Terraform,
-GitHub Actions, repository files, or shell history. See
+Do not upload the **remediation** PEM as a Key Vault secret and do not place it
+in Terraform, GitHub Actions, repository files, or shell history. Code Access
+uses its own separate PEM secret. See
 [Key Vault key operations](https://learn.microsoft.com/azure/key-vault/keys/about-keys-details),
 [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide),
 [GitHub App JWT authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app),
@@ -264,7 +272,8 @@ and
 - Ingress is TLS-only. `checkout-api` and `payment-service` are never public.
 - Scenario B's PAT is fine-grained, single-repository, minimum-permission, and
   short-lived; revoke it after the demo.
-- Scenario C performs no PAT-based GitHub writes.
+- Scenario C performs no PAT-based GitHub writes and rejects unsupported remote
+  MCP authentication.
 
 ## Repository map
 
@@ -277,13 +286,15 @@ and
 | `.github/workflows/deploy-apps.yml` | Full-SHA image build and app update |
 | `.github/workflows/destroy.yml` | Verified profile-specific teardown |
 | `.github/workflows/sre-remediation-pr.yml` | Scenario C-only issue-to-PR remediation |
-| `scripts/` | Local A/B deploy, teardown, incident triggers, and Scenario C key import |
-| `agent/` | Tool policy, custom-agent prompts, and runbook |
+| `scripts/` | Local A/B deploy, teardown, incident triggers, Scenario C key import, and SRE Agent reconciliation |
+| `agent/` | Declarative Scenario C manifest, tool policy, custom-agent prompts, and runbook |
 | `docs/` | Scenario guides and SRE Agent reference |
 
 ## Further reading
 
 - [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
 - [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
+- [Azure SRE Agent infrastructure as code](https://learn.microsoft.com/azure/sre-agent/deploy-iac)
+- [Azure SRE Agent API reference](https://learn.microsoft.com/azure/sre-agent/api-reference)
 - [GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)
 - [Fine-grained personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)

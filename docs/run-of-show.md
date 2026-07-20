@@ -14,14 +14,16 @@ select different immutable security profiles.
 | Control endpoints | Public | Public, RBAC and TLS protected | Private state, ACR, and Key Vault |
 | Deployment runner | GitHub-hosted or local wrapper | GitHub-hosted or local wrapper | Private self-hosted: `self-hosted`, `Linux`, `X64`, `azure-private`, `contosopay` |
 | Code context | Code Access | Code Access | Read-only BYO GitHub App for Code Access |
-| Write path | Direct Azure action after the configured approval | Built-in GitHub MCP connector with a short-lived fine-grained PAT | Entra-protected broker using a separate issues-write GitHub App |
-| Broker | None | None | Required and deployed by the normal workflow |
+| Write path | Direct Azure action after the configured approval | Built-in GitHub MCP connector with a short-lived fine-grained PAT | Human-triggered remediation PR while remote HTTP managed-identity auth is unsupported |
+| Broker | None | None | Source retained; infrastructure and connector disabled |
 | Guide | [Scenario A](scenario-a-direct.md) | [Scenario B](scenario-b-gitops.md) | [Scenario C](scenario-c-private-gitops.md) |
 
 **Code Access and GitHub writes are different capabilities.** Code Access
 indexes and correlates source. Scenario B adds the built-in GitHub MCP connector
-for branch/file/Pull Request writes. Scenario C instead uses a custom broker and
-a separate remediation GitHub App. Scenario A has neither write path.
+for branch/file/Pull Request writes. Scenario C prepares a custom broker and a
+separate remediation GitHub App, but does not connect them while remote
+Streamable-HTTP managed-identity authentication is unsupported. Scenario A has
+neither GitHub write path.
 
 ## Profile and state safety
 
@@ -54,10 +56,10 @@ images use the full 40-character commit SHA.
 4. After it succeeds, set `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
    then set `DEPLOYMENT_SCENARIO` last to activate push deployment.
 5. Open the frontend, place a test order, and enable steady traffic.
-6. Create or connect the matching SRE Agent and add the demo resources, logs,
-   code, and Azure Monitor incident platform.
-7. Configure the scenario's response plan and tool policy before arming the
-   incident.
+6. For A or B, complete the matching portal setup. Scenario C deploys the agent,
+   first-party connectors, global policy, custom agent, response plan, schedule,
+   knowledge, and optional Code Access through Terraform plus API reconciliation.
+7. Verify the selected scenario before arming the incident.
 
 ## Live presentation
 
@@ -98,13 +100,14 @@ Show the Azure Monitor incident and the agent's evidence:
 - **B:** the hard tool policy denies direct Azure mutation. The agent uses the
   built-in GitHub MCP connector to open an unmerged Pull Request that sets
   `enable_slow_leak = false`. A human reviews and merges it.
-- **C:** the hard tool policy denies direct Azure mutation. The agent calls the
-  custom MCP broker. The broker's remediation GitHub App creates a constrained
-  issue; the Scenario C-only workflow validates it and opens the unmerged
-  one-file Pull Request. A human reviews and merges it.
+- **C:** the hard tool policy denies direct Azure mutation. The agent identifies
+  the one-file GitOps fix, but cannot call the broker while the supported remote
+  HTTP authentication gap remains. A human runs the reset trigger to open the
+  unmerged one-file Pull Request, reviews it, and merges it.
 
-The remediation issue and `sre-remediation-pr` workflow belong only to Scenario
-C. Scenario B opens the Pull Request directly through its built-in connector.
+The dormant remediation issue and `sre-remediation-pr` workflow belong only to
+Scenario C. Scenario B opens the Pull Request directly through its built-in
+connector.
 
 ### 5. Verify and repeat
 
@@ -118,7 +121,7 @@ Reset the fault through the same operational boundary used by the scenario:
 
 - Scenario A: direct reset script.
 - Scenario B: GitHub MCP remediation Pull Request or reset trigger Pull Request.
-- Scenario C: broker remediation or reset trigger Pull Request.
+- Scenario C: reset trigger Pull Request.
 
 Destroy the exact scenario state after the demo. Remove temporary Scenario B PATs.
 For Scenario C, remove or rotate the remediation GitHub App key and uninstall the

@@ -38,7 +38,7 @@ An AKS implementation must retain the same immutable `scenario` contract:
 | --- | --- | --- |
 | A | High / Contributor / Autonomous; direct AKS remediation; no write connector or broker | Public authenticated control endpoints; GitHub-hosted or local deployment |
 | B | Low / Reader / Review; built-in GitHub MCP writes the remediation Pull Request; no broker | Public authenticated control endpoints; GitHub-hosted deployment |
-| C | Low / Reader / Review; separate Code Access and remediation GitHub Apps through the broker | Private registry, vault, state, and cluster API paths; labeled private runner |
+| C | Low / Reader / Review; read-only Code Access and human-triggered remediation PR | Private registry, vault, state, and cluster API paths; labeled private runner |
 
 State-account naming and blob keys must include the scenario. Never convert one
 scenario's AKS state in place. Deploy a new isolated profile, validate it, then
@@ -78,9 +78,9 @@ Preserve the same security model:
 - only the fixed remediation issue and status tools;
 - Scenario C-only issue-to-Pull Request workflow.
 
-The broker endpoint must be reachable by the managed Azure SRE Agent through a
-supported HTTPS ingress path. Do not expose the Kubernetes API, checkout, or
-payment services to solve broker reachability.
+The broker path remains disabled until remote Streamable-HTTP MCP documents the
+required managed-identity authentication. Do not expose the broker, Kubernetes
+API, checkout, or payment services to work around that limitation.
 
 ## Security requirements
 

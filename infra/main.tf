@@ -42,10 +42,13 @@ locals {
     }
     C = {
       private_network_enabled = true
-      broker_enabled          = true
-      control_endpoint_access = "Private ACR/Key Vault; public frontend and Entra-protected broker"
-      github_integration      = "Two manual GitHub Apps: Code Access and remediation broker"
-      agent_key               = "c-private-broker"
+      # Remote Streamable-HTTP MCP does not currently document the managed-
+      # identity authentication required by the broker. Keep its infrastructure
+      # dormant rather than adding an unusable public endpoint.
+      broker_enabled          = false
+      control_endpoint_access = "Private ACR/Key Vault; public frontend only"
+      github_integration      = "API-managed read-only Code Access; remediation broker disabled"
+      agent_key               = "c-private-gitops"
       agent = {
         access = "Low"
         role   = "Reader"

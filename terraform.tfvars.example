@@ -12,8 +12,10 @@ location    = "swedencentral"
 # A = public endpoints, High/Contributor/Autonomous agent, no broker.
 # B = public ACR/Key Vault, Low/Reader/Review agent, manual built-in GitHub MCP
 #     connector with a short-lived fine-grained PAT. Terraform never accepts PAT.
-# C = private endpoints/runner peering, Low/Reader/Review agent, and the implied
-#     custom remediation broker. Two separate GitHub Apps remain manual.
+# C = private endpoints/runner peering, Low/Reader/Review agent, Terraform-owned
+#     VNet sandbox egress, and API-managed read-only agent configuration. The
+#     remote remediation broker is disabled while its required managed-identity
+#     authentication is unsupported.
 scenario = "A"
 
 # Scenario C only: existing private runner network plus non-overlapping address
@@ -36,26 +38,27 @@ image_digests = {
   frontend            = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   checkout-api        = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   payment-service     = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-  sre-remediation-mcp = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 }
 
 # Optional CIDR allow-list for the public application frontend.
 # frontend_allowed_ips = ["203.0.113.0/24"]
 
-# Direct Terraform usage can opt into the same one-agent profile. The GitHub
-# deployment workflows always enable it and supply these values from nonsecret
-# repository variables.
-# enable_sre_agents          = true
-# sre_agent_sponsor_group_id = "00000000-0000-0000-0000-000000000000"
-# sre_agent_model_provider   = "MicrosoftFoundry"
-# sre_agent_model_name       = "gpt-5"
+# Terraform automates the selected agent's control plane: dual managed identity,
+# demo-RG RBAC, workspace-based telemetry, Azure Monitor incidents, budget, and
+# Scenario C subnet/sandbox settings. A/B remain unattached to a VNet. GitHub
+# integration credentials and all agent data-plane policy remain external.
+# enable_sre_agents                   = true
+# sre_agent_model_provider            = "MicrosoftFoundry"
+# sre_agent_model_name                = "Automatic"
+# sre_agent_monthly_agent_unit_limit = 10000
+# enable_sre_code_access              = false
+# sre_code_access_private_key_secret_name = "sre-code-access-github-app-pem"
 
-# --- Scenario C nonsecret broker metadata -----------------------------------
-# Selecting C implies the broker; there is deliberately no enable-broker toggle.
-# Create two GitHub Apps manually: one for SRE Agent Code Access and a separate,
-# least-privilege app for the broker. Import only the remediation App key with
-# the repository script; configure the Code Access App through its portal flow.
-# Never put PEM/key material in Terraform.
+# --- Dormant broker metadata -------------------------------------------------
+# These values are not evaluated by the current Scenario C profile. Retain them
+# only as placeholders for a future release where remote Streamable-HTTP MCP
+# supports the required managed-identity authentication. Terraform never accepts
+# a GitHub App secret or PEM key.
 #
 # The allowed caller is derived when enable_sre_agents=true. The explicit value
 # is only a fallback for direct Terraform use with a separately managed agent.

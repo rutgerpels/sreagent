@@ -1,287 +1,184 @@
 # Azure SRE Agent setup reference
 
-This reference explains the shared Azure SRE Agent concepts used by
+This reference explains the shared Azure SRE Agent model used by
 [Scenario A](scenario-a-direct.md),
 [Scenario B](scenario-b-gitops.md), and
-[Scenario C](scenario-c-private-gitops.md). Follow the selected scenario guide
-for the ordered procedure.
+[Scenario C](scenario-c-private-gitops.md).
 
-## 1. One selected deployment profile
+## Selected deployment profile
 
-Terraform accepts one immutable `scenario` and derives the SRE Agent profile:
+Terraform accepts one immutable `scenario`:
 
 | Scenario | Access | Resource-group role | Mode | GitHub write path |
 | --- | --- | --- | --- | --- |
 | A | High | Contributor | Autonomous | None; direct Azure remediation |
-| B | Low | Reader | Review | Built-in GitHub MCP with short-lived fine-grained PAT |
-| C | Low | Reader | Review | Entra-protected custom broker with remediation GitHub App |
+| B | Low | Reader | Review | Built-in GitHub MCP with a short-lived fine-grained PAT |
+| C | Low | Reader | Review | None until remote HTTP MCP supports the required nonsecret authentication |
 
-The GitHub deployment workflows set `enable_sre_agents = true`, so Terraform
-provisions exactly one agent matching the selected profile. Direct Terraform use
-can set the same variable explicitly. It does not create parallel autonomous and
-GitOps agents. GitHub connections, tool policy, custom-agent behavior, and
-response plans remain manual portal configuration.
+The deployment workflows provision one agent matching the profile. State is
+isolated by subscription, prefix, scenario, and environment. Never convert a
+scenario in place.
 
-The agent can instead be created at <https://sre.azure.com>. In either path,
-verify that the effective access and mode match the selected Terraform state.
+## Control plane and data plane
 
-## 2. State and environment identity
+Azure SRE Agent configuration spans two supported management surfaces:
 
-Agent configuration must target the resource group from the same scenario state.
-The state storage-account hash includes subscription, prefix, and scenario, and
-the blob key is:
+- Azure Resource Manager creates the agent, identities, network attachment,
+  sandbox, model, budget, telemetry, incident platform, and first-party
+  connector child resources.
+- The SRE Agent API manages global permissions, extended agents, incident
+  filters, schedules, knowledge, and GitHub Code Access.
 
-```text
-<prefix>-<scenario>-<environment>.tfstate
-```
+Scenario C automates both surfaces. Terraform/AzAPI owns ARM resources and
+`scripts/reconcile-sre-agent.*` idempotently applies and verifies the API-owned
+resources from `agent/scenario-c/manifest.json`.
 
-In-place scenario conversion is unsupported. If the operating model changes,
-create a new isolated environment and agent configuration, validate them, and
-then explicitly destroy the old state.
+Scenarios A and B retain their scenario-specific portal procedures. Do not run
+the Scenario C manifest against another profile.
 
-## 3. Azure permissions
+## Azure permissions
 
-The agent acts through a managed identity.
-
-### Workload access
+The agent acts through managed identities:
 
 - Scenario A receives Contributor on only the demo resource group.
 - Scenarios B and C receive Reader on only the demo resource group.
 - Log Analytics Reader and Monitoring Reader support investigation.
+- The deployment identity receives SRE Agent Administrator only at the created
+  agent scope so the reconciler can manage data-plane configuration.
 
-The managed Azure SRE Agent can require Monitoring Contributor at subscription
-scope for the Azure Monitor alert lifecycle. That documented exception does not
-grant general workload Contributor. For B and C, the hard tool policy is still
-required to deny direct Azure mutation paths.
+The managed service may require broader monitoring permissions for the Azure
+Monitor incident lifecycle. That documented exception does not grant general
+workload Contributor. RBAC remains the hard mutation boundary for B and C.
 
-Review the current role list in
-[Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions).
+## Code Access is not a write connector
 
-### Key Vault access in Scenario C
+Code Access supplies source search, file references, commit correlation, and
+root-cause context. It is not automatically a GitHub write credential:
 
-Scenario C has two distinct cryptographic consumers:
+- A uses Code Access only.
+- B combines Code Access with the built-in GitHub MCP connector.
+- C optionally configures a read-only bring-your-own GitHub App through the API.
 
-- the selected SRE Agent receives only the Key Vault access needed by its
-  configured Code Access method;
-- the remediation broker receives a custom role limited to key metadata read
-  and sign actions, scoped to its single imported remediation key.
-
-The broker does not receive Key Vault Secrets User and cannot retrieve a PEM.
-Key Vault data-plane authorization uses Azure RBAC. See
-[Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide).
-
-## 4. Code Access is not a write connector
-
-Code Access supplies repository knowledge:
-
-- source and infrastructure search;
-- file and line references;
-- commit/deployment correlation;
-- root cause context.
-
-It is not automatically the credential used for GitHub writes.
-
-- **A:** Code Access only; no GitHub write connector.
-- **B:** Code Access plus the built-in GitHub MCP connector. The connector uses a
-  short-lived, fine-grained, single-repository PAT for minimum branch/file/Pull
-  Request tools.
-- **C:** a read-only BYO GitHub App for Code Access plus a different,
-  issues-write remediation GitHub App used only by the broker.
-
-Azure SRE Agent documents these as distinct connection types in
-[GitHub connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/github-connector).
-
-## 5. Incident and evidence connections
-
-For every scenario:
-
-1. add the selected scenario resource group;
-2. add its Log Analytics workspace and Application Insights resource;
-3. connect **Azure Monitor** as the incident platform;
-4. add the repository through the scenario's Code Access method;
-5. create a response plan matching the Sev2 payment memory alert.
-
-The alert is based on a five-minute average so transient spikes do not trigger
-the incident. The feature-flagged leak is calibrated to produce an explainable
-rise over approximately 8–12 minutes.
-
-## 6. Run mode and approval behavior
-
-The selected profile sets:
-
-- A: **Autonomous**;
-- B and C: **Review**.
-
-Review mode makes GitOps changes visible for human approval before the selected
-tool is called, and the resulting Pull Request remains unmerged. Scenario A is
-not Review mode. If a live Scenario A presentation requires an explicit pause,
-configure and test the portal approval policy for its direct mutation tools
-without changing the Terraform-derived mode.
-
-See [Azure SRE Agent run modes](https://learn.microsoft.com/azure/sre-agent/run-modes).
-
-## 7. Hard GitOps policy for B and C
-
-Apply
-[`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)
-at global scope for B and C. Confirm that it denies:
-
-- Azure and Kubernetes write tools;
-- terminal and shell fallback;
-- Terraform apply and destroy paths.
-
-Allow only the read diagnostics needed for investigation. A prompt is not a
-security boundary; RBAC and tool policy are.
-
-Scenario B then enables only the built-in GitHub MCP branch/file/Pull Request
-tools required by its custom agent. Scenario C enables only the two constrained
-broker tools.
+Scenario C stores the Code Access App PEM as a Key Vault secret. The workflow
+passes only its URI. A dedicated identity reads only that secret through
+secret-scoped Key Vault RBAC; the agent action identity has no secret-read role.
+This is separate from the broker's proposed issues-write App and non-exportable
+signing key.
 
 See
-[Azure SRE Agent tool access policies](https://learn.microsoft.com/azure/sre-agent/tool-access-policies).
+[GitHub connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/github-connector).
 
-## 8. Connectors by scenario
+## Incident and evidence connections
+
+Every scenario needs:
+
+1. the selected scenario resource group;
+2. its Log Analytics workspace and Application Insights resource;
+3. Azure Monitor as the incident platform;
+4. the repository through the selected Code Access method;
+5. a response plan matching the Sev2 payment memory alert.
+
+Scenario C creates the first-party observability connectors as ARM children and
+reconciles the response plan through the API. The five-minute alert window lets
+the deterministic leak produce an explainable 8–12 minute trend.
+
+## Run modes and policy
+
+- A uses Autonomous mode.
+- B and C use Review mode.
+
+Review mode makes proposed GitOps actions visible for human approval. It is not
+an authorization boundary by itself. Reader RBAC, connector credentials, and
+the global tool policy enforce the boundary.
+
+Scenario C reconciles
+[`agent/tool-access-policy.api.json`](../agent/tool-access-policy.api.json)
+globally. It denies Azure, Kubernetes, terminal, shell, Terraform, and generic
+GitHub mutation paths while allowing investigation.
+
+## Connector behavior
 
 ### Scenario A
 
-No GitOps write connector and no broker. The default agent uses Azure tools
-under the High/Contributor/Autonomous profile.
+No GitOps connector or broker. Azure tools operate under the
+High/Contributor/Autonomous profile.
 
 ### Scenario B
 
-Add the built-in GitHub MCP connector with a short-lived fine-grained PAT.
-Restrict the PAT to one repository and minimum permissions. Select only the
-tools needed to create an unmerged one-file remediation Pull Request. Revoke the
-PAT after the demo.
-
-See
-[fine-grained PAT guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+Use the built-in GitHub MCP connector with a short-lived, fine-grained,
+single-repository PAT. Enable only the branch, file, and Pull Request operations
+needed for the one-file remediation and revoke the PAT after the demo.
 
 ### Scenario C
 
-Add the custom Streamable HTTP MCP endpoint produced as
-`sre_remediation_broker_endpoint_url`. Use managed-identity authentication and
-the configured Entra scope. Easy Auth permits only the exact agent principal;
-the broker checks that principal again.
+Application Insights, Log Analytics, and Azure Monitor connectors are
+Terraform-owned ARM child resources.
 
-Select only:
+The custom remote MCP connector is not enabled. Current Streamable-HTTP
+documentation supports bearer-token and custom-header authentication; managed
+identity is documented for supported Azure-backed stdio connectors. The broker
+requires an Entra token for a dedicated audience and exact agent principal, so
+substituting a static bearer token, PAT, anonymous access, or network-only trust
+is forbidden.
 
-- `create_slow_leak_remediation_issue`;
-- `get_slow_leak_remediation_status`.
+The reconciler fails if `SRE_REMEDIATION_CONNECTOR_ENABLED=true`. Revisit this
+when Microsoft documents a supported remote HTTP managed-identity flow.
 
-See
-[Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors).
+## Scenario C network integration
 
-## 9. Scenario C network integration
+Terraform attaches the Scenario C agent to its dedicated subnet. VNet
+integration controls egress and lets supported traffic use private DNS, routes,
+firewalls, and logging.
 
-Scenario C uses **Settings > Workspace configuration > Network > Azure VNet**.
-Azure SRE Agent network integration controls egress. It lets the agent use the
-VNet's private DNS, routes, firewalls, and logging to reach private Azure
-data-plane endpoints.
-
-The dedicated subnet:
-
-- is delegated to `Microsoft.App/environments`;
-- is in the same region as the SRE Agent;
-- is not shared with Container Apps, private endpoints, or runners;
-- is `/27` or larger in this demo, which is more conservative than the current
-  service minimum of `/28`.
-
-The integration does not create an inbound private endpoint for the agent.
-Platform traffic stays on managed infrastructure. Configure the documented
-infra-network options or VNet egress needed for code repositories and remote MCP
-servers.
+It does not create inbound private connectivity for the agent. Connector traffic
+may bypass VNet integration during the preview. Private endpoints protect state,
+ACR, and Key Vault, but do not make all SRE Agent platform paths private.
 
 See
 [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration).
 
-## 10. Scenario C broker authentication
+## Scenario C external bootstrap
 
-The broker uses external HTTPS because the one Container Apps environment must
-keep the frontend public and the managed agent requires a reachable remote MCP
-endpoint. Internal per-app ingress does not meet that managed-service
-reachability requirement.
+Automation still requires operator-supplied, nonsecret metadata and externally
+issued credentials:
 
-Protection is layered:
+- GitHub App creation and installation;
+- GitHub App private-key issuance;
+- Key Vault insertion of the Code Access PEM secret;
+- future broker Entra and signing-key bootstrap only after its authentication
+  path is supported;
+- broker Entra application registration and consent.
 
-1. TLS-only external ingress;
-2. Container Apps Easy Auth;
-3. dedicated Entra audience;
-4. exact SRE Agent principal allow-list;
-5. Easy Auth token store for the validated Entra access-token header;
-6. application-level RS256 signature, issuer, audience, expiry, and object-ID
-   validation;
-7. platform principal-header consistency check when present;
-8. two fixed-purpose MCP tools;
-9. issues-only GitHub App permissions;
-10. Scenario C-only workflow validation.
+GitHub does not provide a noninteractive API for creating an App or issuing its
+initial private key. These are explicit bootstrap boundaries, not portal-managed
+agent configuration.
 
-See
-[Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication)
-and
-[Container Apps networking](https://learn.microsoft.com/azure/container-apps/networking).
+## Response-plan outcomes
 
-## 11. Scenario C remediation signing key
+- A directly mitigates Azure under its Autonomous policy.
+- B opens an unmerged one-file Pull Request with the built-in GitHub MCP.
+- C investigates and proposes the same one-file GitOps fix. Until the broker
+  connector authentication gap closes, a human opens the remediation Pull
+  Request with `scripts/trigger-incident-gitops.* --reset`.
 
-The remediation App PEM is imported once through:
+For B and C, the durable fix changes only `infra/leak.auto.tfvars` from `true`
+to `false`; human merge remains the approval gate.
 
-- `scripts/configure-github-app-key.sh`; or
-- `scripts/configure-github-app-key.ps1`.
+## Removal
 
-Run the script from the private network. It never enables public Key Vault
-access. It temporarily grants the operator **Key Vault Crypto Officer**, imports
-a non-exportable RSA key with only `sign`, and removes the temporary assignment.
-
-The supported names are:
-
-- `sre_remediation_github_app_private_key_name`
-- `SRE_GITHUB_APP_PRIVATE_KEY_NAME`
-- `GITHUB_APP_PRIVATE_KEY_KEY_URI`
-- `sre_remediation_broker_key_uri`
-
-The broker's managed identity has a custom role containing only
-`Microsoft.KeyVault/vaults/keys/read` and
-`Microsoft.KeyVault/vaults/keys/sign/action`. It constructs a
-`CryptographyClient` from the unversioned key URI and requests RS256 signing. It
-never downloads private key material. Do not create a broker PEM secret.
-
-GitHub App JWTs must use RS256 and are exchanged for short-lived installation
-tokens. See
-[GitHub App JWT authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
-and
-[installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
-
-## 12. Response-plan outcomes
-
-The response plan should produce one of these scenario-specific outcomes:
-
-- **A:** direct Azure remediation under the configured Autonomous approval
-  policy;
-- **B:** built-in GitHub MCP opens an unmerged remediation Pull Request;
-- **C:** broker creates the trusted remediation issue, then the Scenario C-only
-  workflow opens an unmerged remediation Pull Request.
-
-For B and C, the Pull Request changes only
-`infra/leak.auto.tfvars` from `true` to `false`. The human merge is the durable
-GitOps approval gate.
-
-## 13. Removal
-
-- Destroy the exact scenario state with the matching scenario value.
-- Remove a portal-created SRE Agent separately.
+- Destroy the exact scenario state with matching values.
+- Remove externally created GitHub Apps, Entra consent, and key material when no
+  longer required.
 - Revoke Scenario B's PAT.
-- For C, rotate or remove the remediation key, remove Entra consent if no longer
-  needed, and uninstall both GitHub Apps.
-
-Never reuse the destroyed scenario's state for a different profile.
+- Never reuse a destroyed scenario's state for another profile.
 
 ## Official references
 
-- [Create and set up Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/create-and-set-up)
+- [Deploy with infrastructure as code](https://learn.microsoft.com/azure/sre-agent/deploy-iac)
+- [Azure SRE Agent API reference](https://learn.microsoft.com/azure/sre-agent/api-reference)
 - [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
 - [Azure SRE Agent run modes](https://learn.microsoft.com/azure/sre-agent/run-modes)
 - [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
 - [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
 - [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration)
 - [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
-- [Key Vault key operations](https://learn.microsoft.com/azure/key-vault/keys/about-keys-details)

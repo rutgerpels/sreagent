@@ -27,6 +27,28 @@ Code Access and the write connector are separate. Code Access indexes the
 repository and correlates incidents to commits. The GitHub MCP connector provides
 only the selected branch, file, and Pull Request tools.
 
+## Automation boundary
+
+| Surface | Owner | Automated state |
+| --- | --- | --- |
+| Resource group, Container Apps, ACR, Key Vault, observability, alerts, identities, and RBAC | Terraform | Fully declarative through the deploy, apply-infra, deploy-apps, destroy, and local wrapper paths |
+| Scenario-isolated Terraform backend | GitHub Actions or local wrapper | Automated creation and validation; state key is scoped to subscription, prefix, scenario, and environment |
+| Application images and revisions | GitHub Actions or local wrapper | Automated build, push, digest capture, and Container Apps update |
+| Incident trigger | GitHub Actions or trigger script | Optional deploy-time incident Pull Request, or idempotent `trigger-incident-gitops.*` Pull Request |
+| Healthy reset trigger | Trigger script | Idempotent reset Pull Request when a manual reset is needed |
+| SRE Agent ARM resource | Terraform | Deploys the selected **Low / Reader / Review** agent profile and managed-resource scope |
+| Code Access | Operator in SRE Agent portal | Manual portal connection and indexing; used only for source and commit correlation |
+| Built-in GitHub MCP connector | Operator in SRE Agent portal | Manual connector setup with a short-lived fine-grained PAT; never committed or stored in Actions |
+| Global hard tool policy | Operator in SRE Agent portal | Manual policy application from `agent/tool-access-policy.portal.json` |
+| `gitops-remediation` custom agent, runbook knowledge, response plan, and incident platform wiring | Operator in SRE Agent portal | Manual portal setup from version-controlled files and the Scenario B resource outputs |
+| Remediation Pull Request | Azure SRE Agent through built-in GitHub MCP | Automated branch, one-file commit, and unmerged Pull Request after the alert; human review and merge remain manual |
+| PAT revocation | Operator | Manual revocation immediately after the demo |
+
+Scenario B is code-led but not code-complete. Terraform and workflows own the
+Azure workload and GitOps lifecycle. SRE Agent builder configuration remains a
+controlled manual step because this profile intentionally demonstrates the
+current built-in GitHub MCP path instead of the Scenario C REST reconciler.
+
 ## Before you begin
 
 You need:
@@ -53,7 +75,6 @@ Set these nonsecret repository variables:
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 
 Do not configure an Azure client secret. The temporary SRE Agent GitHub MCP PAT
 is used only in the SRE portal and is never provided to this deployment workflow.

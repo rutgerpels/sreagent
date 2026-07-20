@@ -1,121 +1,162 @@
-# Scenario C: private-network GitOps
+# Scenario C: enterprise private-network GitOps
 
-Scenario C is the enterprise profile. The Azure SRE Agent uses **Low / Reader /
-Review**, Azure data-plane endpoints are private, Azure deployment work runs on a
-private self-hosted runner, and GitHub remediation uses a constrained custom MCP
-broker.
+Scenario C is the enterprise profile: **Low / Reader / Review**, private Azure
+data-plane endpoints wherever the services support them, a private self-hosted
+deployment runner, and a code-first Azure SRE Agent configuration.
 
-Scenario C uses no PAT for write operations. It uses two workload GitHub Apps:
+The implementation deliberately separates the two SRE Agent management planes:
 
-1. a read-only bring-your-own App for SRE Agent Code Access;
-2. an issues-write remediation App used only by the broker.
+1. Terraform and AzAPI own Azure Resource Manager resources.
+2. An idempotent reconciler owns documented SRE Agent data-plane resources.
 
-Do not combine the Apps or reuse their private keys.
+This is not a portal-first deployment. Portal work is limited to external
+identity bootstrap that cannot be created noninteractively and to service
+features that do not yet expose a supported automation path.
 
-## Security and operating model
+## Automation boundary
+
+| Surface | Owner | Automated state |
+| --- | --- | --- |
+| Agent, identities, model, budget, incident platform, telemetry, VNet, sandbox | Terraform/AzAPI | Fully declarative |
+| App Insights, Log Analytics, Azure Monitor connectors | Terraform/AzAPI ARM children | Fully declarative |
+| Agent and connector RBAC | Terraform | Fully declarative |
+| Global tool policy | SRE Agent REST reconciler | Idempotent apply and verify |
+| `gitops-remediation` custom agent | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| Sev2 memory response plan | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| Scheduled health check | SRE Agent REST reconciler | Idempotent apply and verify; ARM extensions are tenant restricted |
+| GitOps runbook knowledge | SRE Agent REST reconciler | Delete known file, upload, verify successful indexing |
+| GitHub Code Access | SRE Agent REST reconciler | Optional; requires externally issued GitHub App material |
+| GitHub App creation and private-key issuance | GitHub/operator | External bootstrap; GitHub has no noninteractive App-creation API |
+| Remote remediation MCP connector | Disabled | Supported remote HTTP managed-identity authentication is not currently documented |
+
+The optional `agentIdentity.initialSponsorGroupId` surface from the newer stable
+ARM schema is intentionally not enabled. Microsoft's current production
+Terraform and Bicep templates omit it, and the underlying Agent Identity
+platform is tenant restricted. Scenario C instead uses the documented
+system-assigned and user-assigned managed identities, which remain fully
+declarative and portable across supported SRE Agent tenants.
+
+The reconciler is:
+
+```text
+scripts/reconcile-sre-agent.sh
+scripts/reconcile-sre-agent.ps1
+```
+
+Its desired state is:
+
+```text
+agent/scenario-c/manifest.json
+```
+
+GitHub Actions runs `apply` and `verify` after Scenario C infrastructure
+deployment. It runs `verify` again after application deployment.
+
+## Why Terraform remains the IaC language
+
+The current SRE Agent templates support Bicep and Terraform. Bicep is slightly
+ahead as the native ARM authoring experience and may expose new preview
+properties first. The ARM reference lists child types for subagents, incident
+filters, and scheduled tasks, but live deployment in this tenant returns
+`Agent Extensions are not available for this tenant` because that path is
+restricted to internal tenants. Microsoft's current Terraform backend therefore
+also deploys subagents through the data plane. Global permissions, extended
+agents, response plans, schedules, knowledge, and Code Access remain in the
+documented REST reconciliation phase for this portable enterprise profile.
+
+This repository retains Terraform because:
+
+- all application, networking, identity, observability, and lifecycle code is
+  already Terraform;
+- AzAPI can submit the same preview ARM resource shape as Bicep;
+- the documented ARM connectors are Terraform-owned child resources;
+- switching languages would add state and pipeline complexity without removing
+  the REST reconciliation phase.
+
+The reconciler verifies the effective response contract rather than unsupported
+request-only fields. In the current preview, `agentType` is not part of the
+custom-agent REST envelope, `deepInvestigationEnabled` is not persisted for
+incident filters, and scheduled tasks ignore duplicate `name` and `isEnabled`
+properties. Those fields are intentionally absent from the desired state so
+successful API acceptance cannot mask configuration drift.
+
+Knowledge upload is verified through the documented upload response and
+`AgentMemory` indexer execution status. The preview status API does not expose a
+document-list operation or filenames, so verify-only runs can prove indexing
+health but cannot compare remote file contents byte for byte.
+
+The agent currently uses `Microsoft.App/agents@2025-05-01-preview` because that
+schema exposes the required VNet and sandbox properties. Re-evaluate the pinned
+version when a stable API exposes the same surface.
+
+## Security and networking model
 
 | Concern | Scenario C behavior |
 | --- | --- |
 | Terraform profile | `scenario = "C"` |
-| SRE Agent access | Low; Reader on the demo resource group |
+| SRE Agent workload access | Reader on the demo resource group |
 | Run mode | Review |
 | Azure data plane | Private state Blob, ACR, and Key Vault endpoints |
-| SRE Agent networking | Dedicated delegated subnet in Azure VNet mode |
+| SRE Agent networking | Dedicated delegated subnet and VNet egress |
 | Azure runner | `[self-hosted, Linux, X64, azure-private, contosopay]` |
-| Code context | Read-only BYO GitHub App |
-| GitHub write path | Entra-protected broker and a separate issues-write GitHub App |
+| Code context | Optional read-only bring-your-own GitHub App |
+| GitHub mutation | No supported agent-initiated write path in the current preview |
 | Incident | Pull Request sets `enable_slow_leak = true` |
-| Remediation | Broker creates a constrained issue; Scenario C workflow opens an unmerged Pull Request |
+| Durable remediation | Human-reviewed Pull Request sets the flag to `false` |
 
-The Terraform scenario is immutable. The state storage-account hash includes
-subscription, prefix, and `C`; the state blob is
-`<prefix>-C-<environment>.tfstate`. Never convert A or B state in place. Destroy
-an active A or B GitHub Actions profile, delete its `DEPLOYMENT_SCENARIO`,
-`TF_PREFIX`, and `TF_ENVIRONMENT` variables, and only then dispatch C as a new
-isolated environment.
+Azure SRE Agent VNet integration controls egress. It does not create an inbound
+private endpoint for the agent. During the preview, connector traffic is not
+guaranteed to traverse the attached VNet. Do not describe the workspace as
+fully private or use network placement as an authentication boundary.
 
-## Why the broker has external HTTPS ingress
+The Terraform-created agent subnet is:
 
-Scenario C keeps the frontend public in the same Azure Container Apps
-environment. Container Apps environment accessibility and private endpoints
-apply at environment scope, while per-app internal ingress is intended for
-traffic from the environment and connected network. Making the entire
-environment internal would remove the required public frontend. Giving only the
-broker internal ingress does not provide the managed Azure SRE Agent with the
-required inbound MCP reachability.
+- delegated to `Microsoft.App/environments`;
+- in the same region as the SRE Agent;
+- separate from Container Apps, private endpoints, and runners;
+- `/27` or larger in this demo.
 
-The supported narrow design is therefore:
+The frontend remains the only public application. `checkout-api` and
+`payment-service` use internal ingress. The remediation broker source is
+retained, but its infrastructure and connector are intentionally not deployed.
 
-- frontend: external HTTPS;
-- checkout-api and payment-service: internal ingress;
-- remediation broker: external HTTPS, Scenario C only;
-- Easy Auth: authentication required, dedicated Entra audience, and only the
-  exact SRE Agent managed-identity principal allowed;
-- broker: independently validates the bearer token's RS256 signature, tenant
-  issuer, audience, expiry, and exact managed-identity object ID;
-- Easy Auth token store: supplies `X-MS-TOKEN-AAD-ACCESS-TOKEN`, the only token
-  header the broker accepts;
-- broker: requires `x-ms-client-principal-id` to match the cryptographically
-  verified `oid` claim;
-- `/health`: static liveness response and the only authentication exclusion.
+## Remote MCP preview limitation
 
-The broker exposes only two purpose-built MCP operations and cannot provide a
-general GitHub token, shell, workflow dispatch, merge, or Azure write capability.
+The current remote Streamable-HTTP connector documentation exposes bearer-token
+and custom-header authentication. Managed identity is documented for supported
+Azure-backed stdio connectors, not for arbitrary remote HTTP MCP endpoints.
 
-This choice follows the supported
-[Container Apps networking model](https://learn.microsoft.com/azure/container-apps/networking)
-and
-[built-in authentication model](https://learn.microsoft.com/azure/container-apps/authentication).
-Easy Auth protects external ingress before the request reaches application code;
-independent JWT validation is defense in depth and remains effective during
-authentication configuration updates.
+The broker expects an Entra token for a dedicated audience and validates the
+exact agent principal. Connecting it with a static bearer secret, PAT,
+anonymous access, or network-only trust would weaken the design. Therefore:
 
-## What the normal workflow provisions
+- `SRE_REMEDIATION_CONNECTOR_ENABLED` must remain `false`;
+- the reconciler rejects `true` with an actionable error;
+- the agent remains Reader-only and cannot mutate Azure;
+- the response plan can investigate and explain the one-file GitOps fix, but a
+  human must create or trigger the remediation Pull Request.
 
-Selecting Scenario C in the normal **deploy** workflow provisions:
+Re-enable this path only after Microsoft documents a supported managed-identity
+authentication flow for remote Streamable-HTTP MCP, or after the broker is
+redesigned around another supported nonsecret authentication mechanism.
 
-- scenario-isolated private Terraform state and Blob private endpoint;
-- regional application VNet and peering to the runner VNet;
-- private ACR and Key Vault endpoints and private DNS links;
-- dedicated Container Apps and SRE Agent subnets;
-- ContosoPay, telemetry, alerting, and identities;
-- broker identity with `AcrPull` and a custom key-read/sign-only role scoped to
-  the single imported remediation key;
-- Entra-protected broker Container App and Easy Auth configuration;
-- broker image published once under the full commit SHA, locked, and deployed by
-  exact manifest digest.
+## 1. Prepare the runner and OIDC
 
-There is no independent broker switch. Scenario C implies the broker; A and B
-cannot deploy it.
-
-The remaining manual prerequisites are limited to:
-
-1. create and install the two workload GitHub Apps;
-2. import the remediation App PEM once as a non-exportable Key Vault RSA key;
-3. create the dedicated Entra API registration and complete required consent;
-4. configure SRE portal Code Access, MCP connector, tool policy, custom agent,
-   knowledge, and response plan.
-
-The workflow does not call undocumented Azure SRE Agent APIs.
-
-## 1. Prepare the private runner and OIDC
-
-Register a Linux x64 runner with all of these labels:
+Register a Linux x64 runner with:
 
 ```text
 [self-hosted, Linux, X64, azure-private, contosopay]
 ```
 
-It needs Docker, Azure CLI, Terraform as installed by the workflow, outbound
-HTTPS to GitHub and Azure control-plane endpoints, and network access to the
-runner VNet/private-endpoint subnet.
+The runner needs Docker, Azure CLI, outbound HTTPS to GitHub and Azure
+control-plane endpoints, and network reachability to the runner VNet and private
+endpoints. Terraform and Node.js are installed by the workflow.
 
 Configure these nonsecret repository variables:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `SRE_AGENT_SPONSOR_GROUP_ID`
 - `RUNNER_NETWORK_RG`
 - `RUNNER_VNET_NAME`
 - `RUNNER_PE_SUBNET_NAME`
@@ -127,95 +168,73 @@ Optional address-space overrides are:
 - `CONTAINER_APPS_SUBNET_PREFIX`
 - `SRE_AGENT_SUBNET_PREFIX`
 
-The address spaces must not overlap the runner VNet.
+The application and runner address spaces must not overlap. GitHub Actions uses
+OIDC only; do not create a client secret, credentials JSON, storage key, or ACR
+admin credential.
 
-GitHub Actions authenticates to Azure with OIDC only. Do not create a client
-secret, credentials JSON, storage key, or ACR admin credential.
+## 2. Prepare optional Code Access
 
-The Scenario C deployment, apply, app-deployment, and destruction jobs select the
-private runner labels. The incident-arming job and Scenario C remediation
-issue-to-PR workflow operate only on GitHub and can run on GitHub-hosted runners;
-they do not access private Azure endpoints.
-
-## 2. Create the two GitHub Apps
-
-GitHub Apps have no permissions by default. Assign the minimum repository
-permissions and install each App only on this repository. See
-[Choosing permissions for a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app).
-
-### App 1: Code Access
-
-Create a BYO GitHub App dedicated to SRE Agent repository indexing:
+Code Access is a read-only repository context path, not a write connector.
+Create a dedicated GitHub App with only:
 
 - Metadata: read;
 - Contents: read;
-- no Issues write;
-- no Pull Requests write;
-- no Actions, Administration, Secrets, or Workflows permissions;
-- no webhook unless the current Code Access onboarding explicitly requires one.
+- no Issues, Pull Requests, Actions, Administration, Secrets, or Workflows
+  permissions.
 
-Install it only on this repository. Configure its own credential through the
-current **Builder > Code Access > Bring your own GitHub App** flow. This App and
-its credential are not supplied to the broker.
+Install it only on this repository. Keep it separate from the remediation
+broker App.
 
-Code Access provides source search, file reads, and incident-to-change
-correlation. It is not a GitHub write connector. Azure SRE Agent documents the
-distinct connection types in
-[GitHub connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/github-connector).
+From a host that can reach the private Key Vault endpoint, upload the Code
+Access PEM as a Key Vault **secret**:
 
-### App 2: remediation issue writer
+```bash
+az keyvault secret set \
+  --vault-name "<scenario-c-vault>" \
+  --name "sre-code-access-github-app-pem" \
+  --file "./code-access-app.pem" \
+  --output none
+```
 
-Create a separate App for the broker:
+Then securely remove the local PEM according to your key-custody process.
+Terraform attaches a dedicated Code Access identity and grants it `Key Vault
+Secrets User` only at that secret's resource scope. The action identity has no
+secret-read role. The workflow passes only the secret URI to the API; it never
+retrieves or logs the secret value.
+
+Set these nonsecret repository variables:
+
+- `SRE_CODE_ACCESS_ENABLED=true`
+- `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID=<GitHub App client ID>`
+- `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME=sre-code-access-github-app-pem`
+
+Leave `SRE_CODE_ACCESS_ENABLED=false` until all prerequisites exist. Partial
+configuration fails closed.
+
+The Code Access PEM secret is intentionally different from the broker's
+non-exportable Key Vault RSA **key**:
+
+- Code Access uses a secret URI consumed by the SRE Agent identity.
+- The broker uses a key URI and asks Key Vault to perform RS256 signing.
+
+Never reuse one App or credential for both responsibilities.
+
+## 3. Understand the dormant remediation broker
+
+Scenario C retains the constrained broker implementation so the architecture
+can be enabled when the connector authentication gap closes. It does not deploy
+the broker identity, Container App, public ingress, RBAC, or auth configuration.
+
+Future enablement requires a separate GitHub App with:
 
 - Metadata: read;
 - Issues: read and write;
-- Contents: no access;
-- Pull Requests: no access;
-- Actions and Workflows: no access;
-- Administration, Secrets, and all unrelated permissions: no access;
-- webhook: disabled.
+- no Contents, Pull Requests, Actions, Workflows, Administration, or Secrets
+  permissions;
+- webhook disabled.
 
-Install it only on this repository. Record:
-
-- numeric App ID;
-- numeric installation ID;
-- bot login, including `[bot]`;
-- the downloaded PEM path until one-time import is complete.
-
-The remediation App cannot push code or open a Pull Request. It can only create
-and read the constrained issue used by the repository workflow.
-
-## 3. Create the broker Entra application
-
-Create a dedicated Microsoft Entra application registration for the broker API.
-Expose this Application ID URI:
-
-```text
-api://<broker-api-client-id>
-```
-
-Use this client-credential scope:
-
-```text
-api://<broker-api-client-id>/.default
-```
-
-For `SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE`, record the API client ID GUID
-without the `api://` prefix. Microsoft Entra v2 access tokens carry the API
-client ID in the `aud` claim. Record that audience and the scope before
-deployment. The workflow
-provisions the selected Scenario C SRE Agent identity. After deployment, grant
-that identity only the application permission needed to request the audience and
-complete tenant admin consent if your tenant requires it.
-
-Easy Auth validates issuer, audience, and allowed identity. The broker
-independently verifies the token-store access token against the tenant JWKS and
-requires the configured client-ID audience and SRE Agent managed-identity object
-ID. It does not accept a caller-controlled `Authorization` header directly.
-
-## 4. Configure Scenario C repository metadata
-
-Set these nonsecret repository variables before running **deploy**:
+Record its App ID, installation ID, bot login, and downloaded PEM. A future
+supported deployment also needs dedicated Entra application metadata:
 
 - `SRE_REMEDIATION_ENTRA_API_CLIENT_ID`
 - `SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE`
@@ -225,55 +244,8 @@ Set these nonsecret repository variables before running **deploy**:
 - `SRE_GITHUB_APP_BOT_LOGIN`
 - `SRE_GITHUB_APP_PRIVATE_KEY_NAME`
 
-Use `github-app-signing-key` for
-`SRE_GITHUB_APP_PRIVATE_KEY_NAME` unless governance requires another valid Key
-Vault key name.
-
-The workflow derives the broker's exact allowed caller from the Terraform-managed
-Scenario C SRE Agent identity. It maps the key-name value to Terraform variable
-`sre_remediation_github_app_private_key_name`. Terraform passes the unversioned
-key URI to the broker as `GITHUB_APP_PRIVATE_KEY_KEY_URI` and exposes the same
-nonsecret metadata as output `sre_remediation_broker_key_uri`.
-
-Do not use a secret-name variable; no broker PEM secret is supported.
-
-## 5. Deploy Scenario C
-
-Run the manual **deploy** workflow with:
-
-- **Scenario:** `C`;
-- the same prefix and environment used by repository automation;
-- the desired location;
-- **Open incident PR:** as desired.
-
-The preflight accepts an absent activation marker or the same active C target.
-It rejects active A or B before private-runner or Azure work and instructs the
-operator to destroy that profile first. After deployment succeeds, activate push
-deployment by setting `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
-then setting `DEPLOYMENT_SCENARIO=C` last under repository Actions variables.
-Until then, automatic `apply-infra` and `deploy-apps` pushes are successful
-no-ops. Images use the full 40-character commit SHA.
-
-The workflow builds the broker image and provisions its supported infrastructure
-as part of the normal deployment. Do not run the local deploy wrapper for C; it
-supports A and B only and cannot reach the private endpoints.
-
-Record these outputs from the run summary or Terraform:
-
-- `resource_group_name`
-- `key_vault_name`
-- `sre_agent_subnet_id`
-- `sre_remediation_broker_endpoint_url`
-- `sre_remediation_broker_key_uri`
-- `sre_remediation_broker_identity_principal_id`
-
-## 6. Import the remediation signing key once
-
-Run the repository key-import script from the private runner network, a peered
-jumpbox, or another host that already resolves and reaches the private Key Vault
-endpoint.
-
-### Bash
+Only after the connector authentication gap closes, import the broker PEM once
+as a non-exportable Key Vault RSA key:
 
 ```bash
 ./scripts/configure-github-app-key.sh \
@@ -282,8 +254,6 @@ endpoint.
   --key-name "github-app-signing-key"
 ```
 
-### PowerShell
-
 ```powershell
 pwsh ./scripts/configure-github-app-key.ps1 `
   -VaultName "<scenario-c-vault>" `
@@ -291,121 +261,56 @@ pwsh ./scripts/configure-github-app-key.ps1 `
   -KeyName "github-app-signing-key"
 ```
 
-The key name must match `SRE_GITHUB_APP_PRIVATE_KEY_NAME` and
-`sre_remediation_github_app_private_key_name`.
+The script never opens public Key Vault access. It temporarily grants the
+operator Key Vault Crypto Officer, imports a sign-only key, and removes the
+temporary assignment. The broker identity receives only key metadata read and
+sign operations on that key.
 
-The script:
+Do not perform this dormant-path bootstrap for the current preview deployment.
 
-1. requires existing private network access to the vault;
-2. never enables public access or adds a firewall exception;
-3. temporarily grants the signed-in operator **Key Vault Crypto Officer** if
-   needed;
-4. imports the PEM as a non-exportable RSA key;
-5. limits the key operations to `sign`;
-6. removes the temporary role assignment on exit.
+## 4. Deploy and reconcile
 
-Use `--force` or `-Force` only to import a deliberate new key version during
-rotation.
+Run the manual **deploy** workflow with:
 
-After successful import, securely remove the local PEM according to your
-organization's key-custody process. Never upload it as a Key Vault secret, place
-it in Terraform state, or store it in GitHub.
+- **Scenario:** `C`;
+- the selected prefix, environment, and location;
+- **Open incident PR:** as desired.
 
-Terraform grants the broker's managed identity a custom role with only
-`Microsoft.KeyVault/vaults/keys/read` and
-`Microsoft.KeyVault/vaults/keys/sign/action`, scoped to the individual imported
-key resource rather than the vault. It receives no secret, decrypt,
-unwrap, create, rotate, export, or delete permissions. At runtime the broker
-receives the key URI, uses `KeyClient`/`CryptographyClient`, and requests RS256
-signing from Key Vault. A Key Vault `get` operation exposes only public key
-metadata; the broker never reads, downloads, or exports private key material.
+The workflow:
 
-See:
+1. creates scenario-isolated remote state;
+2. provisions the private network, identities, observability, agent, and ARM
+   connectors;
+3. builds and digest-pins all images;
+4. applies the applications;
+5. reconciles global policy, custom agent, response plan, schedule, knowledge,
+   and optional Code Access;
+6. verifies the resulting SRE Agent state.
 
-- [Key Vault key operations and algorithms](https://learn.microsoft.com/azure/key-vault/keys/about-keys-details)
-- [Key Vault Azure RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
-- [GitHub App JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
-- [GitHub App installation tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
+After the first deployment succeeds, set:
 
-GitHub requires an RS256 App JWT. The broker exchanges that short-lived JWT for
-an installation token, whose permissions cannot exceed the App installation and
-which expires after one hour.
+- `TF_PREFIX`
+- `TF_ENVIRONMENT`
+- `DEPLOYMENT_SCENARIO=C` last
 
-## 7. Connect the SRE Agent to the private network
+Until the activation marker is set, push workflows are safe no-ops. The state
+blob is `<prefix>-C-<environment>.tfstate`; never convert A or B state in place.
 
-Terraform creates a dedicated subnet for the agent. The official service minimum
-is currently `/28`; this demo deliberately uses and validates `/27` or larger for
-additional headroom. The subnet is:
+For an explicit local verification from an authenticated host:
 
-- delegated to `Microsoft.App/environments`;
-- in the same region as the SRE Agent;
-- not shared with Container Apps, private endpoints, or runners.
+```bash
+./scripts/reconcile-sre-agent.sh \
+  --mode verify \
+  --subscription "<subscription-id>" \
+  --resource-group "<resource-group>" \
+  --agent "<agent-name>"
+```
 
-In the SRE Agent portal:
+Use `--mode render` without Azure access to inspect secret-safe desired state.
 
-1. open **Settings > Workspace configuration > Network**;
-2. select **Azure VNet**;
-3. select the Terraform-created SRE Agent subnet;
-4. save and verify private DNS resolution and outbound HTTPS.
+## 5. Run and remediate the incident
 
-Azure VNet mode controls outbound traffic only; it does not create an inbound
-private endpoint for the agent. Platform traffic stays on managed
-infrastructure, while private Azure data-plane traffic follows your VNet, DNS,
-NSG, UDR, and firewall path. Configure the documented code-repository and remote
-MCP reachability settings needed for GitHub and the broker.
-
-See
-[Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration).
-
-## 8. Configure Code Access and the broker connector
-
-### Code Access
-
-Under **Builder > Code Access**, choose **Bring your own GitHub App** and use App
-1. Add this repository and confirm indexing. Do not use App 2 or the broker key
-URI for this connection.
-
-### Custom MCP connector
-
-Under **Builder > Connectors**, add a Streamable HTTP MCP connector:
-
-- endpoint: `sre_remediation_broker_endpoint_url`, ending in `/mcp`;
-- authentication: managed identity;
-- token scope: `SRE_REMEDIATION_ENTRA_TOKEN_SCOPE`;
-- caller: the exact identity in Terraform output
-  `sre_agent_identity_principal_ids`.
-
-The endpoint is external HTTPS, but unauthenticated or wrong-principal requests
-are rejected before broker tools run. See
-[Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors).
-
-Enable only:
-
-- `create_slow_leak_remediation_issue`;
-- `get_slow_leak_remediation_status`.
-
-## 9. Apply policy and response behavior
-
-1. Grant only Reader-level workload access to the Scenario C resource group.
-2. Connect Log Analytics/Application Insights.
-3. Connect Azure Monitor as the incident platform.
-4. Apply
-   [`agent/tool-access-policy.portal.json`](../agent/tool-access-policy.portal.json)
-   globally to deny Azure, Kubernetes, terminal, and Terraform writes.
-5. Create `gitops-remediation` from
-   [`agent/gitops-remediation-agent.md`](../agent/gitops-remediation-agent.md).
-6. Assign Azure/Code read tools and only the two broker tools.
-7. Add
-   [`agent/knowledge/gitops-runbook.md`](../agent/knowledge/gitops-runbook.md).
-8. Create a Sev2 payment-memory response plan in **Review** mode.
-
-The agent prompt is behavioral guidance; Reader RBAC, Easy Auth, exact-principal
-validation, GitHub App permissions, selected MCP tools, and the hard tool policy
-are the enforcement layers.
-
-## 10. Run and remediate the incident
-
-Merge the generated incident Pull Request or create one with:
+Create or merge the incident Pull Request with:
 
 ```bash
 ./scripts/trigger-incident-gitops.sh
@@ -415,63 +320,48 @@ Merge the generated incident Pull Request or create one with:
 pwsh ./scripts/trigger-incident-gitops.ps1
 ```
 
-`apply-infra` runs its Azure work on the private self-hosted runner, verifies the
-Scenario C state, and applies the leak flag. The alert fires after the expected
-memory rise.
+The SRE Agent correlates the Azure Monitor incident, telemetry, and repository
+change. Its response plan identifies `infra/leak.auto.tfvars` as the source of
+truth and proposes changing only:
 
-The remediation path is:
-
-1. the SRE Agent investigates with read-only Azure and Code Access tools;
-2. in Review mode, a human approves the proposed broker call;
-3. Easy Auth and the broker verify the exact caller;
-4. the broker asks Key Vault to sign the GitHub App JWT;
-5. GitHub returns a short-lived installation token;
-6. the remediation App creates the fixed-title, fixed-marker issue;
-7. `.github/workflows/sre-remediation-pr.yml` accepts only Scenario C and the
-   trusted issue shape/author;
-8. the workflow uses its scoped `GITHUB_TOKEN` to open an unmerged one-file Pull
-   Request;
-9. a human reviews and merges it;
-10. normal `apply-infra` deploys the healthy flag through the private runner.
-
-The broker does not open the Pull Request itself. The remediation issue and
-workflow are Scenario C-only. Scenario B does not use either.
-
-Verify that the Pull Request changes only:
-
-```text
-infra/leak.auto.tfvars
+```hcl
+enable_slow_leak = false
 ```
 
-from `true` to `false`, then confirm memory and the alert return to healthy.
-
-## 11. Rotate, reset, and destroy
-
-Use the key-import script with `--force` or `-Force` to import a new remediation
-key version, update/revoke GitHub keys according to policy, and verify broker
-signing before removing the old version.
-
-Reset the incident through a Pull Request:
+Because the remote MCP connector is disabled, perform the supported human
+GitOps step:
 
 ```bash
 ./scripts/trigger-incident-gitops.sh --reset
 ```
 
-Destroy with the manual **destroy** workflow using Scenario `C` and confirmation
-`<prefix>-C-<environment>`. The Azure destroy work runs on the private runner and
-verifies the C state first. The local teardown wrapper is not the Scenario C
-path.
+Review and merge the generated Pull Request. `apply-infra` applies the healthy
+flag through the private runner, and its Scenario C reconciliation step verifies
+that agent configuration has not drifted.
 
-Remove portal-created SRE Agent resources, Entra consent, and both GitHub App
-installations separately if no longer needed.
+Do not use `az containerapp update` for the fix. That would create drift from
+Terraform and could be reversed by the next apply.
+
+## 6. Destroy
+
+Use the manual **destroy** workflow with Scenario `C` and confirmation:
+
+```text
+<prefix>-C-<environment>
+```
+
+The private runner verifies the state profile before destruction. Remove the
+GitHub App installations, Entra consent, and externally bootstrapped Key Vault
+material separately when no longer required. Do not remove pre-existing shared
+runner-network resources.
 
 ## References
 
-- [Azure SRE Agent setup reference](sre-agent-setup.md)
+- [Deploy Azure SRE Agent with infrastructure as code](https://learn.microsoft.com/azure/sre-agent/deploy-iac)
+- [Azure SRE Agent API reference](https://learn.microsoft.com/azure/sre-agent/api-reference)
+- [Azure SRE Agent ARM template reference](https://learn.microsoft.com/azure/templates/microsoft.app/agents)
 - [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration)
 - [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)
 - [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
-- [Container Apps networking](https://learn.microsoft.com/azure/container-apps/networking)
-- [Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication)
+- [Microsoft SRE Agent reference repository](https://github.com/microsoft/sre-agent)
 - [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
-- [GitHub App permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)

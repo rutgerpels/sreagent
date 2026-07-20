@@ -57,8 +57,8 @@ resource "azurerm_subnet" "container_apps" {
   }
 }
 
-# Kept separate from the Container Apps infrastructure subnet so the SRE Agent
-# can be connected manually through its Azure VNet workspace setting.
+# Kept separate from the Container Apps infrastructure subnet. Terraform
+# attaches the Scenario C agent and enables Azure VNet sandbox egress/private DNS.
 resource "azurerm_subnet" "sre_agent" {
   count = local.profile.private_network_enabled ? 1 : 0
 
