@@ -75,16 +75,19 @@ jobs:
           [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, or C."; exit 1; }
           [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${TF_PREFIX}'."; exit 1; }
           [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${TF_ENVIRONMENT}'."; exit 1; }
-          [[ "${CONFIRM_INPUT}" == "${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}" ]] || { echo "::error::Confirmation does not match the selected profile."; exit 1; }
+          EXPECTED_CONFIRM="${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}"
+          [[ "${CONFIRM_INPUT}" == "${EXPECTED_CONFIRM}" ]] || { echo "::error::Confirmation does not match the selected profile. Expected '${EXPECTED_CONFIRM}'."; exit 1; }
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
             [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required."; exit 1; }
           done
           if [[ "${FORCE_DELETE_RG}" != "true" ]]; then
             readonly SHA_PATTERN='^[0-9a-f]{40}$'
-            [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
-            [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
-            [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
-            [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+            if [[ -n "${REPOSITORY_SCENARIO}${REPOSITORY_PREFIX}${REPOSITORY_ENVIRONMENT}" ]]; then
+              [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
+              [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
+              [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
+              [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+            fi
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
             {
               echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
