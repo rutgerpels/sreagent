@@ -280,6 +280,14 @@ jobs:
             -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch after apply."; exit 1; }
 
+      - name: Refresh Azure login for SRE Agent reconciliation
+        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Reconcile and verify Scenario C SRE Agent
         if: ${{ needs.select-profile.outputs.scenario == 'C' }}
         shell: bash
