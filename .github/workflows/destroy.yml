@@ -181,17 +181,28 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
+          stop_sre_agents() {
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+              return 0
+            fi
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Stopping SRE Agent before destroy: ${id}"
+              az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
+            done
+          }
           destroy() {
             terraform destroy -input=false -auto-approve \
               -var 'deploy_apps=false' -var "image_tag=${IMAGE_TAG}" \
               -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
               -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
           }
+          stop_sre_agents
           if destroy; then exit 0; fi
           echo "::warning::Terraform destroy failed; deleting orphaned Container Apps in the verified resource group and retrying."
           for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/containerApps --query '[].id' -o tsv 2>/dev/null || true); do
             az resource delete --ids "${id}" || true
           done
+          stop_sre_agents
           destroy
 
       - name: Force delete exact verified resource group
@@ -263,6 +274,13 @@ jobs:
               az resource delete --ids "${peering_id}" --api-version 2024-05-01
             fi
           done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
+
+          if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Stopping SRE Agent before force delete: ${id}"
+              az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
+            done
+          fi
 
           az group delete --name "${APP_RESOURCE_GROUP}" --yes
           [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
