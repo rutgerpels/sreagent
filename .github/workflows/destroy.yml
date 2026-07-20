@@ -190,6 +190,24 @@ jobs:
               az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
             done
           }
+          cleanup_scenario_c_orphans() {
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+              return 0
+            fi
+            for principal_id in $(az identity list -g "${APP_RESOURCE_GROUP}" --query '[].principalId' -o tsv 2>/dev/null || true); do
+              for role in 'Reader' 'Monitoring Reader' 'Log Analytics Reader'; do
+                az role assignment delete --assignee "${principal_id}" --role "${role}" --scope "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}" 2>/dev/null || true
+              done
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.ManagedIdentity/userAssignedIdentities --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C identity: ${id}"
+              az resource delete --ids "${id}" --api-version 2023-01-31 2>/dev/null || true
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Network/virtualNetworks --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C virtual network: ${id}"
+              az resource delete --ids "${id}" --api-version 2024-05-01 2>/dev/null || true
+            done
+          }
           destroy() {
             terraform destroy -input=false -auto-approve \
               -var 'deploy_apps=false' -var "image_tag=${IMAGE_TAG}" \
@@ -203,6 +221,7 @@ jobs:
             az resource delete --ids "${id}" || true
           done
           stop_sre_agents
+          cleanup_scenario_c_orphans
           destroy
 
       - name: Force delete exact verified resource group
@@ -279,6 +298,19 @@ jobs:
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
               echo "Stopping SRE Agent before force delete: ${id}"
               az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
+            done
+            for principal_id in $(az identity list -g "${APP_RESOURCE_GROUP}" --query '[].principalId' -o tsv 2>/dev/null || true); do
+              for role in 'Reader' 'Monitoring Reader' 'Log Analytics Reader'; do
+                az role assignment delete --assignee "${principal_id}" --role "${role}" --scope "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}" 2>/dev/null || true
+              done
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.ManagedIdentity/userAssignedIdentities --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C identity before force delete: ${id}"
+              az resource delete --ids "${id}" --api-version 2023-01-31 2>/dev/null || true
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Network/virtualNetworks --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C virtual network before force delete: ${id}"
+              az resource delete --ids "${id}" --api-version 2024-05-01 2>/dev/null || true
             done
           fi
 
