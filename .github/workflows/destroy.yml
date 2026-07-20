@@ -166,12 +166,21 @@ jobs:
             -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
+          command -v jq >/dev/null 2>&1 || { echo "::error::State verification requires jq on the selected runner."; exit 1; }
           terraform state list | grep -Fxq 'azurerm_resource_group.this' || { echo "::error::Selected state has no environment to destroy."; exit 1; }
-          ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)" || { echo "::error::State has no scenario output; unverified destruction and in-place conversion are forbidden."; exit 1; }
+          STATE_JSON="$(terraform show -json)"
+          RG_JSON="$(jq -ce '
+            [.values.root_module.resources[]?
+             | select(.address == "azurerm_resource_group.this")
+             | .values]
+            | if length == 1 then .[0] else error("expected one managed resource group") end
+          ' <<< "${STATE_JSON}")"
+          ACTUAL_SCENARIO="$(jq -er '.tags.scenario' <<< "${RG_JSON}")" || { echo "::error::State resource group has no scenario tag; unverified destruction is forbidden."; exit 1; }
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           {
-            echo "TF_LOCATION=$(terraform output -raw location)"
-            echo "APP_RESOURCE_GROUP=$(terraform output -raw resource_group_name)"
+            echo "STATE_SCENARIO=${ACTUAL_SCENARIO}"
+            echo "TF_LOCATION=$(jq -er '.location' <<< "${RG_JSON}")"
+            echo "APP_RESOURCE_GROUP=$(jq -er '.name' <<< "${RG_JSON}")"
           } >> "${GITHUB_ENV}"
 
       - name: Terraform destroy
@@ -180,7 +189,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
+          [[ "${STATE_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
           stop_sre_agents() {
             if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
               return 0
