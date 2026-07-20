@@ -63,13 +63,13 @@ jobs:
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
           readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
-          readonly LOCATION_PATTERN='^[a-z][a-z0-9]{1,31}$'
+          readonly LOCATION_PATTERN='^[A-Za-z][A-Za-z0-9]*( [A-Za-z0-9]+)*$'
           readonly SHA_PATTERN='^[0-9a-f]{40}$'
           readonly SCENARIO_PATTERN='^(A|B|C)$'
           [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be exactly A, B, or C."; exit 1; }
           [[ "${SELECTED_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::The selected prefix is invalid."; exit 1; }
           [[ "${SELECTED_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::The selected environment is invalid."; exit 1; }
-          [[ "${SELECTED_LOCATION}" =~ ${LOCATION_PATTERN} ]] || { echo "::error::The selected Azure location is invalid."; exit 1; }
+          [[ "${SELECTED_LOCATION}" =~ ${LOCATION_PATTERN} ]] || { echo "::error::The selected Azure location is invalid. Use an Azure location name such as francecentral or a display name such as France Central."; exit 1; }
           [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full immutable commit SHA."; exit 1; }
           [[ "${OPEN_INCIDENT_PR}" == "true" || "${OPEN_INCIDENT_PR}" == "false" ]] || { echo "::error::Open incident PR must be an explicit boolean."; exit 1; }
           if [[ "${SELECTED_SCENARIO}" == "A" && "${OPEN_INCIDENT_PR}" == "true" ]]; then
@@ -120,13 +120,13 @@ jobs:
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
           readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
-          readonly LOCATION_PATTERN='^[a-z][a-z0-9]{1,31}$'
+          readonly LOCATION_PATTERN='^[A-Za-z][A-Za-z0-9]*( [A-Za-z0-9]+)*$'
           readonly SHA_PATTERN='^[0-9a-f]{40}$'
           readonly SCENARIO_PATTERN='^(A|B|C)$'
           [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be exactly A, B, or C."; exit 1; }
           [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::The selected prefix is invalid."; exit 1; }
           [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::The selected environment is invalid."; exit 1; }
-          [[ "${TF_LOCATION}" =~ ${LOCATION_PATTERN} ]] || { echo "::error::The selected Azure location is invalid."; exit 1; }
+          [[ "${TF_LOCATION}" =~ ${LOCATION_PATTERN} ]] || { echo "::error::The selected Azure location is invalid. Use an Azure location name such as francecentral or a display name such as France Central."; exit 1; }
           [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full immutable commit SHA."; exit 1; }
           [[ "${OPEN_INCIDENT_PR}" == "true" || "${OPEN_INCIDENT_PR}" == "false" ]] || { echo "::error::Open incident PR must be an explicit boolean."; exit 1; }
           if [[ "${DEPLOYMENT_SCENARIO}" == "A" && "${OPEN_INCIDENT_PR}" == "true" ]]; then
