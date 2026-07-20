@@ -75,16 +75,19 @@ jobs:
           [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, or C."; exit 1; }
           [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${TF_PREFIX}'."; exit 1; }
           [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${TF_ENVIRONMENT}'."; exit 1; }
-          [[ "${CONFIRM_INPUT}" == "${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}" ]] || { echo "::error::Confirmation does not match the selected profile."; exit 1; }
+          EXPECTED_CONFIRM="${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}"
+          [[ "${CONFIRM_INPUT}" == "${EXPECTED_CONFIRM}" ]] || { echo "::error::Confirmation does not match the selected profile. Expected '${EXPECTED_CONFIRM}'."; exit 1; }
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
             [[ -n "${!value}" ]] || { echo "::error::Repository variable ${value} is required."; exit 1; }
           done
           if [[ "${FORCE_DELETE_RG}" != "true" ]]; then
             readonly SHA_PATTERN='^[0-9a-f]{40}$'
-            [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
-            [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
-            [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
-            [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+            if [[ -n "${REPOSITORY_SCENARIO}${REPOSITORY_PREFIX}${REPOSITORY_ENVIRONMENT}" ]]; then
+              [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
+              [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
+              [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
+              [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+            fi
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
             {
               echo "TF_VAR_scenario=${DEPLOYMENT_SCENARIO}"
@@ -163,12 +166,21 @@ jobs:
             -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
+          command -v jq >/dev/null 2>&1 || { echo "::error::State verification requires jq on the selected runner."; exit 1; }
           terraform state list | grep -Fxq 'azurerm_resource_group.this' || { echo "::error::Selected state has no environment to destroy."; exit 1; }
-          ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)" || { echo "::error::State has no scenario output; unverified destruction and in-place conversion are forbidden."; exit 1; }
+          STATE_JSON="$(terraform show -json)"
+          RG_JSON="$(jq -ce '
+            [.values.root_module.resources[]?
+             | select(.address == "azurerm_resource_group.this")
+             | .values]
+            | if length == 1 then .[0] else error("expected one managed resource group") end
+          ' <<< "${STATE_JSON}")"
+          ACTUAL_SCENARIO="$(jq -er '.tags.scenario' <<< "${RG_JSON}")" || { echo "::error::State resource group has no scenario tag; unverified destruction is forbidden."; exit 1; }
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match requested '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           {
-            echo "TF_LOCATION=$(terraform output -raw location)"
-            echo "APP_RESOURCE_GROUP=$(terraform output -raw resource_group_name)"
+            echo "STATE_SCENARIO=${ACTUAL_SCENARIO}"
+            echo "TF_LOCATION=$(jq -er '.location' <<< "${RG_JSON}")"
+            echo "APP_RESOURCE_GROUP=$(jq -er '.name' <<< "${RG_JSON}")"
           } >> "${GITHUB_ENV}"
 
       - name: Terraform destroy
@@ -177,18 +189,48 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
+          [[ "${STATE_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
+          stop_sre_agents() {
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+              return 0
+            fi
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Stopping SRE Agent before destroy: ${id}"
+              az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
+            done
+          }
+          cleanup_scenario_c_orphans() {
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+              return 0
+            fi
+            for principal_id in $(az identity list -g "${APP_RESOURCE_GROUP}" --query '[].principalId' -o tsv 2>/dev/null || true); do
+              for role in 'Reader' 'Monitoring Reader' 'Log Analytics Reader'; do
+                az role assignment delete --assignee "${principal_id}" --role "${role}" --scope "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}" 2>/dev/null || true
+              done
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.ManagedIdentity/userAssignedIdentities --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C identity: ${id}"
+              az resource delete --ids "${id}" --api-version 2023-01-31 2>/dev/null || true
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Network/virtualNetworks --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C virtual network: ${id}"
+              az resource delete --ids "${id}" --api-version 2024-05-01 2>/dev/null || true
+            done
+          }
           destroy() {
             terraform destroy -input=false -auto-approve \
               -var 'deploy_apps=false' -var "image_tag=${IMAGE_TAG}" \
               -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
               -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
           }
+          stop_sre_agents
           if destroy; then exit 0; fi
           echo "::warning::Terraform destroy failed; deleting orphaned Container Apps in the verified resource group and retrying."
           for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/containerApps --query '[].id' -o tsv 2>/dev/null || true); do
             az resource delete --ids "${id}" || true
           done
+          stop_sre_agents
+          cleanup_scenario_c_orphans
           destroy
 
       - name: Force delete exact verified resource group
@@ -260,6 +302,26 @@ jobs:
               az resource delete --ids "${peering_id}" --api-version 2024-05-01
             fi
           done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
+
+          if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Stopping SRE Agent before force delete: ${id}"
+              az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
+            done
+            for principal_id in $(az identity list -g "${APP_RESOURCE_GROUP}" --query '[].principalId' -o tsv 2>/dev/null || true); do
+              for role in 'Reader' 'Monitoring Reader' 'Log Analytics Reader'; do
+                az role assignment delete --assignee "${principal_id}" --role "${role}" --scope "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${APP_RESOURCE_GROUP}" 2>/dev/null || true
+              done
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.ManagedIdentity/userAssignedIdentities --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C identity before force delete: ${id}"
+              az resource delete --ids "${id}" --api-version 2023-01-31 2>/dev/null || true
+            done
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Network/virtualNetworks --query '[].id' -o tsv 2>/dev/null || true); do
+              echo "Deleting orphaned Scenario C virtual network before force delete: ${id}"
+              az resource delete --ids "${id}" --api-version 2024-05-01 2>/dev/null || true
+            done
+          fi
 
           az group delete --name "${APP_RESOURCE_GROUP}" --yes
           [[ "$(az group exists --name "${APP_RESOURCE_GROUP}")" == "false" ]] || { echo "::error::Resource group deletion did not complete; retaining state."; exit 1; }
