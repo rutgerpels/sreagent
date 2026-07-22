@@ -177,6 +177,90 @@ jobs:
             echo "APP_RESOURCE_GROUP=$(jq -er '.name' <<< "${RG_JSON}")"
           } >> "${GITHUB_ENV}"
 
+      - name: Reconcile deleted SRE Agent state
+        if: ${{ inputs.force_delete_rg == false }}
+        working-directory: infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || { echo "::error::SRE Agent state reconciliation requires jq on the selected runner."; exit 1; }
+          STATE_JSON="$(terraform show -json)"
+          mapfile -t AGENT_ROWS < <(jq -r '
+            .values.root_module.resources[]?
+            | select(.type == "azapi_resource" and .name == "agent")
+            | { address, id: (.values.id // "") }
+            | @base64
+          ' <<< "${STATE_JSON}")
+          if [[ "${#AGENT_ROWS[@]}" -eq 0 ]]; then
+            exit 0
+          fi
+
+          PRUNE_AGENT_STATE=false
+          for row in "${AGENT_ROWS[@]}"; do
+            AGENT="$(base64 -d <<< "${row}")"
+            AGENT_ADDRESS="$(jq -r '.address' <<< "${AGENT}")"
+            AGENT_ID="$(jq -r '.id' <<< "${AGENT}")"
+            if [[ -z "${AGENT_ID}" ]]; then
+              echo "::warning::${AGENT_ADDRESS} has no ARM ID in state; pruning its preview-resource state before destroy."
+              PRUNE_AGENT_STATE=true
+              continue
+            fi
+            if ! AGENT_JSON="$(az resource show --ids "${AGENT_ID}" --api-version 2025-05-01-preview --output json 2>/dev/null)"; then
+              echo "::warning::${AGENT_ADDRESS} is already absent in Azure; pruning its preview-resource state before destroy."
+              PRUNE_AGENT_STATE=true
+              continue
+            fi
+            if ! jq -e '(.identity.principalId // "") | length > 0' <<< "${AGENT_JSON}" >/dev/null; then
+              echo "::warning::${AGENT_ADDRESS} no longer has a readable managed identity; pruning its preview-resource state before destroy to avoid an AzAPI refresh failure."
+              PRUNE_AGENT_STATE=true
+            fi
+          done
+
+          if [[ "${PRUNE_AGENT_STATE}" != "true" ]]; then
+            exit 0
+          fi
+
+          mapfile -t TRACKED_ROLE_ASSIGNMENT_IDS < <(jq -r '
+            .values.root_module.resources[]?
+            | select(.type == "azurerm_role_assignment"
+                and (.name | test("^(agent|agent_system|agent_monitoring_contributor|agent_system_monitoring_contributor|agent_deployer_administrator)$")))
+            | .values.id // empty
+          ' <<< "${STATE_JSON}")
+          for role_assignment_id in "${TRACKED_ROLE_ASSIGNMENT_IDS[@]}"; do
+            az role assignment delete --ids "${role_assignment_id}" --only-show-errors 2>/dev/null || true
+          done
+
+          mapfile -t TRACKED_CONNECTOR_IDS < <(jq -r '
+            .values.root_module.resources[]?
+            | select(.type == "azapi_resource" and .name == "agent_connector")
+            | .values.id // empty
+          ' <<< "${STATE_JSON}")
+          for connector_id in "${TRACKED_CONNECTOR_IDS[@]}"; do
+            az resource delete --ids "${connector_id}" --api-version 2025-05-01-preview --only-show-errors 2>/dev/null || true
+          done
+
+          for row in "${AGENT_ROWS[@]}"; do
+            AGENT_ID="$(jq -r '.id' <<< "$(base64 -d <<< "${row}")")"
+            if [[ -n "${AGENT_ID}" ]]; then
+              az rest --method post --url "https://management.azure.com${AGENT_ID}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null 2>&1 || true
+              az resource delete --ids "${AGENT_ID}" --api-version 2025-05-01-preview --only-show-errors 2>/dev/null || true
+            fi
+          done
+
+          mapfile -t STATE_ADDRESSES_TO_REMOVE < <(jq -r '
+            .values.root_module.resources[]?
+            | select(
+                (.type == "azapi_resource" and (.name == "agent" or .name == "agent_connector"))
+                or
+                (.type == "azurerm_role_assignment"
+                  and (.name | test("^(agent|agent_system|agent_monitoring_contributor|agent_system_monitoring_contributor|agent_deployer_administrator)$")))
+              )
+            | .address
+          ' <<< "${STATE_JSON}")
+          if [[ "${#STATE_ADDRESSES_TO_REMOVE[@]}" -gt 0 ]]; then
+            terraform state rm "${STATE_ADDRESSES_TO_REMOVE[@]}"
+          fi
+
       - name: Terraform destroy
         if: ${{ inputs.force_delete_rg == false }}
         working-directory: infra
