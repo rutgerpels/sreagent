@@ -161,7 +161,8 @@ jobs:
             -backend-config="container_name=tfstate" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
           command -v jq >/dev/null 2>&1 || { echo "::error::State verification requires jq on the selected runner."; exit 1; }
-          terraform state list | grep -Fxq 'azurerm_resource_group.this' || { echo "::error::Selected state has no environment to destroy."; exit 1; }
+          STATE_LIST="$(terraform state list)"
+          grep -Fxq 'azurerm_resource_group.this' <<< "${STATE_LIST}" || { echo "::error::Selected state has no environment to destroy."; exit 1; }
           STATE_JSON="$(terraform show -json)"
           RG_JSON="$(jq -ce '
             [.values.root_module.resources[]?
