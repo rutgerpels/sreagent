@@ -70,6 +70,9 @@ ACTUAL_SCENARIO="$(terraform -chdir="${INFRA_DIR}" output -raw scenario 2>/dev/n
     exit 1
 }
 
+echo "==> Reconciling SRE Agent preview state"
+bash "${SCRIPT_DIR}/reconcile-sre-agent-state.sh" "${INFRA_DIR}"
+
 echo "==> terraform destroy"
 terraform -chdir="${INFRA_DIR}" destroy -input=false -auto-approve \
     -var "deploy_apps=false" \
