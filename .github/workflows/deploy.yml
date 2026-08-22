@@ -417,6 +417,17 @@ jobs:
           ACTUAL_SCENARIO="$(terraform output -raw scenario)"
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Terraform created an unexpected scenario '${ACTUAL_SCENARIO}'."; exit 1; }
 
+      # The OIDC assertion minted when the job started is only valid for five
+      # minutes, while the platform apply above routinely runs longer. `az acr login`
+      # exchanges that assertion for an ACR token, so a stale one fails with
+      # AADSTS700024. Mint a fresh assertion immediately before it is needed.
+      - name: Refresh Azure login for image publishing
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Build and push immutable images
         id: images
         shell: bash
