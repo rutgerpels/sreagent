@@ -435,6 +435,37 @@ jobs:
           set -euo pipefail
           ACR_NAME="$(terraform -chdir=infra output -raw acr_name)"
           ACR_LOGIN_SERVER="$(terraform -chdir=infra output -raw acr_login_server)"
+
+          # The apply above may have only just created the registry's private
+          # endpoints, which briefly refuse connections while they settle. Wait for
+          # both the registry and the data endpoint that carries blob uploads, so a
+          # first deployment does not fail on a race it can simply wait out.
+          wait_for_endpoint() {
+            local host="$1" code=""
+            for _ in $(seq 1 30); do
+              # curl reports 000 when the connection itself fails; any HTTP status,
+              # including the expected 401/403, proves the endpoint is answering.
+              code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://${host}/v2/" || true)"
+              if [[ "${code}" != "000" ]]; then
+                echo "::notice::${host} is reachable (HTTP ${code})."
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::${host} did not become reachable within five minutes."
+            return 1
+          }
+
+          wait_for_endpoint "${ACR_LOGIN_SERVER}"
+
+          # Only Premium registries with data endpoints publish a regional data host.
+          # Probe it when DNS knows about it, and skip it otherwise rather than
+          # waiting out a timeout on a registry that legitimately has none.
+          DATA_HOST="${ACR_LOGIN_SERVER%%.*}.${TF_LOCATION}.data.azurecr.io"
+          if getent hosts "${DATA_HOST}" >/dev/null 2>&1; then
+            wait_for_endpoint "${DATA_HOST}"
+          fi
+
           az acr login --name "${ACR_NAME}"
           services=(frontend checkout-api payment-service)
           DIGEST_FILE="${RUNNER_TEMP}/image-digests.json"
