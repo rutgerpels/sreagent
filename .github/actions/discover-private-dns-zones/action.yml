@@ -36,19 +36,33 @@ runs:
         [[ -n "${vnet_id}" ]] || { echo "::error::Runner VNet ${RUNNER_VNET_NAME} was not found in ${RUNNER_VNET_RG}."; exit 1; }
 
         # Emits the ID of a foreign zone that already links the runner VNet, or nothing.
+        # Notes:
+        #  - Uses if/then rather than `[[ ... ]] && continue`, whose non-zero status on a
+        #    non-matching test would abort the lookup under `set -e`.
+        #  - Compares resource IDs case-insensitively: Azure treats them as case-insensitive
+        #    and returns inconsistent casing (e.g. `resourceGroups/AGENTRG` vs `agentrg`),
+        #    so a server-side JMESPath `==` comparison silently never matches.
         discover_zone() {
-          local zone_name="$1" zone_id zone_rg link_count
-          while read -r zone_id; do
+          local zone_name="$1" zone_ids zone_id zone_rg linked_id
+
+          zone_ids="$(az network private-dns zone list --query "[?name=='${zone_name}'].id" -o tsv)"
+          while IFS= read -r zone_id; do
             [[ -n "${zone_id}" ]] || continue
             zone_rg="$(cut -d/ -f5 <<<"${zone_id}")"
-            [[ "${zone_rg}" == "${SELF_RG_PREFIX}"* ]] && continue
-            link_count="$(az network private-dns link vnet list -g "${zone_rg}" -z "${zone_name}" \
-              --query "length([?virtualNetwork.id=='${vnet_id}'])" -o tsv)"
-            if [[ "${link_count}" != "0" ]]; then
-              printf '%s' "${zone_id}"
-              return 0
+            if [[ "${zone_rg}" == "${SELF_RG_PREFIX}"* ]]; then
+              continue
             fi
-          done < <(az network private-dns zone list --query "[?name=='${zone_name}'].id" -o tsv)
+            while IFS= read -r linked_id; do
+              [[ -n "${linked_id}" ]] || continue
+              if [[ "${linked_id,,}" == "${vnet_id,,}" ]]; then
+                printf '%s' "${zone_id}"
+                return 0
+              fi
+            done <<<"$(az network private-dns link vnet list -g "${zone_rg}" -z "${zone_name}" \
+              --query '[].virtualNetwork.id' -o tsv)"
+          done <<<"${zone_ids}"
+
+          return 0
         }
 
         kv_zone_id="$(discover_zone privatelink.vaultcore.azure.net)"
@@ -59,9 +73,12 @@ runs:
           echo "TF_VAR_acr_private_dns_zone_id=${acr_zone_id}"
         } >> "${GITHUB_ENV}"
 
-        if [[ -n "${kv_zone_id}" ]]; then
-          echo "::notice::Reusing existing Key Vault private DNS zone already linked to ${RUNNER_VNET_NAME}: ${kv_zone_id}"
-        fi
-        if [[ -n "${acr_zone_id}" ]]; then
-          echo "::notice::Reusing existing ACR private DNS zone already linked to ${RUNNER_VNET_NAME}: ${acr_zone_id}"
-        fi
+        for pair in "Key Vault:${kv_zone_id}" "ACR:${acr_zone_id}"; do
+          label="${pair%%:*}"
+          zone="${pair#*:}"
+          if [[ -n "${zone}" ]]; then
+            echo "::notice::Reusing existing ${label} private DNS zone already linked to ${RUNNER_VNET_NAME}: ${zone}"
+          else
+            echo "::notice::No foreign ${label} private DNS zone is linked to ${RUNNER_VNET_NAME}; a dedicated zone will be created."
+          fi
+        done

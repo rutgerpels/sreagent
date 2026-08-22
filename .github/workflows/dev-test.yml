@@ -67,8 +67,13 @@ jobs:
     name: Deploy ephemeral environment
     needs: identity
     uses: ./.github/workflows/deploy.yml
+    # A caller must grant the union of every nested job's permissions, because
+    # GitHub validates this statically and a reusable workflow may not escalate.
+    # `arm-incident` needs contents/pull-requests write to open the incident PR;
+    # dev/test never reaches it, since open_incident_pr is false below.
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
       id-token: write
     with:
       scenario: ${{ inputs.scenario }}
