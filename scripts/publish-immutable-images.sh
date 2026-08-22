@@ -16,6 +16,30 @@ require_command() {
     }
 }
 
+push_image() {
+    local reference="$1"
+    local -i attempt=1
+    local -i max_attempts=5
+    local -i delay
+
+    while true; do
+        if docker push "${reference}"; then
+            return 0
+        fi
+        if (( attempt >= max_attempts )); then
+            echo "Error: pushing ${reference} failed after ${max_attempts} attempts." >&2
+            return 1
+        fi
+        # Private endpoints created moments earlier can refuse or drop a connection
+        # part-way through a push. Layers are content-addressed, so a retry resumes
+        # rather than duplicating work. Bounded, so a genuine failure still fails.
+        delay=$(( attempt * 10 ))
+        echo "Push of ${reference} failed (attempt ${attempt}/${max_attempts}); retrying in ${delay}s." >&2
+        sleep "${delay}"
+        attempt=$(( attempt + 1 ))
+    done
+}
+
 if (( $# < 5 )); then
     echo "Usage: $0 <acr-name> <acr-login-server> <commit-sha> <output-file> <service>..." >&2
     exit 1
@@ -67,7 +91,7 @@ for service in "${SERVICES[@]}"; do
             --label "org.opencontainers.image.source=${SOURCE_REPOSITORY}" \
             --tag "${ACR_LOGIN_SERVER}/${service}:${IMAGE_TAG}" \
             "${REPOSITORY_ROOT}/src/${service}"
-        docker push "${ACR_LOGIN_SERVER}/${service}:${IMAGE_TAG}"
+        push_image "${ACR_LOGIN_SERVER}/${service}:${IMAGE_TAG}"
         az acr repository update \
             --name "${ACR_NAME}" \
             --image "${service}:${IMAGE_TAG}" \
