@@ -29,6 +29,44 @@ on:
         required: false
         default: false
 
+  # Callable so the dev/test pipeline can tear down its ephemeral environment.
+  workflow_call:
+    inputs:
+      scenario:
+        description: "Deployment scenario"
+        type: string
+        required: true
+      prefix:
+        description: "Resource name prefix"
+        type: string
+        required: false
+        default: "contosopay"
+      environment:
+        description: "Environment label"
+        type: string
+        required: false
+        default: "demo"
+      force_delete_rg:
+        description: "Recovery only: delete the exact resource group recorded in verified state, then reset that state"
+        type: boolean
+        required: false
+        default: false
+      delete_state_storage:
+        description: "Delete this scenario/environment state blob after destroy (the shared state account is retained)"
+        type: boolean
+        required: false
+        default: false
+      environment_name:
+        description: "GitHub environment that requests the OIDC token. Empty preserves production behaviour."
+        type: string
+        required: false
+        default: ""
+      ephemeral:
+        description: "Tear down a throwaway dev/test environment rather than the active profile"
+        type: boolean
+        required: false
+        default: false
+
 permissions:
   contents: read
 
@@ -39,6 +77,7 @@ concurrency:
 jobs:
   destroy:
     runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    environment: ${{ inputs.environment_name }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -63,6 +102,7 @@ jobs:
         shell: bash
         env:
           FORCE_DELETE_RG: ${{ inputs.force_delete_rg }}
+          EPHEMERAL: ${{ inputs.ephemeral }}
         run: |
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
@@ -80,7 +120,16 @@ jobs:
               [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
               [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
               [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
-              [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+              if [[ "${EPHEMERAL}" == "true" ]]; then
+                # Invert the guard: a dev/test teardown must target anything EXCEPT the
+                # active profile, so it can never destroy the production demo.
+                if [[ "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]]; then
+                  echo "::error::An ephemeral teardown cannot target the active repository profile (${REPOSITORY_PREFIX}/${REPOSITORY_ENVIRONMENT})."
+                  exit 1
+                fi
+              else
+                [[ "${DEPLOYMENT_SCENARIO}" == "${REPOSITORY_SCENARIO}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" && "${TF_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The destroy target does not match the active repository profile."; exit 1; }
+              fi
             fi
             [[ "${IMAGE_TAG}" =~ ${SHA_PATTERN} ]] || { echo "::error::github.sha is not a full commit SHA."; exit 1; }
             {
@@ -102,10 +151,10 @@ jobs:
           RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
           RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
           RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-          APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
-          APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
-          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
-          SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
+          APP_VNET_ADDRESS_SPACE: ${{ inputs.ephemeral && (vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16') }}
+          APP_PE_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27') }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27') }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27') }}
         run: |
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"

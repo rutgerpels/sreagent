@@ -28,6 +28,48 @@ on:
         required: false
         default: false
 
+  # Callable so the dev/test pipeline provisions ephemeral environments through the
+  # same code path as production, leaving no room for the two pipelines to drift.
+  workflow_call:
+    inputs:
+      scenario:
+        description: "Deployment scenario"
+        type: string
+        required: true
+      prefix:
+        description: "Resource name prefix"
+        type: string
+        required: false
+        default: "contosopay"
+      environment:
+        description: "Environment label"
+        type: string
+        required: false
+        default: "demo"
+      location:
+        description: "Azure region"
+        type: string
+        required: false
+        default: "swedencentral"
+      open_incident_pr:
+        description: "Open the PR that arms the memory-leak incident"
+        type: boolean
+        required: false
+        default: false
+      environment_name:
+        description: >-
+          GitHub environment that requests the OIDC token. Dev/test uses an
+          environment-scoped federated credential so it can run from any branch.
+          Empty means no environment, which preserves production behaviour.
+        type: string
+        required: false
+        default: ""
+      ephemeral:
+        description: "Permit a throwaway prefix/environment that differs from the active profile"
+        type: boolean
+        required: false
+        default: false
+
 permissions:
   contents: read
 
@@ -59,6 +101,7 @@ jobs:
           ACTIVE_SCENARIO: ${{ vars.DEPLOYMENT_SCENARIO }}
           ACTIVE_PREFIX: ${{ vars.TF_PREFIX }}
           ACTIVE_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
+          EPHEMERAL: ${{ inputs.ephemeral }}
         run: |
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
@@ -81,7 +124,15 @@ jobs:
           done
           LEAK_STATE="$(sed -nE 's/^[[:space:]]*enable_slow_leak[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' infra/leak.auto.tfvars)"
           [[ "${LEAK_STATE}" == "false" ]] || { echo "::error file=infra/leak.auto.tfvars::A full deployment requires enable_slow_leak = false."; exit 1; }
-          if [[ -n "${ACTIVE_SCENARIO}" ]]; then
+          if [[ "${EPHEMERAL}" == "true" ]]; then
+            # A dev/test run must never target the active profile's own identity, or its
+            # teardown would destroy the production demo environment.
+            if [[ "${SELECTED_PREFIX}" == "${ACTIVE_PREFIX}" && "${SELECTED_ENVIRONMENT}" == "${ACTIVE_ENVIRONMENT}" ]]; then
+              echo "::error::An ephemeral deployment cannot reuse the active prefix/environment (${ACTIVE_PREFIX}/${ACTIVE_ENVIRONMENT})."
+              exit 1
+            fi
+          fi
+          if [[ -n "${ACTIVE_SCENARIO}" && "${EPHEMERAL}" != "true" ]]; then
             [[ "${ACTIVE_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Nonempty repository variable DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
             [[ "${ACTIVE_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
             [[ "${ACTIVE_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
@@ -92,6 +143,9 @@ jobs:
   deploy:
     needs: validate-profile
     runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    # Empty means no environment, so production keeps requesting its branch-scoped
+    # OIDC token exactly as before.
+    environment: ${{ inputs.environment_name }}
     timeout-minutes: 75
     permissions:
       contents: read
@@ -153,10 +207,10 @@ jobs:
           RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
           RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
           RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-          APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
-          APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
-          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
-          SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
+          APP_VNET_ADDRESS_SPACE: ${{ inputs.ephemeral && (vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16') }}
+          APP_PE_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27') }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27') }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27') }}
         run: |
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
