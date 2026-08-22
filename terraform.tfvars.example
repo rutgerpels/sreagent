@@ -29,6 +29,14 @@ app_private_endpoint_subnet_address_prefix = "10.100.0.0/27"
 container_apps_subnet_address_prefix       = "10.100.0.64/27"
 sre_agent_subnet_address_prefix            = "10.100.0.96/27"
 
+# Scenario C only: a VNet can hold just one private DNS zone per namespace. When
+# the shared runner VNet already carries a zone from another deployment, point
+# these at it so this deployment reuses it instead of creating an unlinkable
+# duplicate. Leave empty to create and link dedicated zones. The deployment
+# workflows discover and set these automatically.
+key_vault_private_dns_zone_id = ""
+acr_private_dns_zone_id       = ""
+
 enable_grafana = true
 
 # Owned by the deployment's second phase. Workflows publish each SHA tag once,

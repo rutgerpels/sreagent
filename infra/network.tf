@@ -119,8 +119,30 @@ resource "azurerm_virtual_network_peering" "runner_to_app" {
   ]
 }
 
+###############################################################################
+# Private DNS zones. A VNet may only be linked to one zone per namespace, so a
+# shared runner VNet that another deployment already linked forces reuse of that
+# existing zone. In reuse mode this deployment creates no zone and no runner
+# link; it only adds its own app-VNet link and private endpoint A records.
+###############################################################################
+
+locals {
+  key_vault_zone_shared = var.key_vault_private_dns_zone_id != ""
+  acr_zone_shared       = var.acr_private_dns_zone_id != ""
+
+  key_vault_zone_id = local.profile.private_network_enabled ? (
+    local.key_vault_zone_shared ? var.key_vault_private_dns_zone_id : azurerm_private_dns_zone.key_vault[0].id
+  ) : ""
+  acr_zone_id = local.profile.private_network_enabled ? (
+    local.acr_zone_shared ? var.acr_private_dns_zone_id : azurerm_private_dns_zone.acr[0].id
+  ) : ""
+
+  key_vault_zone_resource_group = local.key_vault_zone_shared ? split("/", var.key_vault_private_dns_zone_id)[4] : azurerm_resource_group.this.name
+  acr_zone_resource_group       = local.acr_zone_shared ? split("/", var.acr_private_dns_zone_id)[4] : azurerm_resource_group.this.name
+}
+
 resource "azurerm_private_dns_zone" "key_vault" {
-  count = local.profile.private_network_enabled ? 1 : 0
+  count = local.profile.private_network_enabled && !local.key_vault_zone_shared ? 1 : 0
 
   name                = "privatelink.vaultcore.azure.net"
   resource_group_name = azurerm_resource_group.this.name
@@ -128,7 +150,7 @@ resource "azurerm_private_dns_zone" "key_vault" {
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "key_vault" {
-  count = local.profile.private_network_enabled ? 1 : 0
+  count = local.profile.private_network_enabled && !local.key_vault_zone_shared ? 1 : 0
 
   name                  = "runner-vnet-kv-${local.suffix}"
   resource_group_name   = azurerm_resource_group.this.name
@@ -142,8 +164,8 @@ resource "azurerm_private_dns_zone_virtual_network_link" "key_vault_app" {
   count = local.profile.private_network_enabled ? 1 : 0
 
   name                  = "app-vnet-kv-${local.suffix}"
-  resource_group_name   = azurerm_resource_group.this.name
-  private_dns_zone_name = azurerm_private_dns_zone.key_vault[0].name
+  resource_group_name   = local.key_vault_zone_resource_group
+  private_dns_zone_name = "privatelink.vaultcore.azure.net"
   virtual_network_id    = azurerm_virtual_network.app[0].id
   registration_enabled  = false
   tags                  = local.tags
@@ -167,7 +189,7 @@ resource "azurerm_private_endpoint" "key_vault" {
 
   private_dns_zone_group {
     name                 = "key-vault"
-    private_dns_zone_ids = [azurerm_private_dns_zone.key_vault[0].id]
+    private_dns_zone_ids = [local.key_vault_zone_id]
   }
 
   depends_on = [
@@ -177,7 +199,7 @@ resource "azurerm_private_endpoint" "key_vault" {
 }
 
 resource "azurerm_private_dns_zone" "acr" {
-  count = local.profile.private_network_enabled ? 1 : 0
+  count = local.profile.private_network_enabled && !local.acr_zone_shared ? 1 : 0
 
   name                = "privatelink.azurecr.io"
   resource_group_name = azurerm_resource_group.this.name
@@ -185,7 +207,7 @@ resource "azurerm_private_dns_zone" "acr" {
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "acr" {
-  count = local.profile.private_network_enabled ? 1 : 0
+  count = local.profile.private_network_enabled && !local.acr_zone_shared ? 1 : 0
 
   name                  = "runner-vnet-acr-${local.suffix}"
   resource_group_name   = azurerm_resource_group.this.name
@@ -199,8 +221,8 @@ resource "azurerm_private_dns_zone_virtual_network_link" "acr_app" {
   count = local.profile.private_network_enabled ? 1 : 0
 
   name                  = "app-vnet-acr-${local.suffix}"
-  resource_group_name   = azurerm_resource_group.this.name
-  private_dns_zone_name = azurerm_private_dns_zone.acr[0].name
+  resource_group_name   = local.acr_zone_resource_group
+  private_dns_zone_name = "privatelink.azurecr.io"
   virtual_network_id    = azurerm_virtual_network.app[0].id
   registration_enabled  = false
   tags                  = local.tags
@@ -224,7 +246,7 @@ resource "azurerm_private_endpoint" "acr" {
 
   private_dns_zone_group {
     name                 = "acr"
-    private_dns_zone_ids = [azurerm_private_dns_zone.acr[0].id]
+    private_dns_zone_ids = [local.acr_zone_id]
   }
 
   depends_on = [
