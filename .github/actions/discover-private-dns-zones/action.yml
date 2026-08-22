@@ -1,0 +1,67 @@
+name: Discover shared private DNS zones
+description: >-
+  Azure refuses to link one VNet to two private DNS zones with overlapping
+  namespaces. The Scenario C runner VNet is shared, so another deployment may
+  already own privatelink.vaultcore.azure.net or privatelink.azurecr.io on it.
+  This action detects those zones and exports them as Terraform inputs so the
+  deployment reuses the linked zone instead of creating an unlinkable duplicate.
+
+inputs:
+  runner-vnet-resource-group:
+    description: Resource group containing the shared runner VNet.
+    required: true
+  runner-vnet-name:
+    description: Name of the shared runner VNet.
+    required: true
+  self-resource-group-prefix:
+    description: >-
+      Resource group name prefix owned by this deployment. Zones inside a
+      matching resource group are ignored so a redeployment does not mistake its
+      own zone for a foreign one and churn Terraform state.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Discover shared private DNS zones
+      shell: bash
+      env:
+        RUNNER_VNET_RG: ${{ inputs.runner-vnet-resource-group }}
+        RUNNER_VNET_NAME: ${{ inputs.runner-vnet-name }}
+        SELF_RG_PREFIX: ${{ inputs.self-resource-group-prefix }}
+      run: |
+        set -euo pipefail
+
+        vnet_id="$(az network vnet show -g "${RUNNER_VNET_RG}" -n "${RUNNER_VNET_NAME}" --query id -o tsv)"
+        [[ -n "${vnet_id}" ]] || { echo "::error::Runner VNet ${RUNNER_VNET_NAME} was not found in ${RUNNER_VNET_RG}."; exit 1; }
+
+        # Emits the ID of a foreign zone that already links the runner VNet, or nothing.
+        discover_zone() {
+          local zone_name="$1" zone_id zone_rg link_count
+          while read -r zone_id; do
+            [[ -n "${zone_id}" ]] || continue
+            zone_rg="$(cut -d/ -f5 <<<"${zone_id}")"
+            [[ "${zone_rg}" == "${SELF_RG_PREFIX}"* ]] && continue
+            link_count="$(az network private-dns link vnet list -g "${zone_rg}" -z "${zone_name}" \
+              --query "length([?virtualNetwork.id=='${vnet_id}'])" -o tsv)"
+            if [[ "${link_count}" != "0" ]]; then
+              printf '%s' "${zone_id}"
+              return 0
+            fi
+          done < <(az network private-dns zone list --query "[?name=='${zone_name}'].id" -o tsv)
+        }
+
+        kv_zone_id="$(discover_zone privatelink.vaultcore.azure.net)"
+        acr_zone_id="$(discover_zone privatelink.azurecr.io)"
+
+        {
+          echo "TF_VAR_key_vault_private_dns_zone_id=${kv_zone_id}"
+          echo "TF_VAR_acr_private_dns_zone_id=${acr_zone_id}"
+        } >> "${GITHUB_ENV}"
+
+        if [[ -n "${kv_zone_id}" ]]; then
+          echo "::notice::Reusing existing Key Vault private DNS zone already linked to ${RUNNER_VNET_NAME}: ${kv_zone_id}"
+        fi
+        if [[ -n "${acr_zone_id}" ]]; then
+          echo "::notice::Reusing existing ACR private DNS zone already linked to ${RUNNER_VNET_NAME}: ${acr_zone_id}"
+        fi

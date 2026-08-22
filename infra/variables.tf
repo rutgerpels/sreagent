@@ -55,6 +55,31 @@ variable "runner_private_endpoint_subnet_name" {
   default     = "private-endpoints"
 }
 
+# Azure rejects linking one VNet to two zones with overlapping namespaces. When the
+# shared runner VNet already carries a privatelink.vaultcore.azure.net zone from another
+# deployment, reuse it instead of creating a second, unlinkable zone.
+variable "key_vault_private_dns_zone_id" {
+  description = "Resource ID of an existing privatelink.vaultcore.azure.net zone already linked to the runner VNet. Leave empty to create and link a dedicated zone."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.key_vault_private_dns_zone_id == "" || can(regex("/privateDnsZones/privatelink\\.vaultcore\\.azure\\.net$", var.key_vault_private_dns_zone_id))
+    error_message = "key_vault_private_dns_zone_id must be empty or a privatelink.vaultcore.azure.net private DNS zone resource ID."
+  }
+}
+
+variable "acr_private_dns_zone_id" {
+  description = "Resource ID of an existing privatelink.azurecr.io zone already linked to the runner VNet. Leave empty to create and link a dedicated zone."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.acr_private_dns_zone_id == "" || can(regex("/privateDnsZones/privatelink\\.azurecr\\.io$", var.acr_private_dns_zone_id))
+    error_message = "acr_private_dns_zone_id must be empty or a privatelink.azurecr.io private DNS zone resource ID."
+  }
+}
+
 variable "app_vnet_address_space" {
   description = "Address space for the regional application VNet. Must not overlap the runner VNet."
   type        = string
