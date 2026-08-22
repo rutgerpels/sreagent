@@ -1,0 +1,134 @@
+name: dev-test
+
+# Dev/test pipeline. Run it from any feature or bugfix branch to prove a change
+# against real Azure before it is merged.
+#
+# It provisions a throwaway environment through the very same reusable workflows
+# that production uses, so a green run here is meaningful evidence rather than an
+# approximation, and then always tears that environment down again.
+#
+# Authentication uses the `dev-test` GitHub environment, which has its own
+# environment-scoped federated credential. That is what makes branch runs possible:
+# the production credential only trusts `refs/heads/main`, so any branch run against
+# it fails with AADSTS700213.
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Deployment scenario to validate"
+        type: choice
+        required: true
+        default: C
+        options: [A, B, C]
+      location:
+        description: "Azure region"
+        required: false
+        default: "swedencentral"
+      keep_environment:
+        description: "Skip teardown so the environment can be inspected (remember to destroy it manually)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# One ephemeral environment at a time: they share the runner VNet, and their peered
+# address space would otherwise overlap.
+concurrency:
+  group: dev-test-${{ inputs.scenario }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: Resolve ephemeral identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.name.outputs.environment }}
+    steps:
+      - name: Derive ephemeral environment label
+        id: name
+        shell: bash
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          ACTIVE_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
+        run: |
+          set -euo pipefail
+          # Must satisfy the deploy workflow's environment pattern and stay short,
+          # because it feeds globally unique resource names such as the ACR.
+          ENVIRONMENT="dev${RUN_NUMBER}"
+          [[ "${ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]] || { echo "::error::Derived environment '${ENVIRONMENT}' is invalid."; exit 1; }
+          [[ "${ENVIRONMENT}" != "${ACTIVE_ENVIRONMENT}" ]] || { echo "::error::Derived environment collides with the active profile."; exit 1; }
+          echo "environment=${ENVIRONMENT}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Ephemeral environment label: ${ENVIRONMENT}"
+
+  deploy:
+    name: Deploy ephemeral environment
+    needs: identity
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      scenario: ${{ inputs.scenario }}
+      prefix: contosopay
+      environment: ${{ needs.identity.outputs.environment }}
+      location: ${{ inputs.location }}
+      open_incident_pr: false
+      environment_name: dev-test
+      ephemeral: true
+
+  teardown:
+    name: Destroy ephemeral environment
+    needs: [identity, deploy]
+    # always() so a failed deployment still gets cleaned up; skipped only when the
+    # operator explicitly asked to keep the environment for inspection.
+    if: ${{ always() && inputs.keep_environment == false && needs.identity.result == 'success' }}
+    uses: ./.github/workflows/destroy.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      scenario: ${{ inputs.scenario }}
+      prefix: contosopay
+      environment: ${{ needs.identity.outputs.environment }}
+      force_delete_rg: false
+      delete_state_storage: true
+      environment_name: dev-test
+      ephemeral: true
+
+  report:
+    name: Report dev/test outcome
+    needs: [identity, deploy, teardown]
+    if: ${{ always() && needs.identity.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarise
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ needs.identity.outputs.environment }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          TEARDOWN_RESULT: ${{ needs.teardown.result }}
+          KEEP_ENVIRONMENT: ${{ inputs.keep_environment }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Dev/test run"
+            echo
+            echo "| Stage | Result |"
+            echo "| --- | --- |"
+            echo "| Ephemeral environment | \`${ENVIRONMENT}\` |"
+            echo "| Deploy | ${DEPLOY_RESULT} |"
+            echo "| Teardown | ${TEARDOWN_RESULT} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${KEEP_ENVIRONMENT}" == "true" ]]; then
+            echo "::warning::Teardown was skipped. Destroy '${ENVIRONMENT}' manually to avoid ongoing cost."
+          elif [[ "${TEARDOWN_RESULT}" != "success" ]]; then
+            echo "::error::Teardown did not succeed. Environment '${ENVIRONMENT}' may still exist and incur cost."
+            exit 1
+          fi
+
+          [[ "${DEPLOY_RESULT}" == "success" ]] || { echo "::error::The change failed validation on a real environment."; exit 1; }
