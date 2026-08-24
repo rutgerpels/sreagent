@@ -23,6 +23,7 @@ Best for showing capability quickly. Shortest setup, most dramatic moment.
 
 > "It found the bug and raised the PR." The agent holds only Reader, refuses to
 > touch Azure, and remediates by proposing a one-line change that a human merges.
+> No GitHub secret is created at any point.
 
 Best for enterprises with change management. Usually the most convincing
 scenario for an operations or security audience.
@@ -50,27 +51,35 @@ network and configuration posture before they care about the agent's behaviour.
 | Agent profile | High / Contributor / Autonomous | Low / Reader / Review | Low / Reader / Review |
 | Control endpoints | Public | Public, RBAC and TLS protected | Private state, ACR, and Key Vault |
 | Deployment runner | GitHub-hosted or local wrapper | GitHub-hosted or local wrapper | Private self-hosted runner |
-| Code context | Code Access | Code Access | Code Access via a bring-your-own GitHub App |
-| Write path | Direct Azure action | Built-in GitHub MCP connector with a short-lived fine-grained PAT | Agent-authored remediation pull request over Code Access |
+| Code context | Code Access | Code Access, signed in with your account (OAuth) | Code Access via a bring-your-own GitHub App |
+| Write path | Direct Azure action | Agent-authored remediation pull request over Code Access | Agent-authored remediation pull request over Code Access |
 | Agent configuration | Portal | Portal | Terraform plus an idempotent REST reconciler |
-| Credential to revoke afterwards | None | The fine-grained PAT | The GitHub App key |
+| Credential to revoke afterwards | None | None | The GitHub App key |
 
-**Code Access and GitHub writes are different capabilities.** Code Access
-indexes and correlates source, and it is also the surface through which
-Scenario C's agent opens its remediation pull request. Scenario B instead adds
-a separate write connector backed by a PAT. Scenario A has no GitHub write path
-at all.
+**Code Access is the GitHub write path, not just a read path.** It indexes and
+correlates source, and it is also the surface through which both Scenario B and
+Scenario C open their remediation pull requests — the agent creates the branch,
+commits, and raises the PR itself. Neither scenario needs a separate write
+connector or a token. Scenario A has no GitHub write path at all.
 
-**Scenario C's guarantee is Azure RBAC, not a missing GitHub credential.** The
-agent holds Reader on the subscription and the reconciled tool policy denies
-Azure writes, so it physically cannot mutate production. Being able to open a
-pull request does not change that: a human still reviews and merges, and
-`apply-infra.yml` performs the actual change.
+**What separates B from C is posture, not capability.** Both hold Reader on
+Azure and both open pull requests over Code Access. C additionally runs against
+private endpoints and a self-hosted runner, signs in with a bring-your-own
+GitHub App instead of a user account, and reconciles its agent configuration
+from a committed manifest.
 
-> Agent-authored pull requests are verified under **OAuth-based Code Access**.
-> Whether a bring-your-own GitHub App carries the same write capability is
-> **untested** — see
-> [Scenario C, step 4](scenario-c-private-gitops.md#step-4-create-the-code-access-github-app).
+**The guarantee is Azure RBAC, not a missing GitHub credential.** In B and C the
+agent holds Reader and the tool policy denies Azure writes, so it physically
+cannot mutate production. Being able to open a pull request does not change
+that: a human still reviews and merges, and `apply-infra.yml` performs the
+actual change.
+
+> Agent-authored pull requests are verified under **OAuth-based Code Access**,
+> prompted interactively. Two things remain unverified: whether a
+> bring-your-own GitHub App carries the same write capability — see
+> [Scenario C, step 4](scenario-c-private-gitops.md#step-4-create-the-code-access-github-app) —
+> and whether either scenario produces the pull request unprompted from an
+> alert-triggered response plan.
 
 ---
 
