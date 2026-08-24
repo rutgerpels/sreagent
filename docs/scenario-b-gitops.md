@@ -359,9 +359,8 @@ GitOps path instead. Then let the response plan run.
 **Expect.** The agent uses the built-in GitHub MCP tools to create a branch,
 change only `infra/leak.auto.tfvars`, and open an **unmerged** pull request.
 
-> In Scenario B the agent acts through the connector directly. It does **not**
-> create a remediation issue, call a broker, or trigger the
-> `sre-remediation-pr` workflow — those belong only to
+> In Scenario B the agent acts through the connector directly. Scenario C uses a
+> different surface for the same outcome — see
 > [Scenario C](scenario-c-private-gitops.md).
 
 ### Step 20. Review, merge, and verify
@@ -460,7 +459,6 @@ state for another profile.
 | Deployment runner | GitHub-hosted, or the local wrapper |
 | Code context | Code Access (read-only) |
 | GitHub write path | Built-in GitHub MCP connector with a short-lived fine-grained PAT |
-| Remediation broker | None |
 | Incident trigger | Pull request setting `enable_slow_leak = true` |
 | Remediation path | Agent-authored pull request setting the flag to `false`, merged by a human |
 

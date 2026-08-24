@@ -9,13 +9,12 @@ environment = "demo"
 location    = "swedencentral"
 
 # Immutable deployment profile: A, B, or C.
-# A = public endpoints, High/Contributor/Autonomous agent, no broker.
+# A = public endpoints, High/Contributor/Autonomous agent, no GitHub write path.
 # B = public ACR/Key Vault, Low/Reader/Review agent, manual built-in GitHub MCP
 #     connector with a short-lived fine-grained PAT. Terraform never accepts PAT.
 # C = private endpoints/runner peering, Low/Reader/Review agent, Terraform-owned
-#     VNet sandbox egress, and API-managed read-only agent configuration. The
-#     remote remediation broker is disabled while its required managed-identity
-#     authentication is unsupported.
+#     VNet sandbox egress, and API-managed agent configuration. The agent holds
+#     Reader on Azure and remediates by opening a pull request.
 scenario = "A"
 
 # Scenario C only: existing private runner network plus non-overlapping address
@@ -61,22 +60,3 @@ image_digests = {
 # sre_agent_monthly_agent_unit_limit = 10000
 # enable_sre_code_access              = false
 # sre_code_access_private_key_secret_name = "sre-code-access-github-app-pem"
-
-# --- Dormant broker metadata -------------------------------------------------
-# These values are not evaluated by the current Scenario C profile. Retain them
-# only as placeholders for a future release where remote Streamable-HTTP MCP
-# supports the required managed-identity authentication. Terraform never accepts
-# a GitHub App secret or PEM key.
-#
-# The allowed caller is derived when enable_sre_agents=true. The explicit value
-# is only a fallback for direct Terraform use with a separately managed agent.
-# sre_remediation_allowed_caller_principal_id        = "00000000-0000-0000-0000-000000000000"
-# sre_remediation_entra_api_client_id                = "00000000-0000-0000-0000-000000000000"
-# sre_remediation_entra_token_audience               = "00000000-0000-0000-0000-000000000000"
-# sre_remediation_entra_token_scope                  = "api://00000000-0000-0000-0000-000000000000/.default"
-# sre_remediation_github_app_id                      = "123456"
-# sre_remediation_github_app_installation_id         = "12345678"
-# sre_remediation_github_app_bot_login               = "example-remediation-app[bot]"
-# sre_remediation_github_repository_owner            = "example-owner"
-# sre_remediation_github_repository_name             = "example-repository"
-# sre_remediation_github_app_private_key_name         = "github-app-signing-key"

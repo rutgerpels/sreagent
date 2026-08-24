@@ -62,8 +62,6 @@ root-cause context. It is not automatically a GitHub write credential:
 Scenario C stores the Code Access App PEM as a Key Vault secret. The workflow
 passes only its URI. A dedicated identity reads only that secret through
 secret-scoped Key Vault RBAC; the agent action identity has no secret-read role.
-This is separate from the broker's proposed issues-write App and non-exportable
-signing key.
 
 See
 [GitHub connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/github-connector).
@@ -100,7 +98,7 @@ GitHub mutation paths while allowing investigation.
 
 ### Scenario A
 
-No GitOps connector or broker. Azure tools operate under the
+No GitOps write connector. Azure tools operate under the
 High/Contributor/Autonomous profile.
 
 ### Scenario B
@@ -114,15 +112,10 @@ needed for the one-file remediation and revoke the PAT after the demo.
 Application Insights, Log Analytics, and Azure Monitor connectors are
 Terraform-owned ARM child resources.
 
-The custom remote MCP connector is not enabled. Current Streamable-HTTP
-documentation supports bearer-token and custom-header authentication; managed
-identity is documented for supported Azure-backed stdio connectors. The broker
-requires an Entra token for a dedicated audience and exact agent principal, so
-substituting a static bearer token, PAT, anonymous access, or network-only trust
-is forbidden.
-
-The reconciler fails if `SRE_REMEDIATION_CONNECTOR_ENABLED=true`. Revisit this
-when Microsoft documents a supported remote HTTP managed-identity flow.
+No custom remote MCP connector is used. The agent's GitHub write path is Code
+Access, which the reconciler configures from Key Vault-backed GitHub App
+material. Do not substitute a static bearer token, PAT, anonymous access, or
+network-only trust for that path.
 
 ## Scenario C network integration
 
@@ -144,10 +137,7 @@ issued credentials:
 
 - GitHub App creation and installation;
 - GitHub App private-key issuance;
-- Key Vault insertion of the Code Access PEM secret;
-- future broker Entra and signing-key bootstrap only after its authentication
-  path is supported;
-- broker Entra application registration and consent.
+- Key Vault insertion of the Code Access PEM secret.
 
 GitHub does not provide a noninteractive API for creating an App or issuing its
 initial private key. These are explicit bootstrap boundaries, not portal-managed
@@ -157,9 +147,9 @@ agent configuration.
 
 - A directly mitigates Azure under its Autonomous policy.
 - B opens an unmerged one-file Pull Request with the built-in GitHub MCP.
-- C investigates and proposes the same one-file GitOps fix. Until the broker
-  connector authentication gap closes, a human opens the remediation Pull
-  Request with `scripts/trigger-incident-gitops.* --reset`.
+- C investigates with Reader-only Azure access and opens the same one-file
+  remediation Pull Request through Code Access, which a human reviews and
+  merges.
 
 For B and C, the durable fix changes only `infra/leak.auto.tfvars` from `true`
 to `false`; human merge remains the approval gate.

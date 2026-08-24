@@ -2,9 +2,9 @@
 # Optional Azure SRE Agent (Microsoft.App/agents): exactly one selected profile.
 # A is High/Contributor/Autonomous; B and C are Low/Reader/Review. Scenario B's
 # built-in GitHub MCP connector and short-lived fine-grained PAT are configured
-# manually. Scenario C automates read-only Code Access when explicitly enabled;
-# the constrained remediation broker stays dormant while its required remote MCP
-# managed-identity authentication is unsupported.
+# manually. Scenario C automates Code Access when explicitly enabled, which is
+# how its agent authors remediation pull requests while holding only Reader on
+# Azure.
 ###############################################################################
 
 locals {
@@ -163,9 +163,9 @@ resource "azapi_resource" "agent" {
             allowedHosts            = []
             allowedRegistries       = []
             allowedCodeRepositories = []
-            # The dormant broker must not create a network path while its
-            # required remote MCP authentication is unsupported.
-            allowHttpMcpServerNetworkAccess = local.profile.broker_enabled
+            # No remote HTTP MCP server is used. Code Access is a first-party
+            # connector, so the agent needs no outbound MCP network path.
+            allowHttpMcpServerNetworkAccess = false
             vnetConfiguration = {
               usePrivateDnsResolution = true
             }

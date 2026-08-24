@@ -15,7 +15,6 @@ import {
 const config = resolve("agent/scenario-c");
 const disabledEnvironment = {
   SRE_CODE_ACCESS_ENABLED: "false",
-  SRE_REMEDIATION_CONNECTOR_ENABLED: "false",
 };
 
 test("loads the supported Scenario C desired state", () => {
@@ -44,17 +43,6 @@ test("requires complete Key Vault-backed Code Access metadata", () => {
         SRE_CODE_ACCESS_ENABLED: "true",
       }),
     /Code Access is enabled but missing/,
-  );
-});
-
-test("fails closed for unsupported remote MCP managed identity", () => {
-  assert.throws(
-    () =>
-      loadDesiredState(config, {
-        ...disabledEnvironment,
-        SRE_REMEDIATION_CONNECTOR_ENABLED: "true",
-      }),
-    /fails closed/,
   );
 });
 

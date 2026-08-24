@@ -37,9 +37,9 @@ profile**. It is not a set of independent toggles.
 
 | Profile | SRE Agent | Network and runner | GitHub remediation |
 | --- | --- | --- | --- |
-| **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector, no broker |
-| **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Built-in GitHub MCP connector with a short-lived fine-grained PAT; no broker |
-| **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Read-only Code Access; agent-initiated writes disabled until remote HTTP MCP supports the required nonsecret authentication |
+| **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
+| **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Built-in GitHub MCP connector with a short-lived fine-grained PAT |
+| **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
 
 Resource names and tags include the selected scenario. State is isolated too:
 
@@ -197,13 +197,12 @@ These hold in every scenario:
 | Path | Purpose |
 | --- | --- |
 | `infra/` | Scenario-derived Terraform profiles and Azure resources |
-| `src/` | The three services plus the Scenario C-only broker |
+| `src/` | The three ContosoPay services |
 | `.github/workflows/deploy.yml` | Full scenario-aware deployment |
 | `.github/workflows/apply-infra.yml` | Scenario-aware infrastructure and flag apply |
 | `.github/workflows/deploy-apps.yml` | Full-SHA image build and app update |
 | `.github/workflows/destroy.yml` | Verified profile-specific teardown |
-| `.github/workflows/sre-remediation-pr.yml` | Scenario C-only issue-to-PR remediation |
-| `scripts/` | Local A/B deploy, teardown, incident triggers, Scenario C key import, SRE Agent reconciliation |
+| `scripts/` | Local A/B deploy, teardown, incident triggers, SRE Agent reconciliation |
 | `agent/` | Declarative Scenario C manifest, tool policy, custom-agent prompts, runbook |
 | `docs/` | Scenario walkthroughs and references |
 

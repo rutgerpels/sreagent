@@ -74,8 +74,9 @@ with change management or audit requirements.
 Private endpoints for state, registry, and Key Vault; a self-hosted runner
 inside your network; a bring-your-own GitHub App; and an agent whose entire
 configuration is declared in a committed manifest and verified on every deploy.
-In the current preview the agent proposes the fix and a human opens the pull
-request. Use it for regulated industries and security architects.
+The agent holds Reader on Azure, so it cannot mutate production; it opens the
+remediation pull request instead, and a human merges it. Use it for regulated
+industries and security architects.
 
 *~100 minutes preparation, ~25 minutes live.*
 
