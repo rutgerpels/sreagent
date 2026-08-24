@@ -311,7 +311,6 @@ if ($appliedScenario -ne $Scenario) {
 $frontendUrl = terraform -chdir="$infraDir" output -raw frontend_url
 $resourceGroup = terraform -chdir="$infraDir" output -raw resource_group_name
 $grafana = terraform -chdir="$infraDir" output -raw grafana_endpoint 2>$null
-$brokerEndpoint = terraform -chdir="$infraDir" output -raw sre_remediation_broker_endpoint_url 2>$null
 
 Write-Host ''
 Write-Host '============================================================' -ForegroundColor Green
@@ -321,7 +320,6 @@ Write-Host "  Frontend URL : $frontendUrl"
 Write-Host "  Resource grp : $resourceGroup"
 Write-Host "  Scenario     : $Scenario"
 if ($grafana) { Write-Host "  Grafana      : $grafana" }
-if ($brokerEndpoint -and $brokerEndpoint -ne 'null') { Write-Host "  MCP broker   : $brokerEndpoint" }
 Write-Host ''
 Write-Host ' Remote Terraform state (set these as GitHub Actions *variables*' -ForegroundColor Yellow
 Write-Host ' for apply-infra.yml):' -ForegroundColor Yellow

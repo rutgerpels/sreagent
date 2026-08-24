@@ -17,7 +17,7 @@
       "name": "gitops-remediation",
       "instructionsFile": "gitops-remediation.instructions.md",
       "properties": {
-        "handoffDescription": "Investigates ContosoPay memory incidents, correlates Azure telemetry with repository state, and proposes the exact GitOps remediation without mutating Azure.",
+        "handoffDescription": "Investigates ContosoPay memory incidents, correlates Azure telemetry with repository state, and opens a remediation pull request through Code Access without mutating Azure.",
         "handoffs": [],
         "tools": [
           "QueryAppInsightsUsingAppId",

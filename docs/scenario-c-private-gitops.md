@@ -11,12 +11,13 @@ code and reconciled, not clicked together in a portal.
 teams who will ask "can this run in *our* network, configured from *our*
 pipeline?" before they ask what the agent can do.
 
-**Set expectations up front.** In the current preview, Scenario C's agent is
-**Reader-only and has no supported write path to GitHub**. It investigates and
-proposes the exact one-file fix; a human then opens the remediation pull
-request. This is a deliberate design decision, not a gap in the demo — see
-[the remote MCP limitation](#reference-the-remote-mcp-preview-limitation). Say
-this to the audience before the demo, not after they notice.
+**Set expectations up front.** Scenario C's agent holds **Reader on Azure** and
+**cannot mutate production** — no restarts, no scaling, no `terraform apply`. It
+*can* write to GitHub. It investigates, then opens a remediation pull request
+itself; a human reviews and merges it, and the pipeline deploys the fix. The
+GitOps guarantee comes from Azure RBAC and tool policy, not from denying the
+agent GitHub access. Say this to the audience before the demo, not after they
+notice.
 
 **Time budget.**
 
@@ -42,10 +43,11 @@ across demos.
 3. An agent whose policy, custom agent, response plan, schedule, and knowledge
    were applied and **verified** from a committed manifest.
 4. A fault armed by a merged pull request, and an incident correlated back to it.
-5. The agent identifying the precise one-line fix — and stopping there, because
-   Reader access and the tool policy forbid it from acting.
-6. A human opening, reviewing, and merging the remediation pull request through
-   the private pipeline.
+5. The agent identifying the precise one-line fix — and refusing to apply it
+   directly, because Reader access and the tool policy forbid it from touching
+   Azure.
+6. The agent opening a remediation pull request instead, and a human reviewing
+   and merging it through the private pipeline.
 
 ---
 
@@ -133,9 +135,9 @@ admin credential. Deployment is OIDC-only.
 
 ## Phase 2 — Prepare Code Access (optional but recommended)
 
-Code Access is how the agent correlates an incident to a commit. Without it, the
-demo still works but loses its most persuasive evidence. It is a **read-only**
-path — not a write connector.
+Code Access is how the agent correlates an incident to a commit, and how it
+opens the remediation pull request. Without it, the demo still works but loses
+its most persuasive evidence and the agent cannot propose the fix itself.
 
 Skip to phase 3 if you want to run without repository context; leave
 `SRE_CODE_ACCESS_ENABLED=false` in that case. Partial configuration fails closed.
@@ -147,14 +149,24 @@ Skip to phase 3 if you want to run without repository context; leave
 | Permission | Level |
 | --- | --- |
 | Metadata | Read |
-| Contents | Read |
+| Contents | Read/Write |
+| Pull requests | Read/Write |
 
-No Issues, Pull requests, Actions, Administration, Secrets, or Workflows
-permissions. Install it on **this repository only**.
+`Contents: Read/Write` and `Pull requests: Read/Write` are what let the agent
+push a branch and open the remediation pull request. No Issues, Actions,
+Administration, Secrets, or Workflows permissions. Install it on **this
+repository only**.
 
-**Expect.** An App with a client ID and a downloaded private key (PEM). Keep it
-strictly separate from the future remediation App described in the
-[reference](#reference-the-dormant-remediation-broker).
+> **Untested path.** Agent-authored pull requests were verified live using
+> **OAuth-based Code Access**, where the agent created the branch itself and
+> committed as `Azure SRE Agent <noreply@microsoft.com>`. The equivalent flow
+> under a bring-your-own GitHub App has **not** been verified. The App is
+> documented as primary here because Scenario C's story is configuration from
+> code rather than portal clicks. If the agent cannot write with the App,
+> connect Code Access over OAuth in the portal instead — that path is proven,
+> at the cost of one manual step.
+
+**Expect.** An App with a client ID and a downloaded private key (PEM).
 
 ### Step 5. Store the PEM in Key Vault
 
@@ -219,7 +231,7 @@ populated.
 
 **Expect on success.** The workflow summary lists the resource group, ACR,
 frontend URL, the activation variables, and a Scenario C bootstrap note
-confirming that the broker and remote MCP connector were **not** deployed.
+confirming that the agent holds Reader on Azure and remediates by pull request.
 
 **If the job never starts**, your runner labels do not match step 2.
 
@@ -314,8 +326,9 @@ state, applies the flag, and rolls a new `payment-service` revision.
 
 - The rising working-set chart.
 - The alert rule's five-minute average.
-- The three-part boundary: Reader RBAC, the reconciled global deny policy, and
-  the absence of any agent-held GitHub write credential.
+- The two-part boundary: Reader RBAC on Azure and the reconciled global deny
+  policy. The agent can read every signal in the subscription and change none
+  of it.
 - The scheduled health check that the reconciler configured.
 
 **Expect.** The Sev2 alert fires and reaches the agent as an incident.
@@ -332,13 +345,33 @@ identify `infra/leak.auto.tfvars` as the source of truth, proposing exactly:
 enable_slow_leak = false
 ```
 
-### Step 15. Perform the human GitOps step
+**Optional, and the strongest moment in the demo.** Ask the agent in the
+incident thread to "just restart the container app". It declines: it holds
+Reader on the subscription and the tool policy denies Azure writes. It offers
+the pull request instead. The guardrail is demonstrated live rather than
+described.
 
-**Say.** "This is where Scenario C deliberately stops. The agent has Reader
-access and no supported write path to GitHub in this preview, so it does not act
-— it hands a precise, reviewable instruction to a human."
+### Step 15. Watch the agent open the remediation pull request
 
-**Do.**
+**Say.** "The agent cannot touch Azure. What it *can* do is propose the fix the
+same way any engineer would — as a reviewable pull request."
+
+**Expect.** A pull request against the default branch, authored by the agent,
+whose title the platform prefixes with `[Generated by SRE Agent]`. The diff is
+one file and one line:
+
+```hcl
+enable_slow_leak = false
+```
+
+The body states the root cause with supporting telemetry, why the one-line
+change is sufficient, that merging runs `apply-infra`, and how to verify
+afterwards. The commit is authored by `Azure SRE Agent <noreply@microsoft.com>`
+— a distinct identity in the git history, not a human's.
+
+**If the agent does not open a pull request**, see
+[troubleshooting](#troubleshooting). As a fallback that keeps the demo moving,
+open the reset pull request yourself:
 
 ```bash
 ./scripts/trigger-incident-gitops.sh --reset
@@ -348,23 +381,23 @@ access and no supported write path to GitHub in this preview, so it does not act
 pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
 ```
 
-**Expect.** An unmerged one-file pull request setting the flag back to `false`.
-
 **Do not** use `az containerapp update` to fix this. It would create drift from
 Terraform and be reversed by the next apply — and it would contradict the entire
 scenario.
 
 ### Step 16. Review, merge, and verify
 
-**Do.** Review the pull request — one file, one line, no workflow or secret
-changes — and merge it.
+**Do.** Review the agent's pull request — one file, one line, no workflow or
+secret changes — and merge it. You are the approver; the agent cannot approve or
+merge its own work.
 
 **Expect.** `apply-infra` applies the healthy flag through the private runner,
 its Scenario C reconciliation step confirms the agent configuration has not
 drifted, a new revision starts, memory flattens, and the alert resolves.
 
-**Say.** "The fix travelled the same private, reviewed, audited path as every
-other change in this environment. Nothing reached Azure outside the pipeline."
+**Say.** "The agent proposed; a human approved; the pipeline deployed. The fix
+travelled the same private, reviewed, audited path as every other change in this
+environment. Nothing reached Azure outside the pipeline."
 
 ---
 
@@ -408,7 +441,7 @@ not own them.
 | Terraform fails reaching the state account | The runner cannot reach the private endpoint, or peering is missing | Verify `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, `RUNNER_PE_SUBNET_NAME` and runner network reachability |
 | Peering or subnet creation fails | Application and runner address spaces overlap | Override `APP_VNET_ADDRESS_SPACE` and the subnet prefixes |
 | Code Access reconciliation fails | Partial configuration — App, PEM secret, or variables missing | Set all three variables together, or set `SRE_CODE_ACCESS_ENABLED=false` |
-| Reconcile fails with a connector error | `SRE_REMEDIATION_CONNECTOR_ENABLED` is `true` | It must stay `false`; see [the preview limitation](#reference-the-remote-mcp-preview-limitation) |
+| The agent proposes the fix but opens no pull request | Code Access is disabled, or the App lacks `Contents: Read/Write` and `Pull requests: Read/Write` | Raise the App permissions in [step 4](#step-4-create-the-code-access-github-app) and reinstall, or connect Code Access over OAuth — the proven path |
 | The agent proposes nothing | Response plan or logs connector missing | Re-run `reconcile-sre-agent` with `--mode apply`, then `--mode verify` |
 | Memory climbs but no alert fires | Fewer than ~8 minutes elapsed, or the wrong app is charted | The rule uses a five-minute average; confirm you are charting `payment-service` |
 | Merging a PR deploys nothing | The activation marker is unset | Complete [step 8](#step-8-activate-push-deployment) |
@@ -425,10 +458,11 @@ not own them.
 | Azure data plane | Private state Blob, ACR, and Key Vault endpoints |
 | SRE Agent networking | Dedicated delegated subnet, VNet egress |
 | Deployment runner | `self-hosted, Linux, X64, azure-private, contosopay` |
-| Code context | Optional read-only bring-your-own GitHub App |
-| GitHub mutation | No supported agent-initiated write path in the current preview |
+| Code context | Bring-your-own GitHub App, or OAuth Code Access |
+| Azure mutation | None — Reader RBAC and the global deny policy forbid it |
+| GitHub mutation | The agent opens a remediation pull request; it cannot approve or merge |
 | Incident trigger | Pull request setting `enable_slow_leak = true` |
-| Durable remediation | Human-reviewed pull request setting the flag to `false` |
+| Durable remediation | Agent-authored, human-merged pull request setting the flag to `false` |
 
 The Terraform-created agent subnet is delegated to `Microsoft.App/environments`,
 sits in the same region as the agent, is separate from Container Apps, private
@@ -451,7 +485,7 @@ The frontend remains the only public application. `checkout-api` and
 | GitOps runbook knowledge | SRE Agent REST reconciler | Delete known file, upload, verify indexing |
 | GitHub Code Access | SRE Agent REST reconciler | Optional; requires externally issued GitHub App material |
 | GitHub App creation and key issuance | GitHub/operator | External bootstrap; GitHub has no noninteractive App-creation API |
-| Remote remediation MCP connector | Disabled | Supported remote HTTP managed-identity authentication is not documented |
+| Remediation pull request | SRE Agent over Code Access | Agent-authored at incident time; review and merge stay human |
 
 The reconciler is `scripts/reconcile-sre-agent.sh` / `.ps1`, and its desired
 state is `agent/scenario-c/manifest.json`. GitHub Actions runs `apply` and
@@ -477,68 +511,6 @@ declarative and portable.
 The agent uses `Microsoft.App/agents@2025-05-01-preview` because that schema
 exposes the required VNet and sandbox properties. Re-evaluate the pinned version
 when a stable API exposes the same surface.
-
-## Reference: the remote MCP preview limitation
-
-Current remote Streamable-HTTP connector documentation exposes bearer-token and
-custom-header authentication. Managed identity is documented for supported
-Azure-backed stdio connectors, not for arbitrary remote HTTP MCP endpoints.
-
-The remediation broker expects an Entra token for a dedicated audience and
-validates the exact agent principal. Connecting it with a static bearer secret,
-a PAT, anonymous access, or network-only trust would weaken the design.
-Therefore:
-
-- `SRE_REMEDIATION_CONNECTOR_ENABLED` must remain `false`;
-- the reconciler rejects `true` with an actionable error;
-- the agent stays Reader-only and cannot mutate Azure;
-- the response plan investigates and explains the one-file fix, but a human
-  opens the remediation pull request.
-
-Re-enable this path only after Microsoft documents a supported managed-identity
-authentication flow for remote Streamable-HTTP MCP, or after the broker is
-redesigned around another supported nonsecret mechanism.
-
-## Reference: the dormant remediation broker
-
-The constrained broker implementation is retained in source so the architecture
-can be enabled when the authentication gap closes. **No broker identity,
-Container App, public ingress, RBAC, or auth configuration is deployed.** Do not
-perform this bootstrap for a current preview demo.
-
-Future enablement would require a **separate** GitHub App with Metadata read and
-Issues read/write only, no webhook, plus dedicated Entra application metadata
-(`SRE_REMEDIATION_ENTRA_API_CLIENT_ID`, `SRE_REMEDIATION_ENTRA_TOKEN_AUDIENCE`,
-`SRE_REMEDIATION_ENTRA_TOKEN_SCOPE`, `SRE_GITHUB_APP_ID`,
-`SRE_GITHUB_APP_INSTALLATION_ID`, `SRE_GITHUB_APP_BOT_LOGIN`,
-`SRE_GITHUB_APP_PRIVATE_KEY_NAME`).
-
-Only then would its PEM be imported once as a non-exportable, sign-only Key
-Vault RSA key:
-
-```bash
-./scripts/configure-github-app-key.sh \
-  --vault-name "<scenario-c-vault>" \
-  --private-key "./remediation-app.pem" \
-  --key-name "github-app-signing-key"
-```
-
-```powershell
-pwsh ./scripts/configure-github-app-key.ps1 `
-  -VaultName "<scenario-c-vault>" `
-  -PrivateKeyPath "./remediation-app.pem" `
-  -KeyName "github-app-signing-key"
-```
-
-The script never opens public Key Vault access: it temporarily grants the
-signed-in operator Key Vault Crypto Officer, imports the key, and removes that
-assignment. The broker would receive only key metadata read and sign operations
-on that key, and would ask Key Vault to perform RS256 signing rather than ever
-reading the private key.
-
-The Code Access PEM **secret** and the broker signing **key** are deliberately
-different objects with different custody models. Never reuse one App or
-credential for both responsibilities.
 
 ## Reference: why Terraform remains the IaC language
 

@@ -503,7 +503,6 @@ jobs:
           SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID }}
           SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
           SRE_CODE_ACCESS_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
-          SRE_REMEDIATION_CONNECTOR_ENABLED: "false"
         run: |
           set -euo pipefail
           RESOURCE_GROUP="$(terraform -chdir=infra output -raw resource_group_name)"
@@ -554,17 +553,16 @@ jobs:
             if [[ "${DEPLOYMENT_SCENARIO}" == "A" ]]; then
               echo ""
               echo "### Manual boundary"
-              echo "Configure the SRE portal for direct/autonomous Azure remediation. Scenario A has no GitOps write connector and no broker."
+              echo "Configure the SRE portal for direct/autonomous Azure remediation. Scenario A has no GitOps write connector."
             elif [[ "${DEPLOYMENT_SCENARIO}" == "B" ]]; then
               echo ""
               echo "### Manual boundary"
-              echo "Configure the built-in GitHub MCP connector in the SRE portal with a short-lived fine-grained PAT. Create and rotate that PAT manually; this workflow never receives it. Scenario B never deploys the broker."
+              echo "Configure the built-in GitHub MCP connector in the SRE portal with a short-lived fine-grained PAT. Create and rotate that PAT manually; this workflow never receives it."
             else
-              echo "### Scenario C external bootstrap and preview boundary"
+              echo "### Scenario C external bootstrap"
               echo "Terraform and the supported SRE Agent APIs configured networking, observability connectors, global policy, the custom agent, knowledge, response plan, and scheduled health check."
               echo "1. Enable automated Code Access only after its PEM is stored as a Key Vault secret and its nonsecret repository variables are set."
-              echo "2. The remediation broker and its public endpoint are not deployed."
-              echo "3. The Entra-managed-identity remote MCP connector remains disabled: current Streamable-HTTP connector documentation supports bearer/custom headers, while managed identity is documented only for stdio connectors."
+              echo "2. The agent holds Reader on Azure. It cannot mutate the deployment; it remediates by opening a pull request that a human reviews and merges."
               echo ""
               echo "No undocumented connector authentication is used."
             fi

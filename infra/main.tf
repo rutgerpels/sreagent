@@ -18,9 +18,8 @@ locals {
   scenario_profiles = {
     A = {
       private_network_enabled = false
-      broker_enabled          = false
       control_endpoint_access = "Public"
-      github_integration      = "Manual Code Access; no remediation broker"
+      github_integration      = "Manual Code Access; no GitHub write path"
       agent_key               = "a-autonomous"
       agent = {
         access = "High"
@@ -30,7 +29,6 @@ locals {
     }
     B = {
       private_network_enabled = false
-      broker_enabled          = false
       control_endpoint_access = "Public"
       github_integration      = "Manual built-in GitHub MCP with a short-lived fine-grained PAT"
       agent_key               = "b-github-mcp"
@@ -42,13 +40,11 @@ locals {
     }
     C = {
       private_network_enabled = true
-      # Remote Streamable-HTTP MCP does not currently document the managed-
-      # identity authentication required by the broker. Keep its infrastructure
-      # dormant rather than adding an unusable public endpoint.
-      broker_enabled          = false
       control_endpoint_access = "Private ACR/Key Vault; public frontend only"
-      github_integration      = "API-managed read-only Code Access; remediation broker disabled"
-      agent_key               = "c-private-gitops"
+      # The agent authors its remediation pull request through Code Access. It
+      # holds Reader on Azure, so it can propose but never apply the fix.
+      github_integration = "API-managed Code Access; agent-authored remediation pull requests"
+      agent_key          = "c-private-gitops"
       agent = {
         access = "Low"
         role   = "Reader"

@@ -150,17 +150,6 @@ export function loadDesiredState(configDirectory, environment = process.env) {
     };
   }
 
-  const remediationConnectorEnabled = parseExplicitBoolean(
-    environment.SRE_REMEDIATION_CONNECTOR_ENABLED,
-    "SRE_REMEDIATION_CONNECTOR_ENABLED",
-  );
-  if (remediationConnectorEnabled) {
-    throw new Error(
-      "Remote Streamable-HTTP MCP supports bearer/custom-header authentication, " +
-        "not the required managed-identity token flow. The remediation connector fails closed.",
-    );
-  }
-
   return {
     expectedAgent: manifest.expectedAgent,
     permissions: permissions.permissions,
@@ -192,11 +181,6 @@ export function renderDesiredState(desired) {
           credentials: "<Key Vault references from environment>",
         }
       : { enabled: false },
-    remediationConnector: {
-      enabled: false,
-      reason:
-        "Managed identity is not supported for remote Streamable-HTTP MCP authentication.",
-    },
   };
 }
 

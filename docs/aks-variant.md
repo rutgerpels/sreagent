@@ -10,7 +10,6 @@ AKS.
 - Built-in external and internal ingress with managed TLS.
 - First-class KEDA scale rules for the scale-mitigation demonstration.
 - Consumption pricing and scale-to-zero.
-- Built-in authentication for the Scenario C broker.
 - A smaller operational footprint for a one-command demo.
 
 ## Service mapping
@@ -25,7 +24,6 @@ AKS.
 | Key Vault | Managed-identity Key Vault references | Secrets Store CSI Driver with Key Vault provider |
 | Scale | Container Apps KEDA rule | HPA or KEDA |
 | Telemetry | OpenTelemetry to Application Insights | Same app instrumentation plus Container Insights |
-| Broker authentication | Container Apps Easy Auth plus principal validation | Entra-aware ingress/proxy plus exact principal validation |
 
 Only frontend is public. Checkout, payment, and any cluster management endpoints
 remain private.
@@ -36,9 +34,9 @@ An AKS implementation must retain the same immutable `scenario` contract:
 
 | Scenario | Agent and remediation | Network and runner |
 | --- | --- | --- |
-| A | High / Contributor / Autonomous; direct AKS remediation; no write connector or broker | Public authenticated control endpoints; GitHub-hosted or local deployment |
-| B | Low / Reader / Review; built-in GitHub MCP writes the remediation Pull Request; no broker | Public authenticated control endpoints; GitHub-hosted deployment |
-| C | Low / Reader / Review; read-only Code Access and human-triggered remediation PR | Private registry, vault, state, and cluster API paths; labeled private runner |
+| A | High / Contributor / Autonomous; direct AKS remediation; no write connector | Public authenticated control endpoints; GitHub-hosted or local deployment |
+| B | Low / Reader / Review; built-in GitHub MCP writes the remediation Pull Request | Public authenticated control endpoints; GitHub-hosted deployment |
+| C | Low / Reader / Review; Code Access; the agent opens the remediation PR and a human merges it | Private registry, vault, state, and cluster API paths; labeled private runner |
 
 State-account naming and blob keys must include the scenario. Never convert one
 scenario's AKS state in place. Deploy a new isolated profile, validate it, then
@@ -64,23 +62,17 @@ The Azure Monitor alert would use Container Insights or managed Prometheus memor
 telemetry for the `payment-service` workload rather than the Container Apps
 `WorkingSetBytes` metric.
 
-## Scenario C broker on AKS
+## Scenario C remediation on AKS
 
 Preserve the same security model:
 
-- two separate GitHub Apps;
-- no PAT for writes;
-- remediation App private key imported as a non-exportable, sign-only Key Vault
-  RSA key;
-- broker workload identity has only key metadata read and sign data actions;
-- broker calls Key Vault cryptography and never downloads the key;
-- Entra authentication and exact SRE Agent principal validation;
-- only the fixed remediation issue and status tools;
-- Scenario C-only issue-to-Pull Request workflow.
+- Code Access backed by a bring-your-own GitHub App, with no PAT for writes;
+- the agent holds Reader on Azure and cannot mutate the cluster;
+- remediation is a one-file pull request that a human reviews and merges;
+- the merge, not the agent, triggers the pipeline that applies the change.
 
-The broker path remains disabled until remote Streamable-HTTP MCP documents the
-required managed-identity authentication. Do not expose the broker, Kubernetes
-API, checkout, or payment services to work around that limitation.
+Do not expose the Kubernetes API, checkout, or payment services to shortcut that
+flow.
 
 ## Security requirements
 

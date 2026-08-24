@@ -306,7 +306,6 @@ jobs:
           SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID }}
           SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME }}
           SRE_CODE_ACCESS_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
-          SRE_REMEDIATION_CONNECTOR_ENABLED: "false"
         run: |
           set -euo pipefail
           RESOURCE_GROUP="$(terraform -chdir=infra output -raw resource_group_name)"

@@ -3,8 +3,8 @@
 These are the **committable artifacts** that turn the demo's SRE Agent into a
 GitOps-only operator. Scenario B uses the PAT-based GitHub MCP connector for the
 fast public-endpoint demo. Scenario C uses BYO GitHub App Code Access, Azure VNet
-integration, and API reconciliation. Its managed-identity broker connector is
-disabled until remote Streamable-HTTP MCP supports that authentication flow.
+integration, and API reconciliation, and the agent opens its remediation pull
+request itself.
 In all paths the agent is **structurally unable to modify the live Azure
 resources** when the tool access policy is applied.
 
@@ -23,7 +23,7 @@ artifacts are applied and verified by `scripts/reconcile-sre-agent.*` (see
 | [`tool-access-policy.api.json`](tool-access-policy.api.json) | **API-shaped hard enforcement.** The same policy wrapped in the `permissions` object required by the global-settings API. | Send as the request body to the agent settings API. Do **not** paste this file into the portal editor. |
 | [`gitops-remediation-agent-github.md`](gitops-remediation-agent-github.md) | **Scenario B steering.** Prompt for the PAT GitHub MCP path. It tells the agent to remediate via a PR against `infra/leak.auto.tfvars` instead of acting directly. | **Builder → Agent Canvas → Create subagent**; paste it into **Create a custom agent → Instructions**. |
 | [`scenario-c/manifest.json`](scenario-c/manifest.json) | **Scenario C desired state.** Connectors, permissions, custom agent, response plan, schedule, knowledge, and optional Code Access. | Reconciled by GitHub Actions after Terraform. |
-| [`scenario-c/gitops-remediation.instructions.md`](scenario-c/gitops-remediation.instructions.md) | **Scenario C steering.** Read-only investigation and fail-closed GitOps guidance. | Uploaded by the reconciler. |
+| [`scenario-c/gitops-remediation.instructions.md`](scenario-c/gitops-remediation.instructions.md) | **Scenario C steering.** Read-only Azure investigation, then an agent-authored remediation pull request. | Uploaded by the reconciler. |
 | [`gitops-remediation-agent.md`](gitops-remediation-agent.md) | **Legacy Scenario C portal prompt.** Retained for compatibility and points to the reconciled instructions. | Do not use for new deployments. |
 | [`knowledge/gitops-runbook.md`](knowledge/gitops-runbook.md) | **Reference context.** A runbook the agent reads during investigations so it knows the exact GitOps fix for the planted leak. | Attach as knowledge/skill context to the `gitops-remediation` custom agent. |
 
@@ -33,21 +33,20 @@ artifacts are applied and verified by `scripts/reconcile-sre-agent.*` (see
   instruction can't *guarantee* it won't try a direct write.
 - The **Tool Access Policy `deny`** makes the direct write *impossible*: even if
   the model attempts `az containerapp update`, the call is blocked before it runs.
-- `RunInTerminal` is intentionally denied. PR creation must come from the
-  selected GitHub MCP tools in Scenario B. Scenario C requires the documented
-  human reset trigger until its broker can use supported nonsecret
-  authentication.
+- `RunInTerminal` is intentionally denied. Pull request creation comes from the
+  selected GitHub MCP tools in Scenario B and from Code Access in Scenario C —
+  never from a shell.
 
 Together they give a defence-in-depth, DevOps-correct remediation flow:
 
 ```text
-incident -> agent diagnoses -> GitHub MCP opens PR
+incident -> agent diagnoses -> agent opens PR
         -> human reviews + merges -> apply-infra.yml terraform apply -> fixed
 ```
 
-For Scenario C today, the middle step is
-`agent diagnoses -> human runs reset trigger -> workflow opens PR`; the PR still
-requires human review and the live fix still happens through `apply-infra.yml`.
+Scenario B opens that pull request through the GitHub MCP connector; Scenario C
+opens it through Code Access. In both, review and merge stay human and the live
+fix happens through `apply-infra.yml`.
 
 See [`../docs/scenario-b-gitops.md`](../docs/scenario-b-gitops.md) and
 [`../docs/scenario-c-private-gitops.md`](../docs/scenario-c-private-gitops.md)

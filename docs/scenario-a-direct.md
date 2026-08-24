@@ -207,8 +207,8 @@ The agent can only explain what it can see. Connect all four.
 **Expect.** Code Access shows an indexing status, and the resource group, logs,
 and incident platform all appear as connected.
 
-> Do **not** add the GitHub MCP write connector and do **not** configure a
-> broker. Scenario A remediates Azure directly; those belong to B and C.
+> Do **not** add the GitHub MCP write connector. Scenario A remediates Azure
+> directly; the GitOps write path belongs to B and C.
 
 ### Step 10. Decide your approval story
 
@@ -455,7 +455,6 @@ migrate Scenario A state.
 | Deployment runner | GitHub-hosted, or the local wrapper |
 | Code Access | Read-only source and commit correlation |
 | GitHub write connector | None |
-| Remediation broker | None |
 | Incident trigger | Direct update of the running `payment-service` |
 | Remediation path | Direct Azure action |
 
