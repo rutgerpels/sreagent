@@ -1,154 +1,303 @@
 # Scenario A: autonomous direct remediation
 
-Scenario A is the shortest route to the "detect, explain, and fix" moment. The
-Azure SRE Agent uses the Terraform-derived **High / Contributor / Autonomous**
-profile and can remediate the demo resource group directly. It does not use a
-GitOps write connector or remediation broker.
+**The story you tell.** A payment service starts leaking memory. Azure Monitor
+raises an incident. The Azure SRE Agent investigates on its own, explains what
+broke and why, proposes a fix, and — after you approve — applies that fix
+directly to Azure. Nobody opens a terminal.
 
-## Security and operating model
+**Who this is for.** Audiences who want to see the agent *act*: platform teams,
+operations leadership, and anyone evaluating "can it actually fix things?"
 
-| Concern | Scenario A behavior |
+**Time budget.**
+
+| Phase | What you do | Duration |
+| --- | --- | --- |
+| 1 | Prepare the repository | ~5 minutes |
+| 2 | Deploy the environment | ~20 minutes (mostly unattended) |
+| 3 | Configure the SRE Agent | ~10 minutes |
+| 4 | Run the demo live | ~20 minutes |
+| 5 | Reset and repeat | ~5 minutes |
+| 6 | Tear down | ~15 minutes (unattended) |
+
+Phases 1–3 are preparation and can be done the day before. Only phase 4 happens
+in front of the audience.
+
+---
+
+## What the audience will see
+
+1. A healthy checkout application, with only the frontend reachable from the
+   internet.
+2. You arm a fault. Memory on `payment-service` starts climbing.
+3. Azure Monitor fires a Sev2 alert roughly 8–12 minutes later.
+4. The SRE Agent correlates the alert with telemetry, the running revision, the
+   feature flag, and the recent change — and explains its reasoning.
+5. The agent proposes a mitigation. You approve it. Azure changes.
+6. Memory flattens, the alert resolves, and the agent records what it did.
+
+---
+
+## Before you start
+
+Confirm all of the following. Missing any one of them will stop you mid-demo.
+
+| Requirement | How to check |
 | --- | --- |
-| Terraform profile | `scenario = "A"` |
-| SRE Agent access | High; Contributor on the demo resource group |
-| Run mode | Autonomous |
-| Endpoints | Public deployment control endpoints, protected by Azure RBAC and TLS |
-| Runner | GitHub-hosted workflow jobs or local deploy wrapper |
-| Code Access | Read context and change correlation only |
-| GitHub write connector | None |
-| Broker | None |
-| Incident trigger | Direct update of the running payment-service |
-| Remediation | Direct Azure action |
+| An Azure subscription where you can create resources **and role assignments** | You need Owner or User Access Administrator on the target scope |
+| A GitHub OIDC deployment identity federated to this repository | See [deployment reference](deployment-reference.md#github-actions-oidc) |
+| Permission to create an Azure SRE Agent | The SRE Agent preview must be available in your tenant and region |
+| Permission to set repository Actions variables | Repository admin |
+| A local clone of this repository | `git clone` |
+| Azure CLI, Terraform 1.9+, and Bash or PowerShell locally | Only needed for the incident trigger in phase 3 |
 
-The default public endpoint posture is intentional for the rapid demo. ACR admin
-and anonymous access remain disabled, Key Vault still uses RBAC and purge
-protection, applications use managed identity, and only the frontend application
-has public business ingress.
+> **Scenario A is a single, immutable profile.** If another scenario (B or C) is
+> currently active in this repository, you must destroy it before deploying A.
+> See [step 2](#step-2-confirm-no-other-scenario-is-active).
 
-## Before you begin
+---
 
-You need:
+## Phase 1 — Prepare the repository
 
-- an Azure subscription and enough access to deploy resources and role
-  assignments;
-- a clone of the repository;
-- either GitHub Actions OIDC configured or Azure CLI, Terraform 1.9+, Docker, and
-  Bash/PowerShell for local deployment;
-- permission to create or configure an Azure SRE Agent.
+### Step 1. Confirm the healthy baseline
 
-Keep `infra/leak.auto.tfvars` at `enable_slow_leak = false` for deployment.
+**Do.** Open `infra/leak.auto.tfvars` on `main` and confirm it reads:
 
-## 1. Deploy an isolated Scenario A environment
-
-The `scenario` variable selects an immutable profile. Its scenario is included in
-resource names, the state account hash, and the state key. Do not convert a B or
-C state to A. If another GitHub Actions profile is active, destroy it and delete
-the `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT` variables before
-dispatching A.
-
-### Option 1: GitHub Actions
-
-Set these nonsecret repository variables:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-
-Do not configure a PAT or Azure client secret for deployment.
-
-Run the manual **deploy** workflow with:
-
-- **Scenario:** `A`
-- **Open incident PR:** `false`
-
-The preflight allows an absent activation marker or the same active A target. It
-rejects B or C before Azure work and instructs the operator to destroy that
-profile first. The deploy job uses `ubuntu-latest`, builds immutable images
-tagged with the full `github.sha`, creates the scenario-specific state, and
-verifies that state reports Scenario A. After it succeeds, activate push
-deployment by setting `TF_PREFIX` and `TF_ENVIRONMENT` to the deployed values,
-then setting `DEPLOYMENT_SCENARIO=A` last under repository Actions variables.
-
-### Option 2: local wrapper
-
-Sign in; the wrapper publishes the current full commit SHA once and deploys its
-locked manifest digest:
-
-```bash
-az login
-./scripts/deploy.sh --scenario A
+```hcl
+enable_slow_leak = false
 ```
 
-```powershell
-az login
-pwsh ./scripts/deploy.ps1 -Scenario A
-```
+**Expect.** The value is `false`. If it is `true`, a previous demo was left
+armed — reset it before deploying, or your environment will start unhealthy and
+the "before" half of the story disappears.
 
-The local path uses your interactive Azure identity and Azure AD authentication
-for state. It is not a substitute for OIDC in CI.
+### Step 2. Confirm no other scenario is active
 
-### Verify the baseline
+**Do.** Go to **Settings → Secrets and variables → Actions → Variables** and
+look for `DEPLOYMENT_SCENARIO`.
 
-1. Record the `frontend_url` and `resource_group_name` outputs.
-2. Open the frontend and place a test order.
-3. Enable steady traffic.
-4. Confirm payment-service memory is stable.
-5. Confirm `terraform output -raw scenario` returns `A` when using the local
-   workspace, or inspect the workflow summary.
+**Expect.** It is either **absent** (nothing has been deployed yet) or set to
+**`A`** (Scenario A is already active).
 
-## 2. Verify and configure the matching SRE Agent
+**If it says `B` or `C`:** stop. Deploy will refuse. Destroy that profile first
+using its own guide, then delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and
+`TF_ENVIRONMENT`. Scenario state is never converted in place — see
+[profile and state safety](deployment-reference.md#profile-and-state-safety).
 
-The GitHub deployment workflow provisions the selected Terraform agent resource.
-Open it at <https://sre.azure.com> and complete the manual portal connections.
-For direct Terraform or local-wrapper usage, enable that resource explicitly or
-create the matching agent in the portal.
+### Step 3. Set the Azure OIDC variables
 
-The effective profile must be:
+**Do.** Under the same **Actions → Variables** page, set these three nonsecret
+repository variables:
 
-| Setting | Value |
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the federated deployment identity |
+| `AZURE_TENANT_ID` | Your Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | The target subscription ID |
+
+**Expect.** Three variables listed. **Do not** create an Azure client secret or
+a credentials JSON secret — deployment authenticates with OIDC only.
+
+---
+
+## Phase 2 — Deploy the environment
+
+### Step 4. Run the deploy workflow
+
+**Do.** Go to **Actions → deploy → Run workflow** and set:
+
+| Input | Value | Note |
+| --- | --- | --- |
+| Scenario | `A` | Selects the High / Contributor / Autonomous profile |
+| Resource name prefix | `contosopay` | Any short lowercase prefix works |
+| Environment label | `demo` | Appears in names and the state key |
+| Azure region | `swedencentral` | Any region where SRE Agent is available |
+| Open incident PR | `false` | Scenario A arms the incident directly, not by PR |
+
+**Expect.** The run takes roughly 15–25 minutes. It bootstraps isolated remote
+state, applies the platform, builds three images tagged with the full commit
+SHA, pins them to digests, applies the Container Apps and the alert rule, and
+provisions the Scenario A SRE Agent.
+
+**Expect on success.** The workflow summary shows a block containing:
+
+- the resource group name;
+- the ACR name;
+- the public frontend URL;
+- the exact `TF_PREFIX`, `TF_ENVIRONMENT`, and `DEPLOYMENT_SCENARIO` values to
+  set next.
+
+Copy the resource group name and frontend URL — you need both later.
+
+### Step 5. Activate push deployment
+
+Only after the deploy run has succeeded and you have read its summary.
+
+**Do.** Under **Actions → Variables**, add these three variables **in this
+order**:
+
+1. `TF_PREFIX` = the prefix you deployed (for example `contosopay`)
+2. `TF_ENVIRONMENT` = the environment you deployed (for example `demo`)
+3. `DEPLOYMENT_SCENARIO` = `A` — **set this one last**
+
+**Expect.** `DEPLOYMENT_SCENARIO` is the activation marker. Until it exists,
+push-triggered workflows stay safe no-ops. Setting it last guarantees a push can
+never run against a half-configured target.
+
+### Step 6. Verify the healthy baseline
+
+**Do.**
+
+1. Open the frontend URL from the workflow summary.
+2. Place a test order.
+3. Tick **Generate steady traffic (auto-order every 2s)** and leave it running.
+4. In the Azure portal, open the Application Insights resource in the demo
+   resource group and chart `payment-service` process working-set memory.
+
+**Expect.**
+
+- The order succeeds end to end (frontend → checkout-api → payment-service).
+- Memory is flat. That flat line is your "before" picture — take a screenshot.
+- `checkout-api` and `payment-service` have **no** public FQDN. Only the
+  frontend does.
+
+---
+
+## Phase 3 — Configure the SRE Agent
+
+### Step 7. Open the agent
+
+**Do.** Go to <https://sre.azure.com> and open the agent that the deploy
+workflow created in your demo resource group.
+
+**Expect.** The agent exists and is enabled. If you deployed with the local
+wrapper instead of the workflow, enable it explicitly or create a matching agent
+in the portal.
+
+### Step 8. Confirm the operating profile
+
+**Do.** Check the agent's settings against this table and correct anything that
+differs.
+
+| Setting | Required value |
 | --- | --- |
 | Access level | **High** |
-| Resource-group role | **Contributor** |
+| Role on the demo resource group | **Contributor** |
 | Mode | **Autonomous** |
 | Managed resource | Only the Scenario A demo resource group |
 | Incident platform | Azure Monitor |
 
-The SRE Agent also needs its documented monitoring roles to investigate and
-manage the alert lifecycle. Keep workload Contributor scope limited to the demo
-resource group.
+**Expect.** Contributor is scoped to the demo resource group only. The managed
+service may additionally hold monitoring-reader roles for alert lifecycle
+operations; that is expected and is not general workload access.
 
-See [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
-and [run modes](https://learn.microsoft.com/azure/sre-agent/run-modes).
+### Step 9. Connect the evidence sources
 
-## 3. Connect evidence sources
+The agent can only explain what it can see. Connect all four.
 
-### Code Access
+**Do.**
 
-Add this repository under **Builder > Code Access**. Code Access is used for
-source indexing and commit correlation only. Do not add the GitHub MCP write
-connector and do not configure a broker for Scenario A.
+1. **Builder → Code Access:** add this repository. Wait for indexing to start.
+   This gives source and commit correlation. It is *not* a write credential.
+2. **Logs:** add the Scenario A Log Analytics workspace and Application Insights
+   resource. This is where the memory trend comes from.
+3. **Azure resources:** add only the Scenario A demo resource group.
+4. **Incidents:** connect **Azure Monitor** as the incident platform and include
+   the Sev2 payment memory alert in the response plan.
 
-### Logs
+**Expect.** Code Access shows an indexing status, and the resource group, logs,
+and incident platform all appear as connected.
 
-Add the Scenario A Log Analytics workspace and Application Insights resource.
-This gives the investigation access to the payment-service memory trend.
+> Do **not** add the GitHub MCP write connector and do **not** configure a
+> broker. Scenario A remediates Azure directly; those belong to B and C.
 
-### Azure resources and incidents
+### Step 10. Decide your approval story
 
-1. Add only the Scenario A resource group as a managed resource.
-2. Connect **Azure Monitor** as the incident platform.
-3. Include the Sev2 payment memory alert in the incident response plan.
-4. Use the default agent in **Autonomous** mode.
+Autonomous mode means the agent may act without pausing. That is a strong demo
+moment — but only if you know in advance what will happen on stage.
 
-If the demo requires a visible human gate, configure the portal's approval policy
-for the direct mutation tools before the presentation and verify it with a safe
-test. The profile remains Autonomous; do not change it to Review. The live
-talk-track should clearly identify whether the current portal policy will pause
-for approval or execute the allowed action automatically.
+**Do.** Decide one of:
 
-## 4. Arm the direct incident
+- **Let it act.** Leave the portal approval policy as is and narrate "the agent
+  is authorised to act inside this resource group."
+- **Show a human gate.** Configure the portal approval policy for the direct
+  mutation tools, then test it once with a harmless action before the demo.
 
-Use the direct script, not a Pull Request:
+**Expect.** You can state, out loud and correctly, whether the next action will
+pause for your approval or execute immediately. Keep the profile on
+**Autonomous** either way; do not switch it to Review.
+
+### Step 11. Prepare the incident trigger
+
+The Scenario A trigger talks to the live Container App and reads Terraform
+outputs, so your local checkout must point at the same remote state the workflow
+created. Do this **before** the demo, not during it.
+
+**Do (Bash).**
+
+```bash
+az login
+
+export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+export ARM_USE_AZUREAD=true
+
+PREFIX=contosopay
+SCENARIO=A
+ENVIRONMENT=demo
+STATE_SA="sttf$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${PREFIX}" "${SCENARIO}" | sha256sum | cut -c1-16)"
+
+terraform -chdir=infra init -input=false \
+  -backend-config="resource_group_name=rg-${PREFIX}-tfstate" \
+  -backend-config="storage_account_name=${STATE_SA}" \
+  -backend-config="container_name=tfstate" \
+  -backend-config="key=${PREFIX}-${SCENARIO}-${ENVIRONMENT}.tfstate"
+
+terraform -chdir=infra output -raw scenario
+```
+
+**Do (PowerShell).**
+
+```powershell
+az login
+
+$env:ARM_SUBSCRIPTION_ID = (az account show --query id -o tsv)
+$env:ARM_USE_AZUREAD = 'true'
+
+$prefix = 'contosopay'; $scenario = 'A'; $environment = 'demo'
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($env:ARM_SUBSCRIPTION_ID)$([char]0)$prefix$([char]0)$scenario"))
+$stateSa = 'sttf' + ([BitConverter]::ToString($bytes) -replace '-', '').ToLower().Substring(0, 16)
+
+terraform -chdir=infra init -input=false `
+  -backend-config="resource_group_name=rg-$prefix-tfstate" `
+  -backend-config="storage_account_name=$stateSa" `
+  -backend-config="container_name=tfstate" `
+  -backend-config="key=$prefix-$scenario-$environment.tfstate"
+
+terraform -chdir=infra output -raw scenario
+```
+
+**Expect.** The last command prints `A`. If it prints anything else, or init
+fails, you are pointed at the wrong state — do not continue, and re-check the
+prefix, scenario, and environment values from step 5.
+
+---
+
+## Phase 4 — Run the demo live
+
+### Step 12. Establish the healthy baseline (about 2 minutes)
+
+**Say and show.**
+
+- The public checkout page — "this is the only thing on the internet."
+- `checkout-api` and `payment-service` in the portal — "internal ingress only,
+  no public FQDN, reached over TLS through the environment."
+- Managed identities pulling from ACR and reading Key Vault — "no keys, no
+  admin credentials, no connection strings in the app."
+- The flat memory chart — "this is healthy."
+
+### Step 13. Arm the incident
+
+**Do.**
 
 ```bash
 ./scripts/trigger-incident-direct.sh
@@ -158,47 +307,83 @@ Use the direct script, not a Pull Request:
 pwsh ./scripts/trigger-incident-direct.ps1
 ```
 
-The script updates the running payment-service revision and sets
-`ENABLE_SLOW_LEAK=true`. Memory rises deterministically. The five-minute average
-crosses the alert threshold after approximately 8–12 minutes.
+**Expect.** The script verifies the state is Scenario A, then updates the
+running `payment-service` app to set `ENABLE_SLOW_LEAK=true`. A new revision
+starts. Memory begins climbing immediately and deterministically — the leak is
+driven by a background timer, not by request volume, so it climbs whether or not
+traffic is running.
 
-During the wait, show:
+**If the script refuses**, it is protecting you: it will not mutate a resource
+group or app that does not match Terraform state, and it will not run against a
+B or C state. Re-check step 11.
 
-- frontend as the only public business service;
-- internal checkout and payment ingress;
-- managed identities for ACR and Key Vault;
-- the Scenario A state and resource suffix;
-- stable-to-rising memory in Application Insights or Grafana.
+### Step 14. Narrate while memory climbs (8–12 minutes)
 
-## 5. Investigate and remediate
+This wait is the most useful part of the demo. Use it.
 
-The agent should correlate:
+**Say and show.**
 
-- the fired Azure Monitor alert;
-- the payment-service working-set trend;
-- the current revision and feature flag;
-- the recent direct configuration change;
-- source and runbook context.
+- The rising working-set chart in Application Insights.
+- The alert rule — "it averages over five minutes, so it will not fire on a
+  spike; it fires on a trend."
+- The security boundary — "the agent holds Contributor on this one resource
+  group. Nothing else."
+- The state isolation — "this environment has its own Terraform state, keyed by
+  subscription, prefix, scenario, and environment."
 
-Valid direct mitigations include:
+**Expect.** When the five-minute average crosses the threshold, a Sev2 Azure
+Monitor alert fires and appears in the agent as an incident.
 
-- disable the leak flag and roll a healthy revision;
-- restart the affected revision to clear retained memory;
-- adjust the scale rule as a temporary capacity mitigation.
+### Step 15. Walk the investigation
 
-The durable fix is to disable the planted fault. A restart alone is recoverable
-but does not remove the trigger if the flag remains enabled.
+**Do.** Open the incident in the SRE Agent and read its findings out loud.
 
-After remediation, confirm:
+**Expect** the agent to have correlated:
 
-1. a healthy revision is serving traffic;
-2. memory returns to baseline;
-3. the alert resolves;
-4. the agent records its evidence and action.
+- the fired alert and the working-set trend;
+- the affected `payment-service` revision;
+- the `ENABLE_SLOW_LEAK` feature flag;
+- the recent configuration change that set it;
+- source and runbook context from Code Access.
 
-## 6. Reset and repeat
+The point to make: this is not a dashboard telling you memory is high. It is an
+explanation of *why*, assembled from telemetry plus your code.
 
-Reset without removing the environment:
+### Step 16. Approve the remediation
+
+**Expect** the agent to propose one or more of:
+
+| Mitigation | Effect |
+| --- | --- |
+| Disable the leak flag and roll a healthy revision | **Durable** — removes the trigger |
+| Restart the affected revision | Recoverable, but the fault returns while the flag is on |
+| Increase the scale rule | Temporary capacity relief only |
+
+**Do.** Approve the durable fix — disabling the flag. If your portal policy is
+configured for approval, this is where the human gate appears; if not, narrate
+that the agent is acting under its Autonomous policy.
+
+**Say.** "A restart clears the symptom. Turning the flag off removes the cause.
+The agent distinguishes between the two."
+
+### Step 17. Verify recovery
+
+**Expect**, within a few minutes:
+
+1. a new healthy revision is serving traffic;
+2. memory returns to the baseline you screenshotted in step 6;
+3. the Azure Monitor alert resolves;
+4. the agent's incident record shows the evidence it used and the action it
+   took.
+
+Show all four. The recorded evidence trail is what makes this auditable rather
+than magical.
+
+---
+
+## Phase 5 — Reset and repeat
+
+**Do.** Return the environment to healthy without destroying it:
 
 ```bash
 ./scripts/trigger-incident-direct.sh --reset
@@ -208,28 +393,88 @@ Reset without removing the environment:
 pwsh ./scripts/trigger-incident-direct.ps1 -Reset
 ```
 
-Re-arm the leak to demonstrate pattern recognition. A scheduled health check can
-report current memory, active alerts, revision health, and the feature-flag state.
+**Expect.** `ENABLE_SLOW_LEAK` returns to `false` and a fresh revision starts.
 
-## 7. Destroy Scenario A
+**Optional second run.** Re-arm the incident to show the agent recognising a
+pattern it has already seen and reaching the same conclusion faster. You can
+also add a scheduled health check that reports current memory, active alerts,
+revision health, and the feature-flag state.
 
-Use the **destroy** workflow with Scenario `A` and confirmation
-`<prefix>-A-<environment>`, or:
+---
+
+## Phase 6 — Tear down
+
+**Do.** Go to **Actions → destroy → Run workflow** and set:
+
+| Input | Value |
+| --- | --- |
+| Scenario | `A` |
+| Resource name prefix | the prefix you deployed |
+| Environment label | the environment you deployed |
+| Delete state blob after destroy | `true` if you are finished with this profile |
+
+Or, for a locally deployed environment:
 
 ```bash
-./scripts/teardown.sh --scenario A
+./scripts/teardown.sh --scenario A --prefix contosopay --env demo
 ```
 
-Teardown verifies that the selected state reports Scenario A. To move to B or C,
-finish this destroy, delete the repository `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and
-`TF_ENVIRONMENT` variables, and then dispatch the new profile. Never reuse or
-migrate the A state.
+**Expect.** Teardown verifies that the selected state actually records Scenario
+A before destroying anything. A Terraform-provisioned agent is destroyed with
+the environment; an agent you created by hand in the portal must be removed
+separately.
 
-Remove a portal-created SRE Agent separately. A Terraform-provisioned agent is
-destroyed with its Scenario A state.
+**If you plan to move to Scenario B or C:** finish this destroy first, then
+delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT`. Never reuse or
+migrate Scenario A state.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| Deploy fails in preflight with a scenario mismatch | `DEPLOYMENT_SCENARIO` is set to B or C | Destroy that profile, then delete all three profile variables |
+| Trigger script exits with "restricted to Scenario A" | Local Terraform state points at another profile | Redo [step 11](#step-11-prepare-the-incident-trigger) with the correct prefix, scenario, and environment |
+| `terraform init` fails on the state account | Wrong subscription selected, or Azure AD data-plane auth not enabled | `az account set --subscription <id>` and export `ARM_USE_AZUREAD=true` |
+| Memory climbs but no alert fires | Fewer than ~8 minutes have passed, or you are charting the wrong app | The rule uses a five-minute average; confirm you are charting `payment-service` |
+| Agent has no telemetry to reason about | Logs connector missing | Redo [step 9](#step-9-connect-the-evidence-sources), item 2 |
+| Agent proposes nothing | Response plan does not include the Sev2 alert | Redo [step 9](#step-9-connect-the-evidence-sources), item 4 |
+| Push to `main` deploys nothing | `DEPLOYMENT_SCENARIO` is unset | Expected — this is the safe no-op state. Complete [step 5](#step-5-activate-push-deployment) |
+
+---
+
+## Reference: security and operating model
+
+| Concern | Scenario A behaviour |
+| --- | --- |
+| Terraform profile | `scenario = "A"` |
+| SRE Agent access | High; Contributor on the demo resource group only |
+| Run mode | Autonomous |
+| Deployment control endpoints | Public, protected by Azure RBAC and TLS |
+| Deployment runner | GitHub-hosted, or the local wrapper |
+| Code Access | Read-only source and commit correlation |
+| GitHub write connector | None |
+| Remediation broker | None |
+| Incident trigger | Direct update of the running `payment-service` |
+| Remediation path | Direct Azure action |
+
+The public deployment endpoints are a deliberate trade for demo speed. The
+security invariants still hold: ACR admin and anonymous access are disabled,
+Key Vault uses RBAC with purge protection, applications authenticate with
+managed identity, ingress is TLS-only, and the frontend is the only public
+application.
+
+Scenario A deliberately has **no** GitHub write path. If your audience asks
+"but I do not want an agent with Contributor" — that is exactly the question
+[Scenario B](scenario-b-gitops.md) answers.
+
+---
 
 ## References
 
+- [Scenario chooser](run-of-show.md)
+- [Deployment and state reference](deployment-reference.md)
 - [Azure SRE Agent setup reference](sre-agent-setup.md)
 - [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
 - [Azure SRE Agent run modes](https://learn.microsoft.com/azure/sre-agent/run-modes)
