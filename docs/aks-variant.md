@@ -35,7 +35,7 @@ An AKS implementation must retain the same immutable `scenario` contract:
 | Scenario | Agent and remediation | Network and runner |
 | --- | --- | --- |
 | A | High / Contributor / Autonomous; direct AKS remediation; no write connector | Public authenticated control endpoints; GitHub-hosted or local deployment |
-| B | Low / Reader / Review; built-in GitHub MCP writes the remediation Pull Request | Public authenticated control endpoints; GitHub-hosted deployment |
+| B | Low / Reader / Review; Code Access over OAuth writes the remediation Pull Request | Public authenticated control endpoints; GitHub-hosted deployment |
 | C | Low / Reader / Review; Code Access; the agent opens the remediation PR and a human merges it | Private registry, vault, state, and cluster API paths; labeled private runner |
 
 State-account naming and blob keys must include the scenario. Never convert one

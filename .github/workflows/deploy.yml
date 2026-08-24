@@ -557,7 +557,7 @@ jobs:
             elif [[ "${DEPLOYMENT_SCENARIO}" == "B" ]]; then
               echo ""
               echo "### Manual boundary"
-              echo "Configure the built-in GitHub MCP connector in the SRE portal with a short-lived fine-grained PAT. Create and rotate that PAT manually; this workflow never receives it."
+              echo "Connect Code Access in the SRE portal using the 'Your account' sign-in method. That connection is both the source context and the GitHub write path; Scenario B creates no token, so this workflow has no credential to receive."
             else
               echo "### Scenario C external bootstrap"
               echo "Terraform and the supported SRE Agent APIs configured networking, observability connectors, global policy, the custom agent, knowledge, response plan, and scheduled health check."

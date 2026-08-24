@@ -207,8 +207,8 @@ The agent can only explain what it can see. Connect all four.
 **Expect.** Code Access shows an indexing status, and the resource group, logs,
 and incident platform all appear as connected.
 
-> Do **not** add the GitHub MCP write connector. Scenario A remediates Azure
-> directly; the GitOps write path belongs to B and C.
+> Do **not** give this agent a GitHub write path. Scenario A remediates Azure
+> directly; the GitOps write path belongs to B and C, which use Code Access.
 
 ### Step 10. Decide your approval story
 

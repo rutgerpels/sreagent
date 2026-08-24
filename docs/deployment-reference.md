@@ -38,7 +38,7 @@ profile**. It is not a set of independent toggles.
 | Profile | SRE Agent | Network and runner | GitHub remediation |
 | --- | --- | --- | --- |
 | **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
-| **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Built-in GitHub MCP connector with a short-lived fine-grained PAT |
+| **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Code Access, signed in with a user account (OAuth); no connector and no token |
 | **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
 
 Resource names and tags include the selected scenario. State is isolated too:
@@ -185,8 +185,8 @@ These hold in every scenario:
 - Role assignments are least-privilege and resource-scoped, except where the
   managed SRE Agent requires broader monitoring scope.
 - Ingress is TLS-only. `checkout-api` and `payment-service` are never public.
-- Scenario B's PAT is fine-grained, single-repository, minimum-permission, and
-  short-lived; revoke it after the demo.
+- Scenario B creates no GitHub credential at all; its write path is the OAuth
+  Code Access connection, which is interactive and nothing to store or revoke.
 - Scenario C performs no PAT-based GitHub writes and rejects unsupported remote
   MCP authentication.
 

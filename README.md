@@ -64,8 +64,9 @@ show capability.
 
 The agent holds only **Reader**. Asked to restart the service, it refuses.
 Instead it opens a pull request containing exactly one line of change, which a
-human reviews and merges through the existing pipeline. Use it for audiences
-with change management or audit requirements.
+human reviews and merges through the existing pipeline. No GitHub secret is
+created at any point. Use it for audiences with change management or audit
+requirements.
 
 *~45 minutes preparation, ~25 minutes live.*
 
