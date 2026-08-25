@@ -228,41 +228,82 @@ jobs:
         with:
           node-version: "20"
 
+      # A destroy leaves the activation variables in place, so a later push can
+      # target a profile that no longer exists. Treat that as a no-op instead of
+      # a failure; an explicit dispatch still fails loudly.
       - name: Resolve scenario-isolated backend
         id: backend
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          not_deployed() {
+            if [[ "${EVENT_NAME}" != "push" ]]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::notice title=Environment not deployed::$1"
+            {
+              echo "## Deployment skipped"
+              echo ""
+              echo "$1"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
           STATE_HASH="$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${TF_PREFIX}" "${DEPLOYMENT_SCENARIO}" | sha256sum | cut -c1-16)"
           STATE_RG="rg-${TF_PREFIX}-tfstate"
           STATE_SA="sttf${STATE_HASH}"
           STATE_KEY="${TF_PREFIX}-${DEPLOYMENT_SCENARIO}-${TF_ENVIRONMENT}.tfstate"
-          az storage account show -n "${STATE_SA}" -g "${STATE_RG}" >/dev/null 2>&1 || { echo "::error::Scenario backend is absent. Run deploy for Scenario ${DEPLOYMENT_SCENARIO} first."; exit 1; }
-          EXISTS="$(az storage blob exists --account-name "${STATE_SA}" --container-name tfstate --name "${STATE_KEY}" --auth-mode login --query exists -o tsv)"
-          [[ "${EXISTS}" == true ]] || { echo "::error::Scenario state blob is absent. Refusing to apply to another profile."; exit 1; }
           {
             echo "state_rg=${STATE_RG}"
             echo "state_sa=${STATE_SA}"
             echo "state_key=${STATE_KEY}"
           } >> "${GITHUB_OUTPUT}"
+          az storage account show -n "${STATE_SA}" -g "${STATE_RG}" >/dev/null 2>&1 \
+            || not_deployed "Scenario ${DEPLOYMENT_SCENARIO} backend is absent. Run deploy for Scenario ${DEPLOYMENT_SCENARIO} first."
+          EXISTS="$(az storage blob exists --account-name "${STATE_SA}" --container-name tfstate --name "${STATE_KEY}" --auth-mode login --query exists -o tsv)"
+          [[ "${EXISTS}" == true ]] \
+            || not_deployed "Scenario ${DEPLOYMENT_SCENARIO} state blob is absent. Run deploy for Scenario ${DEPLOYMENT_SCENARIO} first."
 
       - name: Terraform init and verify scenario
+        id: init
+        if: ${{ steps.backend.outputs.skip != 'true' }}
         working-directory: infra
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          not_deployed() {
+            if [[ "${EVENT_NAME}" != "push" ]]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::notice title=Environment not deployed::$1"
+            {
+              echo "## Deployment skipped"
+              echo ""
+              echo "$1"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
           terraform init -input=false \
             -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
             -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
-          terraform state list | grep -Fxq 'azurerm_resource_group.this' || { echo "::error::State has no deployed environment. Run deploy first."; exit 1; }
+          terraform state list | grep -Fxq 'azurerm_resource_group.this' \
+            || not_deployed "State for Scenario ${DEPLOYMENT_SCENARIO} has no deployed environment. Run deploy first."
           ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)" || { echo "::error::State has no scenario output; in-place conversion is unsupported."; exit 1; }
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           echo "TF_LOCATION=$(terraform output -raw location)" >> "${GITHUB_ENV}"
 
       - name: Build and push immutable images
         id: images
+        if: ${{ steps.backend.outputs.skip != 'true' && steps.init.outputs.skip != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -279,6 +320,7 @@ jobs:
           echo "TF_VAR_image_digests=${DIGESTS}" >> "${GITHUB_ENV}"
 
       - name: Terraform apply
+        if: ${{ steps.backend.outputs.skip != 'true' && steps.init.outputs.skip != 'true' }}
         working-directory: infra
         shell: bash
         run: |
@@ -291,7 +333,7 @@ jobs:
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch after apply."; exit 1; }
 
       - name: Refresh Azure login for SRE Agent reconciliation
-        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
+        if: ${{ needs.select-profile.outputs.scenario == 'C' && steps.backend.outputs.skip != 'true' && steps.init.outputs.skip != 'true' }}
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -299,7 +341,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Reconcile and verify Scenario C SRE Agent
-        if: ${{ needs.select-profile.outputs.scenario == 'C' }}
+        if: ${{ needs.select-profile.outputs.scenario == 'C' && steps.backend.outputs.skip != 'true' && steps.init.outputs.skip != 'true' }}
         shell: bash
         env:
           SRE_CODE_ACCESS_ENABLED: ${{ vars.SRE_CODE_ACCESS_ENABLED || 'false' }}
@@ -330,6 +372,7 @@ jobs:
             --agent "${AGENT_NAME}"
 
       - name: Summary
+        if: ${{ steps.backend.outputs.skip != 'true' && steps.init.outputs.skip != 'true' }}
         working-directory: infra
         shell: bash
         run: |
