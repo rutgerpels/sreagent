@@ -81,8 +81,23 @@ az role assignment create \
     --query id -o tsv)"
 ```
 
-Assign it after the first deploy, since the agent must exist, and allow about a
-minute for propagation.
+Assign it after the deploy, since the agent must exist, and allow about a minute
+for propagation.
+
+**Where to run it.** This is an ARM control-plane call against the public
+`management.azure.com`, so it needs no line of sight to any private endpoint.
+Azure Cloud Shell, your laptop, or a jump host all work — including in Scenario
+C, where almost everything else must run on the private runner. Sign in as the
+account you will browse the agent with; the assignment is granted to whoever
+`az ad signed-in-user show` returns, which is not necessarily the identity that
+deployed.
+
+If you do not know the resource group or agent name, let Azure find it:
+
+```bash
+az resource list --resource-type Microsoft.App/agents \
+  --query "[].{name:name, rg:resourceGroup, id:id}" -o table
+```
 
 **This failure is easy to misread.** The portal reports `Failed to load agent
 site`, blames a timeout or a refused connection, and suggests allowing
