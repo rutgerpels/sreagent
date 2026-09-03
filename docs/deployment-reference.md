@@ -1,7 +1,7 @@
 # Deployment and state reference
 
 Operational detail shared by all three scenario walkthroughs. Read the
-[scenario chooser](run-of-show.md) first; come here when a walkthrough links to
+[README](../README.md) first; come here when a walkthrough links to
 a specific section.
 
 ---

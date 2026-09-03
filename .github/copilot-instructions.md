@@ -134,7 +134,7 @@ Generate the repo in this shape:
 │   ├── trigger-incident-direct.sh     # Scenario A: flips the flag on the live app (az)
 │   └── trigger-incident-gitops.sh     # Scenario B: opens a PR; merge -> CI deploys the flag
 ├── docs/
-│   ├── run-of-show.md                  # one-page scenario chooser
+│   ├── deployment-reference.md         # OIDC, state safety, teardown reference
 │   ├── scenario-a-direct.md            # Scenario A setup + talk track (on-the-spot fix)
 │   ├── scenario-b-gitops.md            # Scenario B setup + talk track (PR-based fix)
 │   ├── sre-agent-setup.md              # common SRE Agent setup (steps 1-5)
@@ -242,14 +242,14 @@ Provide `scripts/teardown.sh` → `terraform -chdir=infra destroy -auto-approve`
 
 > The Azure SRE Agent resource itself is provisioned/connected through the Azure portal or its own
 > onboarding flow and is **not** part of this Terraform (it's the managed service consuming this
-> environment). Document the wiring steps in `docs/run-of-show.md`, do not script credentials for it.
+> environment). Document the wiring steps in each scenario walkthrough, do not script credentials for it.
 
 ---
 
 ## 9. Demo flow the environment must support
 
 The infra/app must make these moments possible. The demo ships in **two scenarios** (see
-`docs/run-of-show.md` for the chooser, and `docs/scenario-a-direct.md` /
+the root `README.md` for the chooser, and `docs/scenario-a-direct.md` /
 `docs/scenario-b-gitops.md` for the full talk tracks):
 
 1. **Incident** — flip `ENABLE_SLOW_LEAK`:

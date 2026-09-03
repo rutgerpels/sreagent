@@ -211,6 +211,12 @@ Allow about a minute for propagation. See
 [operator access](sre-agent-setup.md#operator-access-to-the-agent) for why
 `SRE Agent Standard User` is not enough here.
 
+> **If the agent site later fails to load**, the portal reports a timeout or a
+> refused connection and suggests allowing `*.azuresre.ai` — which points at
+> networking. The API is actually returning `403 Forbidden: Access denied by
+> PDP`: a missing role, not a blocked port. Check this assignment before you
+> investigate anything else.
+
 **Do.** Go to <https://sre.azure.com>, open the agent created in your demo
 resource group, and check its settings.
 
@@ -532,7 +538,7 @@ security-minded audience asks.
 
 ## References
 
-- [Scenario chooser](run-of-show.md)
+- [Demo overview and scenario chooser](../README.md)
 - [Deployment and state reference](deployment-reference.md)
 - [Azure SRE Agent setup reference](sre-agent-setup.md)
 - [Azure SRE Agent GitHub connector](https://learn.microsoft.com/azure/sre-agent/github-connector)

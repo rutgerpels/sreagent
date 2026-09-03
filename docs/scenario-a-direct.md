@@ -209,6 +209,12 @@ Allow about a minute for propagation. Scenario A is autonomous, so
 `SRE Agent Standard User` is also sufficient here; see
 [operator access](sre-agent-setup.md#operator-access-to-the-agent).
 
+> **If the agent site later fails to load**, the portal reports a timeout or a
+> refused connection and suggests allowing `*.azuresre.ai` — which points at
+> networking. The API is actually returning `403 Forbidden: Access denied by
+> PDP`: a missing role, not a blocked port. Check this assignment before you
+> investigate anything else.
+
 **Do.** Go to <https://sre.azure.com> and open the agent that the deploy
 workflow created in your demo resource group.
 
@@ -516,7 +522,7 @@ Scenario A deliberately has **no** GitHub write path. If your audience asks
 
 ## References
 
-- [Scenario chooser](run-of-show.md)
+- [Demo overview and scenario chooser](../README.md)
 - [Deployment and state reference](deployment-reference.md)
 - [Azure SRE Agent setup reference](sre-agent-setup.md)
 - [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
