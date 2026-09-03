@@ -74,12 +74,15 @@ cannot mutate production. Being able to open a pull request does not change
 that: a human still reviews and merges, and `apply-infra.yml` performs the
 actual change.
 
-> Agent-authored pull requests are verified under **OAuth-based Code Access**,
-> prompted interactively. Two things remain unverified: whether a
-> bring-your-own GitHub App carries the same write capability — see
-> [Scenario C, step 7](scenario-c-private-gitops.md#step-7-create-the-code-access-github-app) —
-> and whether either scenario produces the pull request unprompted from an
-> alert-triggered response plan.
+> Agent-authored pull requests are verified when **prompted interactively**,
+> under both OAuth-based Code Access and a bring-your-own GitHub App. One thing
+> remains unverified: whether either scenario produces the pull request
+> unprompted from an alert-triggered response plan.
+>
+> Code Access writes through the terminal, so the global tool policy must
+> **allow** `RunInTerminal`. Denying it silently removes the agent's only write
+> path. Azure remains protected by Reader RBAC and by command-level `bash(...)`
+> deny patterns — verified live in the same session.
 
 ---
 

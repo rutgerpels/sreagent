@@ -273,8 +273,10 @@ at **global** scope, then verify it:
 
 - allows the Azure and Kubernetes read diagnostics the demo needs;
 - denies Azure and Kubernetes write tools;
-- denies terminal and shell fallback;
-- denies Terraform apply and destroy paths.
+- denies Azure and Terraform mutation as `bash(...)` command patterns too, so the
+  terminal cannot be used as a fallback;
+- **allows** the terminal itself — Code Access opens its pull request by running
+  `git` and `gh` there, so denying it breaks the remediation step.
 
 **Expect.** Policy applied globally.
 
@@ -465,7 +467,7 @@ state for another profile.
 | The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Merging the incident PR deploys nothing | The activation marker is unset | Complete [step 5](#step-5-activate-push-deployment) |
 | The agent restarts the service instead of refusing | The global tool policy is not applied | Redo [step 10](#step-10-apply-the-hard-tool-policy) and re-test with [step 11](#step-11-test-the-refusal--do-not-skip-this) |
-| The agent explains the fix but opens no pull request | Code Access is not connected, still indexing, or was connected with an account that cannot push to this repository. Note also that agent-authored pull requests are verified interactively but **not** yet from an alert-triggered response plan | Redo [step 8](#step-8-connect-code-access) with the **Your account** method and let indexing finish. If the agent still only describes the fix, ask it in chat to open the pull request — that path is proven — and treat the response plan as unverified |
+| The agent explains the fix but opens no pull request | The global tool policy denies `RunInTerminal` — Code Access writes through the terminal, so denying it removes the only write path — or Code Access is not connected, still indexing, or was connected with an account that cannot push to this repository. Note also that agent-authored pull requests are verified interactively but **not** yet from an alert-triggered response plan | Confirm the policy from [step 10](#step-10-apply-the-hard-tool-policy) allows the terminal, then redo [step 8](#step-8-connect-code-access) with the **Your account** method and let indexing finish. If the agent still only describes the fix, ask it in chat to open the pull request — that path is proven — and treat the response plan as unverified |
 | The remediation PR touches more than one file | The custom agent or response plan is not scoped | Redo [step 12](#step-12-configure-the-gitops-behaviour); do not merge the PR |
 | The agent cannot see the merge commit | Code Access not connected or still indexing | Redo [step 8](#step-8-connect-code-access) and allow indexing to finish |
 | Memory climbs but no alert fires | Fewer than ~8 minutes elapsed, or the wrong app is charted | The rule uses a five-minute average; confirm you are charting `payment-service` |
