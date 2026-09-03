@@ -30,10 +30,25 @@ resource "azurerm_role_assignment" "deployer_kv_secrets_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+# Importing the GitHub App PEM is a key operation, and Secrets Officer does not
+# grant it. Scoped to the vault because the import happens before the key exists,
+# and only created when Code Access is enabled so A/B grant nothing extra.
+resource "azurerm_role_assignment" "deployer_kv_crypto_officer" {
+  count                = var.enable_sre_code_access ? 1 : 0
+  scope                = azurerm_key_vault.this.id
+  role_definition_name = "Key Vault Crypto Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
 # GitHub BYO App Code Access uses a dedicated identity scoped to a single key.
 # The service signs the App JWT inside Key Vault rather than reading a PEM out,
 # so this is Crypto User on one key — not Secrets User. The action identity has
 # no Key Vault role at all.
+#
+# The key itself is imported by the deploy workflow after this apply, which is
+# why the scope names a key that may not exist yet. Azure accepts a role
+# assignment at a not-yet-created child scope and applies it once the key
+# appears — verified against a live vault.
 resource "azurerm_role_assignment" "agent_kv_crypto_user" {
   for_each                         = local.sre_code_access_agents
   scope                            = "${azurerm_key_vault.this.id}/keys/${var.sre_code_access_private_key_name}"
@@ -46,6 +61,7 @@ resource "azurerm_role_assignment" "agent_kv_crypto_user" {
 resource "time_sleep" "wait_kv_rbac" {
   depends_on = [
     azurerm_role_assignment.deployer_kv_secrets_officer,
+    azurerm_role_assignment.deployer_kv_crypto_officer,
     azurerm_private_dns_zone_virtual_network_link.key_vault,
     azurerm_private_endpoint.key_vault,
   ]
