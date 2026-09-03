@@ -30,12 +30,14 @@ resource "azurerm_role_assignment" "deployer_kv_secrets_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# GitHub BYO App Code Access uses a dedicated identity and secret-level scope.
-# The action identity has no Key Vault secret role.
-resource "azurerm_role_assignment" "agent_kv_secrets_user" {
+# GitHub BYO App Code Access uses a dedicated identity scoped to a single key.
+# The service signs the App JWT inside Key Vault rather than reading a PEM out,
+# so this is Crypto User on one key — not Secrets User. The action identity has
+# no Key Vault role at all.
+resource "azurerm_role_assignment" "agent_kv_crypto_user" {
   for_each                         = local.sre_code_access_agents
-  scope                            = "${azurerm_key_vault.this.id}/secrets/${var.sre_code_access_private_key_secret_name}"
-  role_definition_name             = "Key Vault Secrets User"
+  scope                            = "${azurerm_key_vault.this.id}/keys/${var.sre_code_access_private_key_name}"
+  role_definition_name             = "Key Vault Crypto User"
   principal_id                     = azurerm_user_assigned_identity.agent_code_access[each.key].principal_id
   skip_service_principal_aad_check = true
 }

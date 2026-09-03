@@ -51,7 +51,7 @@ test("renders no Code Access credential values", () => {
     ...disabledEnvironment,
     SRE_CODE_ACCESS_ENABLED: "true",
     SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID: "Iv1.example",
-    SRE_CODE_ACCESS_PRIVATE_KEY_SECRET_URI: "https://vault.example/secrets/key",
+    SRE_CODE_ACCESS_PRIVATE_KEY_URI: "https://vault.example/keys/app-key",
     SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID:
       "/subscriptions/example/identities/agent",
     SRE_CODE_ACCESS_REPOSITORY_URL: "https://github.com/example/repository",
