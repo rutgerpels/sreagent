@@ -74,10 +74,16 @@ cannot mutate production. Being able to open a pull request does not change
 that: a human still reviews and merges, and `apply-infra.yml` performs the
 actual change.
 
-> Agent-authored pull requests are verified when **prompted interactively**,
-> under both OAuth-based Code Access and a bring-your-own GitHub App. One thing
-> remains unverified: whether either scenario produces the pull request
-> unprompted from an alert-triggered response plan.
+> **The full incident-to-pull-request loop is verified end to end in Scenario
+> C.** An Azure Monitor Sev2 alert opened the thread, and the agent
+> investigated, identified `enable_slow_leak`, and opened the remediation pull
+> request **unprompted** — no human message in the thread until eleven minutes
+> after the PR existed. Merging it ran `apply-infra`, and payment-service memory
+> fell from 1,033 MB to 125 MB on the new revision.
+>
+> Scenario B is verified when **prompted interactively** over OAuth-based Code
+> Access. Its alert-triggered path is not separately verified, though B and C
+> run the same response plan and write path.
 >
 > Code Access writes through the terminal, so the global tool policy must
 > **allow** `RunInTerminal`. Denying it silently removes the agent's only write
