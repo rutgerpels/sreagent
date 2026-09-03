@@ -167,6 +167,27 @@ through steps 7–12 in order.
 
 ### Step 7. Open the agent and confirm the profile
 
+**Grant yourself access first.** The deploy gives the *deployment identity* an
+agent role, not you. Subscription Owner does not reach the agent's data plane, so
+without this the agent site refuses to load and reports a misleading network
+error. Scenario B runs in Review mode, so you need the role that can **approve**:
+
+```bash
+RG=<your demo resource group>
+AGENT_ID=$(az resource list -g "$RG" \
+  --resource-type Microsoft.App/agents --query "[0].id" -o tsv)
+
+az role assignment create \
+  --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
+  --assignee-principal-type User \
+  --role "SRE Agent Administrator" \
+  --scope "$AGENT_ID"
+```
+
+Allow about a minute for propagation. See
+[operator access](sre-agent-setup.md#operator-access-to-the-agent) for why
+`SRE Agent Standard User` is not enough here.
+
 **Do.** Go to <https://sre.azure.com>, open the agent created in your demo
 resource group, and check its settings.
 
@@ -422,6 +443,7 @@ state for another profile.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Deploy fails in preflight with a scenario mismatch | `DEPLOYMENT_SCENARIO` is set to A or C | Destroy that profile, then delete all three profile variables |
+| The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Merging the incident PR deploys nothing | The activation marker is unset | Complete [step 5](#step-5-activate-push-deployment) |
 | The agent restarts the service instead of refusing | The global tool policy is not applied | Redo [step 10](#step-10-apply-the-hard-tool-policy) and re-test with [step 11](#step-11-test-the-refusal--do-not-skip-this) |
 | The agent explains the fix but opens no pull request | Code Access is not connected, still indexing, or was connected with an account that cannot push to this repository. Note also that agent-authored pull requests are verified interactively but **not** yet from an alert-triggered response plan | Redo [step 8](#step-8-connect-code-access) with the **Your account** method and let indexing finish. If the agent still only describes the fix, ask it in chat to open the pull request — that path is proven — and treat the response plan as unverified |
