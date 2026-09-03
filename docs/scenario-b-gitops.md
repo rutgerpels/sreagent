@@ -191,6 +191,10 @@ agent role, not you. Subscription Owner does not reach the agent's data plane, s
 without this the agent site refuses to load and reports a misleading network
 error. Scenario B runs in Review mode, so you need the role that can **approve**:
 
+> **Run this from any signed-in shell — Azure Cloud Shell is fine.** Role
+> assignment is an ARM control-plane call, so it needs no special network
+> access. Sign in as the account you will browse the agent with.
+
 ```bash
 RG=<your demo resource group>
 AGENT_ID=$(az resource list -g "$RG" \

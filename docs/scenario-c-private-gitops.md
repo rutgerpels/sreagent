@@ -67,6 +67,23 @@ across demos.
 > and delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT` first.
 > Scenario state is never converted in place.
 
+### Where each step runs
+
+Scenario C puts state, ACR, and Key Vault behind private endpoints, so it is
+easy to assume *everything* must run on the private runner. It does not. Most
+operator steps are ordinary control-plane calls to the public
+`management.azure.com`.
+
+| Work | Where | Why |
+| --- | --- | --- |
+| The deploy itself | The self-hosted runner, via GitHub Actions | Reaches the private state account, ACR, and Key Vault |
+| Role assignments, listing resources, restarting revisions | **Any signed-in shell — Cloud Shell is fine** | ARM control plane, public endpoint |
+| Reading Key Vault keys or secrets, pulling from ACR, `terraform output` | The private runner only | Data plane behind private endpoints |
+| Opening the agent at <https://sre.azure.com> | Any browser | The agent endpoint is public; VNet integration governs egress only |
+
+Nothing in this walkthrough asks you to run Terraform by hand. Where a command
+needs a repository clone, the step says so.
+
 ---
 
 ## Phase 1 — Prepare the private runner and network
@@ -287,9 +304,23 @@ identity* an agent role, not you. Subscription Owner does not reach the agent's
 data plane, so without this the agent site refuses to load for every account.
 Run this once, after the deploy has created the agent:
 
+> **Run this from any signed-in shell — Azure Cloud Shell is fine.** This is one
+> of the few Scenario C steps that does *not* need the private runner: role
+> assignment is an ARM control-plane call to the public `management.azure.com`.
+> Sign in as the account you will browse the agent with.
+
 ```bash
-AGENT_ID=$(terraform -chdir=infra output -json sre_agent_ids \
-  | python -c 'import json,sys; print(next(iter(json.load(sys.stdin).values())))')
+# Confirm you are in the right subscription, as the right user.
+az account show --query "{sub:name, user:user.name}" -o table
+
+# Find the agent. Check the result before continuing if you have more
+# than one scenario deployed.
+az resource list --resource-type Microsoft.App/agents \
+  --query "[].{name:name, rg:resourceGroup, id:id}" -o table
+
+AGENT_ID=$(az resource list --resource-type Microsoft.App/agents \
+  --query "[0].id" -o tsv)
+[[ -n "$AGENT_ID" ]] || echo "No agent found - wrong subscription?"
 
 az role assignment create \
   --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
@@ -335,7 +366,7 @@ and choose **Your account**.
 
 ### Step 9. Verify the agent configuration
 
-**Do.** From an authenticated host that can reach the environment:
+**Do.** From a clone of this repository, signed in to Azure:
 
 ```bash
 ./scripts/reconcile-sre-agent.sh \
@@ -344,6 +375,13 @@ and choose **Your account**.
   --resource-group "<resource-group>" \
   --agent "<agent-name>"
 ```
+
+This step is optional — the deploy already ran the same verification. Run it by
+hand only to show the check live, or after changing the manifest.
+
+It needs the repository and an Azure login. It reads no private data plane, and
+the agent endpoint is public, so the private runner should not be required — but
+that combination is untested, and the runner is where the deploy runs it.
 
 **Expect.** Verification passes, confirming the policy, custom agent, response
 plan, schedule, and knowledge match the committed manifest. This is the moment
