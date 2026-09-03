@@ -77,7 +77,7 @@ actual change.
 > Agent-authored pull requests are verified under **OAuth-based Code Access**,
 > prompted interactively. Two things remain unverified: whether a
 > bring-your-own GitHub App carries the same write capability — see
-> [Scenario C, step 4](scenario-c-private-gitops.md#step-4-create-the-code-access-github-app) —
+> [Scenario C, step 7](scenario-c-private-gitops.md#step-7-create-the-code-access-github-app) —
 > and whether either scenario produces the pull request unprompted from an
 > alert-triggered response plan.
 
