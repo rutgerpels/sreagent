@@ -11,6 +11,17 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+// Agent instructions are compared byte for byte by --mode verify. Git checks
+// text files out with CRLF on Windows, so reading them verbatim makes the
+// desired state depend on the operator's platform. Normalise to LF.
+export function readInstructions(path) {
+  return normaliseInstructions(readFileSync(path, "utf8"));
+}
+
+export function normaliseInstructions(text) {
+  return text.replace(/\r\n?/g, "\n").trim();
+}
+
 export function parseExplicitBoolean(value, name) {
   if (value === "true" || value === true) return true;
   if (value === "false" || value === false) return false;
@@ -105,10 +116,10 @@ export function loadDesiredState(configDirectory, environment = process.env) {
     name: item.name,
     properties: {
       ...item.properties,
-      instructions: readFileSync(
-        resolve(directory, item.instructionsFile),
-        "utf8",
-      ).trim(),
+      // Normalise CRLF so a Windows checkout and a Linux CI runner send byte
+      // identical instructions. Without this, --mode verify reports drift
+      // against an agent that was applied from the other platform.
+      instructions: readInstructions(resolve(directory, item.instructionsFile)),
     },
   }));
 

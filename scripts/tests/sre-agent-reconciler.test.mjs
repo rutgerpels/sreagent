@@ -7,6 +7,7 @@ import {
   extendedResourceMatches,
   knowledgeIndexingState,
   loadDesiredState,
+  normaliseInstructions,
   parseExplicitBoolean,
   renderDesiredState,
   stableJson,
@@ -33,6 +34,23 @@ test("loads the supported Scenario C desired state", () => {
   );
   assert.equal(desired.codeAccess.enabled, false);
   assert.equal(desired.codeAccess.domain, "github.com");
+});
+
+// A Windows checkout yields CRLF, a Linux CI runner LF. Verification compares
+// instructions byte for byte, so without normalisation --mode verify reports
+// drift purely because of the operator's platform.
+test("normalises instruction line endings across platforms", () => {
+  assert.equal(normaliseInstructions("a\r\nb\r\n"), "a\nb");
+  assert.equal(normaliseInstructions("a\rb"), "a\nb");
+  assert.equal(
+    normaliseInstructions("first\r\nsecond\r\n"),
+    normaliseInstructions("first\nsecond\n"),
+  );
+  assert.equal(
+    loadDesiredState(config, disabledEnvironment).subagents[0].properties
+      .instructions.includes("\r"),
+    false,
+  );
 });
 
 test("requires complete Key Vault-backed Code Access metadata", () => {
