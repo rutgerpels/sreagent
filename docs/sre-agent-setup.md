@@ -113,8 +113,14 @@ as a write-capable connection and scope it accordingly.
   through it. No connector, no token.
 - C connects Code Access with a bring-your-own GitHub App through the API and
   writes through it. The App needs `Contents: Read/Write` and
-  `Pull requests: Read/Write`; whether App auth carries those writes in practice
-  is not yet verified.
+  `Pull requests: Read/Write`. Verified live: the agent created the branch,
+  committed as `Azure SRE Agent <noreply@microsoft.com>`, and opened the pull
+  request as the App's bot account.
+
+Code Access writes through the **terminal** — `git` and `gh` against a sandboxed
+clone. There is no separate write tool; an agent asked to open a pull request
+with `RunInTerminal` denied searches for one, finds none, and stops. Any policy
+you apply must leave the terminal available.
 
 In every case a pull request is only a *proposal*. The agent cannot merge it,
 and Reader RBAC plus the tool policy stop it from touching Azure regardless of
@@ -157,8 +163,9 @@ enforce the boundary.
 
 Scenario C reconciles
 [`agent/tool-access-policy.api.json`](../agent/tool-access-policy.api.json)
-globally. It denies Azure, Kubernetes, terminal, shell, Terraform, and generic
-GitHub mutation paths while allowing investigation.
+globally. It denies Azure, Kubernetes, and Terraform mutation — both as tool
+names and as `bash(...)` command patterns — while allowing investigation and the
+terminal that Code Access needs to open its pull request.
 
 ## Connector behavior
 

@@ -6,8 +6,6 @@
     ],
     "ask": [],
     "deny": [
-      "RunInTerminal",
-      "RunShellCommand",
       "RunAzCliWriteCommands",
       "RunKubectlWriteCommand",
       "bash(az * create *)",
