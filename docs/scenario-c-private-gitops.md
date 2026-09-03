@@ -249,14 +249,15 @@ Then continue at [step 10](#step-10-verify-the-agent-configuration).
 
 **For the GitHub App path.** Continue at step 7.
 
-> **Untested path.** Agent-authored pull requests were verified live using
-> **OAuth-based Code Access**, where the agent created the branch itself and
-> committed as `Azure SRE Agent <noreply@microsoft.com>`. The equivalent flow
-> under a bring-your-own GitHub App has **not** been verified. The App is
-> documented first because Scenario C's story is configuration from code rather
-> than portal clicks. If the agent cannot write with the App, fall back to
-> OAuth — that path is proven, at the cost of one manual step and the caveat
-> above.
+> **Partly tested path.** The App *connection* is verified: connecting with a
+> Key Vault key URI succeeds, and the service reports `authType: GitHubApp` with
+> the repository cloned and healthy. What has **not** been verified is the App
+> actually writing — agent-authored branches and pull requests were only ever
+> observed under **OAuth**, where the agent created the branch itself and
+> committed as `Azure SRE Agent <noreply@microsoft.com>`. The App is documented
+> first because Scenario C's story is configuration from code rather than portal
+> clicks. If the agent cannot write with the App, fall back to OAuth — that path
+> is proven, at the cost of one manual step and the caveat above.
 
 ### Step 7. Create the Code Access GitHub App
 
@@ -275,7 +276,7 @@ repository only**.
 
 **Expect.** An App with a client ID and a downloaded private key (PEM).
 
-### Step 8. Store the PEM in Key Vault
+### Step 8. Import the App key into Key Vault
 
 **Do.** First find the vault that phase 2 created. You do not choose its name —
 Terraform generates it as `kv-<prefix>-<scenario>-<random>`, truncating the
@@ -288,22 +289,32 @@ az keyvault list \
   --query "[0].name" --output tsv
 ```
 
-Then, from a host that can reach the private Key Vault endpoint:
+Then, from a host that can reach the private Key Vault endpoint, import the PEM
+as a **key** — not a secret:
 
 ```bash
-az keyvault secret set \
+az keyvault key import \
   --vault-name "<key-vault-name>" \
-  --name "sre-code-access-github-app-pem" \
-  --file "./code-access-app.pem" \
+  --name "sre-code-access-github-app-key" \
+  --pem-file "./code-access-app.pem" \
   --output none
 ```
 
 Then securely remove the local PEM according to your key-custody process.
 
-**Expect.** The secret exists in the vault. Terraform attaches a dedicated Code
-Access identity and grants it `Key Vault Secrets User` **only at that secret's
-scope**. The agent's action identity gets no secret-read role, and the workflow
-passes only the secret URI — it never reads or logs the value.
+> **This differs from Microsoft's published guidance.** Those docs describe
+> storing the PEM as a Key Vault *secret* and copying the Secret Identifier. The
+> service now rejects that and answers:
+> *"For improved security, Key Vault secret URIs are no longer supported for
+> GitHub App credentials. Use a Key Vault key URI (.../keys/&lt;name&gt;) instead."*
+> The App JWT is signed inside Key Vault, so the private key is never read out.
+> The key URI path is verified live against this repository.
+
+**Expect.** The key exists in the vault. GitHub issues PKCS#1 PEMs and
+`az keyvault key import` accepts them directly; no `openssl` conversion was
+needed. Terraform attaches a dedicated Code Access identity and grants it
+`Key Vault Crypto User` **only at that key's scope**. The agent's action identity
+gets no Key Vault role, and the workflow passes only the key URI.
 
 **If the command cannot reach the vault**, run it from the same network as the
 deploy runner. Scenario C denies public access to Key Vault.
@@ -315,16 +326,26 @@ deploy runner. Scenario C denies public access to Key Vault.
 | Variable | Value |
 | --- | --- |
 | `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID` | The App's client ID |
-| `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_SECRET_NAME` | `sre-code-access-github-app-pem` |
+| `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_NAME` | `sre-code-access-github-app-key` |
 | `SRE_CODE_ACCESS_ENABLED` | `true` — **set this one last** |
 
 Then run **Actions → deploy → Run workflow** again with the same inputs as
 step 4. Nothing else changes; this run exists to reconcile Code Access.
 
-**Expect.** The reconciliation step builds the secret URI from the vault name and
-the secret name, connects the repository, and its verification confirms the
+**Expect.** The reconciliation step builds the key URI from the vault name and
+the key name, connects the repository, and its verification confirms the
 connection. Setting `SRE_CODE_ACCESS_ENABLED=true` before the App exists and the
-PEM is stored fails the run by design.
+key is imported fails the run by design.
+
+**To check without a full deploy**, the reconciler is a plain CLI tool. Export
+`SRE_CODE_ACCESS_ENABLED`, `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID`,
+`SRE_CODE_ACCESS_PRIVATE_KEY_URI` (the `.../keys/<name>` URI),
+`SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID`, and
+`SRE_CODE_ACCESS_REPOSITORY_URL`, then run `scripts/reconcile-sre-agent.sh
+--mode apply`. It reaches the agent's public API, so it needs no private-network
+access — only an SRE Agent role, as in
+[operator access](sre-agent-setup.md#operator-access-to-the-agent). That turns a
+full deploy cycle into seconds.
 
 ---
 
@@ -505,7 +526,7 @@ before destroying anything.
 **Do.** Remove or rotate, when no longer required:
 
 - the GitHub App installation and its private key;
-- the Code Access PEM secret in Key Vault;
+- the Code Access App key in Key Vault;
 - any Entra consent granted for the demo.
 
 **Do not** remove pre-existing shared runner-network resources — Terraform does
@@ -524,7 +545,8 @@ not own them.
 | The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Terraform fails reaching the state account | The runner cannot reach the private endpoint, or peering is missing | Verify `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, `RUNNER_PE_SUBNET_NAME` and runner network reachability |
 | Peering or subnet creation fails | Application and runner address spaces overlap | Override `APP_VNET_ADDRESS_SPACE` and the subnet prefixes |
-| Code Access reconciliation fails | Partial configuration — App, PEM secret, or variables missing | Set all three variables together, or leave `SRE_CODE_ACCESS_ENABLED` unset |
+| Code Access reconciliation fails | Partial configuration — App, key, or variables missing | Set all three variables together, or leave `SRE_CODE_ACCESS_ENABLED` unset |
+| Reconciliation fails with "Key Vault secret URIs are no longer supported" | The App credential was stored as a Key Vault *secret* | Import it as a **key** instead; see [step 8](#step-8-import-the-app-key-into-key-vault) |
 | The Key Vault does not exist yet | Phase 3 was attempted before the phase 2 deploy | Run [step 4](#step-4-run-the-deploy-workflow) first; the vault name is generated during that run |
 | Code Access was connected but has disappeared | A later deploy reconciled it away because `SRE_CODE_ACCESS_ENABLED` is unset | Expected for the OAuth path — re-connect it in [step 6](#step-6-choose-the-code-access-path) after the final deploy |
 | The agent proposes the fix but opens no pull request | Code Access is disabled, or the App lacks `Contents: Read/Write` and `Pull requests: Read/Write` | Raise the App permissions in [step 7](#step-7-create-the-code-access-github-app) and reinstall, or connect Code Access over OAuth — the proven path |

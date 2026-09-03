@@ -304,7 +304,7 @@ variable "sre_agent_monthly_agent_unit_limit" {
 }
 
 variable "enable_sre_code_access" {
-  description = "Attach a dedicated secret-scoped identity for Scenario C GitHub App Code Access."
+  description = "Attach a dedicated key-scoped identity for Scenario C GitHub App Code Access."
   type        = bool
   default     = false
 
@@ -314,15 +314,17 @@ variable "enable_sre_code_access" {
   }
 }
 
-variable "sre_code_access_private_key_secret_name" {
-  description = "Name of the existing Key Vault secret containing the read-only Code Access GitHub App PEM."
+# The service signs the GitHub App JWT inside Key Vault, so the App credential is
+# imported as a Key Vault *key*, not stored as a secret. Secret URIs are rejected.
+variable "sre_code_access_private_key_name" {
+  description = "Name of the existing Key Vault key holding the Code Access GitHub App private key."
   type        = string
   default     = null
 
   validation {
-    condition = var.sre_code_access_private_key_secret_name == null ? !var.enable_sre_code_access : can(
-      regex("^[0-9A-Za-z-]{1,127}$", var.sre_code_access_private_key_secret_name)
+    condition = var.sre_code_access_private_key_name == null ? !var.enable_sre_code_access : can(
+      regex("^[0-9A-Za-z-]{1,127}$", var.sre_code_access_private_key_name)
     )
-    error_message = "sre_code_access_private_key_secret_name is required when Code Access is enabled and must be a valid Key Vault secret name."
+    error_message = "sre_code_access_private_key_name is required when Code Access is enabled and must be a valid Key Vault key name."
   }
 }

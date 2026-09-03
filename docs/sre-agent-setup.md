@@ -120,9 +120,14 @@ In every case a pull request is only a *proposal*. The agent cannot merge it,
 and Reader RBAC plus the tool policy stop it from touching Azure regardless of
 what its GitHub connection allows.
 
-Scenario C stores the Code Access App PEM as a Key Vault secret. The workflow
-passes only its URI. A dedicated identity reads only that secret through
-secret-scoped Key Vault RBAC; the agent action identity has no secret-read role.
+Scenario C imports the Code Access App private key as a Key Vault **key**, not a
+secret. The service signs the App JWT inside Key Vault, so the private key is
+never read out, and it rejects secret URIs outright. The workflow passes only the
+key URI. A dedicated identity holds `Key Vault Crypto User` at that single key's
+scope; the agent action identity has no Key Vault role.
+
+Microsoft's published connector documentation still describes the older secret
+flow. The key URI path is verified live against this repository.
 
 See
 [GitHub connector in Azure SRE Agent](https://learn.microsoft.com/azure/sre-agent/github-connector).
@@ -203,7 +208,7 @@ issued credentials:
 
 - GitHub App creation and installation;
 - GitHub App private-key issuance;
-- Key Vault insertion of the Code Access PEM secret.
+- Key Vault import of the Code Access App private key.
 
 GitHub does not provide a noninteractive API for creating an App or issuing its
 initial private key. These are explicit bootstrap boundaries, not portal-managed

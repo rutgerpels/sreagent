@@ -129,7 +129,9 @@ export function loadDesiredState(configDirectory, environment = process.env) {
   if (codeAccessEnabled) {
     const required = {
       clientId: environment.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID,
-      privateKeySecretUri: environment.SRE_CODE_ACCESS_PRIVATE_KEY_SECRET_URI,
+      // The service rejects Key Vault secret URIs and requires a key URI
+      // (.../keys/<name>). The wire field below keeps its legacy name.
+      privateKeySecretUri: environment.SRE_CODE_ACCESS_PRIVATE_KEY_URI,
       keyVaultManagedIdentityId:
         environment.SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID,
       repositoryUrl: environment.SRE_CODE_ACCESS_REPOSITORY_URL,
