@@ -511,6 +511,12 @@ change is sufficient, that merging runs `apply-infra`, and how to verify
 afterwards. The commit is authored by `Azure SRE Agent <noreply@microsoft.com>`
 — a distinct identity in the git history, not a human's.
 
+> **Verified end to end.** In a recorded run the alert fired at 16:20:35Z, the
+> incident thread opened at 16:21:30Z, and the agent opened the pull request at
+> 16:25:22Z with no human message in the thread — the first user message arrived
+> eleven minutes later. The agent reaches this point on its own; you do not have
+> to ask it.
+
 **If the agent does not open a pull request**, see
 [troubleshooting](#troubleshooting). As a fallback that keeps the demo moving,
 open the reset pull request yourself:
@@ -536,6 +542,26 @@ merge its own work.
 **Expect.** `apply-infra` applies the healthy flag through the private runner,
 its Scenario C reconciliation step confirms the agent configuration has not
 drifted, a new revision starts, memory flattens, and the alert resolves.
+
+> **The chart will lag — do not panic on stage.** Container Apps metrics arrive
+> in batches, so the recovery can take ten minutes or more to render. In a
+> recorded run the chart still showed nothing past the peak fifteen minutes
+> after the merge, then backfilled the whole drop at once. Memory had already
+> fallen from 1,033 MB to 125 MB within two minutes of the new revision
+> starting.
+>
+> Chart **WorkingSetBytes at 1-minute granularity over the last hour**. Average
+> memory *percentage* over a wide window smooths the cliff into a slope and
+> weakens the moment. Confirm the fix from the revision list rather than the
+> chart — a new revision serving 100% of traffic is the real signal:
+>
+> ```bash
+> az containerapp revision list -g <resource-group> -n <payment-app> \
+>   --query "[].{rev:name, active:properties.active, traffic:properties.trafficWeight}" -o table
+> ```
+>
+> Good talk track while you wait: "The pipeline has already applied this. Let's
+> look at what the agent actually committed while the metrics catch up."
 
 **Say.** "The agent proposed; a human approved; the pipeline deployed. The fix
 travelled the same private, reviewed, audited path as every other change in this
