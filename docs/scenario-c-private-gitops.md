@@ -376,7 +376,26 @@ To inspect the desired state without any Azure access, use `--mode render`.
 
 1. Open the frontend URL and place a test order.
 2. Tick **Generate steady traffic (auto-order every 2s)** and leave it running.
-3. Chart `payment-service` process working-set memory in Application Insights.
+3. Chart the `payment-service` memory trend in Application Insights.
+
+   The services publish an OpenTelemetry gauge named
+   `process_memory_rss_bytes`. On Linux the resident set size *is* the working
+   set, but nothing in the portal is labelled "working set", so search for the
+   gauge name rather than the concept. Open the Application Insights resource
+   (`terraform output -raw app_insights_name`, or the only `appi-*` resource in
+   the demo resource group), then **Logs**, and run:
+
+   ```kusto
+   customMetrics
+   | where name == "process_memory_rss_bytes"
+   | where tostring(customDimensions.service) == "payment-service"
+   | summarize rssMB = round(avg(value) / 1048576, 1) by bin(timestamp, 1m)
+   | render timechart
+   ```
+
+   The container app behind this metric is the one whose name contains
+   `payment`; list them with `az containerapp list -g <resource-group> -o table`.
+   Keep this chart open — it is the same view you narrate while memory climbs.
 
 **Expect.** The order succeeds, memory is flat, and neither `checkout-api` nor
 `payment-service` has a public FQDN. Screenshot the flat memory chart.
