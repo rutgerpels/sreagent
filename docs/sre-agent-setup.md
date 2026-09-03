@@ -50,6 +50,48 @@ The managed service may require broader monitoring permissions for the Azure
 Monitor incident lifecycle. That documented exception does not grant general
 workload Contributor. RBAC remains the hard mutation boundary for B and C.
 
+## Operator access to the agent
+
+Azure RBAC on the subscription does not reach the agent itself. The agent
+enforces its own data-plane authorization, so **Owner and Global Administrator
+are not sufficient** — a human who opens the agent without an SRE Agent role is
+refused.
+
+| Role | Chat (`threads/write`) | Approve an action (`threads/approve/action`) |
+| --- | --- | --- |
+| SRE Agent Reader | No | No |
+| SRE Agent Author | No | No |
+| SRE Agent Standard User | Yes | No |
+| SRE Agent Administrator | Yes | Yes |
+
+Scenarios B and C run in **Review** mode, so the presenter must be able to
+approve; only Administrator can. Scenario A is autonomous and needs chat alone,
+where Standard User is enough. Granting **SRE Agent Administrator** scoped to the
+agent — and nothing wider — works for all three:
+
+```bash
+az role assignment create \
+  --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
+  --assignee-principal-type User \
+  --role "SRE Agent Administrator" \
+  --scope "$(az resource show \
+    --resource-group <resource-group> \
+    --name <agent-name> \
+    --resource-type Microsoft.App/agents \
+    --query id -o tsv)"
+```
+
+Assign it after the first deploy, since the agent must exist, and allow about a
+minute for propagation.
+
+**This failure is easy to misread.** The portal reports `Failed to load agent
+site`, blames a timeout or a refused connection, and suggests allowing
+`*.azuresre.ai` — all of which points at networking. The agent API actually
+returns `403 Forbidden: Access denied by PDP`. The endpoint resolves to a public
+address and accepts TLS on port 443 even in Scenario C, because VNet integration
+governs egress only. If the site fails for every account while the deployment is
+healthy, check the role assignment before investigating the network.
+
 ## Code Access is the GitHub write path
 
 Code Access supplies source search, file references, commit correlation, and

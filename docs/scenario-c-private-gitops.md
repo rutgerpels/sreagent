@@ -168,6 +168,26 @@ confirming that the agent holds Reader on Azure and remediates by pull request.
 
 **If the job never starts**, your runner labels do not match step 2.
 
+**Grant yourself access to the agent.** The deploy gives the *deployment
+identity* an agent role, not you. Subscription Owner does not reach the agent's
+data plane, so without this the agent site refuses to load for every account.
+Run this once, after the deploy has created the agent:
+
+```bash
+AGENT_ID=$(terraform -chdir=infra output -json sre_agent_ids \
+  | python -c 'import json,sys; print(next(iter(json.load(sys.stdin).values())))')
+
+az role assignment create \
+  --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
+  --assignee-principal-type User \
+  --role "SRE Agent Administrator" \
+  --scope "$AGENT_ID"
+```
+
+Allow about a minute for propagation. See
+[operator access](sre-agent-setup.md#operator-access-to-the-agent) for the role
+comparison and why the portal's error message points at the wrong thing.
+
 ### Step 5. Activate push deployment
 
 **Do.** Under **Actions → Variables**, add these **in this order**:
@@ -501,6 +521,7 @@ not own them.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | The deploy job queues forever | Runner labels do not match, or the runner is offline | Re-check [step 2](#step-2-register-the-self-hosted-runner); all five labels are required |
+| The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Terraform fails reaching the state account | The runner cannot reach the private endpoint, or peering is missing | Verify `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, `RUNNER_PE_SUBNET_NAME` and runner network reachability |
 | Peering or subnet creation fails | Application and runner address spaces overlap | Override `APP_VNET_ADDRESS_SPACE` and the subnet prefixes |
 | Code Access reconciliation fails | Partial configuration — App, PEM secret, or variables missing | Set all three variables together, or leave `SRE_CODE_ACCESS_ENABLED` unset |

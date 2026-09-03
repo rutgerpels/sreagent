@@ -166,6 +166,27 @@ never run against a half-configured target.
 
 ### Step 7. Open the agent
 
+**Grant yourself access first.** The deploy gives the *deployment identity* an
+agent role, not you. Subscription Owner does not reach the agent's data plane, so
+without this the agent site refuses to load and reports a misleading network
+error:
+
+```bash
+RG=<your demo resource group>
+AGENT_ID=$(az resource list -g "$RG" \
+  --resource-type Microsoft.App/agents --query "[0].id" -o tsv)
+
+az role assignment create \
+  --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
+  --assignee-principal-type User \
+  --role "SRE Agent Administrator" \
+  --scope "$AGENT_ID"
+```
+
+Allow about a minute for propagation. Scenario A is autonomous, so
+`SRE Agent Standard User` is also sufficient here; see
+[operator access](sre-agent-setup.md#operator-access-to-the-agent).
+
 **Do.** Go to <https://sre.azure.com> and open the agent that the deploy
 workflow created in your demo resource group.
 
@@ -435,6 +456,7 @@ migrate Scenario A state.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Deploy fails in preflight with a scenario mismatch | `DEPLOYMENT_SCENARIO` is set to B or C | Destroy that profile, then delete all three profile variables |
+| The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Trigger script exits with "restricted to Scenario A" | Local Terraform state points at another profile | Redo [step 11](#step-11-prepare-the-incident-trigger) with the correct prefix, scenario, and environment |
 | `terraform init` fails on the state account | Wrong subscription selected, or Azure AD data-plane auth not enabled | `az account set --subscription <id>` and export `ARM_USE_AZUREAD=true` |
 | Memory climbs but no alert fires | Fewer than ~8 minutes have passed, or you are charting the wrong app | The rule uses a five-minute average; confirm you are charting `payment-service` |
