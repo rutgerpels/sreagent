@@ -1,1 +1,5 @@
 *.sh text eol=lf
+
+# Agent instructions are compared byte for byte by the reconciler's verify mode.
+# Pin them to LF so a Windows checkout does not appear to drift.
+agent/**/*.md text eol=lf
