@@ -333,6 +333,13 @@ Allow about a minute for propagation. See
 [operator access](sre-agent-setup.md#operator-access-to-the-agent) for the role
 comparison and why the portal's error message points at the wrong thing.
 
+> **If the agent site later fails to load**, the portal reports a timeout or a
+> refused connection and suggests allowing `*.azuresre.ai` — which looks like a
+> private-networking problem in this scenario, and is not. The API is returning
+> `403 Forbidden: Access denied by PDP`: a missing role. The agent endpoint
+> resolves publicly and accepts TLS even in Scenario C, because VNet integration
+> governs egress only. Check this assignment first.
+
 ### Step 7. Activate push deployment
 
 **Do.** Under **Actions → Variables**, add these **in this order**:
@@ -701,7 +708,7 @@ complexity without removing the REST reconciliation phase.
 
 ## References
 
-- [Scenario chooser](run-of-show.md)
+- [Demo overview and scenario chooser](../README.md)
 - [Deployment and state reference](deployment-reference.md)
 - [Azure SRE Agent setup reference](sre-agent-setup.md)
 - [Deploy Azure SRE Agent with infrastructure as code](https://learn.microsoft.com/azure/sre-agent/deploy-iac)
