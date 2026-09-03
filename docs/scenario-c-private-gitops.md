@@ -60,7 +60,7 @@ across demos.
 | A Linux x64 self-hosted runner you can register | Provisioned in phase 1 |
 | A GitHub OIDC deployment identity federated to this repository | See [deployment reference](deployment-reference.md#github-actions-oidc) |
 | Permission to create an Azure SRE Agent | The SRE Agent preview must be available in your tenant and region |
-| Permission to create and install a GitHub App | Only for the GitHub App Code Access path (phase 3); the OAuth path needs none |
+| Permission to create and install a GitHub App | Only for the GitHub App Code Access path (steps 3-5); the OAuth path needs none |
 | Permission to set repository Actions variables | Repository admin |
 
 > **Scenario C is a single, immutable profile.** If A or B is active, destroy it
@@ -103,7 +103,61 @@ pre-install them.
 **Expect.** The runner appears **Idle** in **Settings → Actions → Runners** with
 all five labels. If any label is missing, the deploy job will queue forever.
 
-### Step 3. Set the repository variables
+### Step 3. Choose the Code Access path
+
+Code Access is how the agent correlates an incident to a commit, and how it
+opens the remediation pull request. Without it the demo still works, but it
+loses its most persuasive evidence and the agent cannot propose the fix itself.
+
+**Do.** Pick one path now, before you deploy — the choice changes what you set
+in step 5.
+
+| | Bring-your-own GitHub App | OAuth ("Your account") | None |
+| --- | --- | --- | --- |
+| Configured by | Repository variables and one secret, reconciled from code | Portal, by hand, **after** the deploy | — |
+| Deploy runs needed | One | One | One |
+| Steps | 4 and 5, then deploy | Step 8, after deploying | Skip 4; leave the variables unset |
+| Agent write verified? | **Yes — verified live** | **Yes — verified live** | n/a |
+| Survives a later deploy? | Yes, it is reconciled | **No — see the warning in step 8** | n/a |
+| Pull request author | The App's bot account | The signed-in user | n/a |
+
+Under both working paths the commit inside the pull request is authored by
+`Azure SRE Agent <noreply@microsoft.com>`, so the provenance story lands either
+way. They differ only in who opens the pull request: the App's `[bot]` account,
+or you.
+
+**The App path is the one that matches Scenario C's story** — configuration from
+code rather than portal clicks — and it is the only path that survives a
+redeploy. OAuth is a valid fallback at the cost of one manual step and the
+reconcile caveat.
+
+Partial configuration fails closed: set all of the Code Access variables or none
+of them.
+
+### Step 4. Create the Code Access GitHub App
+
+Skip this step on the OAuth path.
+
+**Do.** Create a dedicated GitHub App with **only**:
+
+| Permission | Level |
+| --- | --- |
+| Metadata | Read |
+| Contents | Read/Write |
+| Pull requests | Read/Write |
+
+`Contents: Read/Write` and `Pull requests: Read/Write` are what let the agent
+push a branch and open the remediation pull request. No Issues, Actions,
+Administration, Secrets, or Workflows permissions. Install it on **this
+repository only**.
+
+**Expect.** An App with a client ID and a downloaded private key (PEM).
+
+Keep the PEM to hand for the next step, then remove it from your machine
+according to your key-custody process. It is the one credential Scenario C
+creates, and [step 18](#step-18-clean-up-external-material) revokes it.
+
+### Step 5. Set the repository variables and secret
 
 **Do.** Under **Settings → Secrets and variables → Actions → Variables**, set
 the required variables:
@@ -124,18 +178,44 @@ Optional address-space overrides, if the defaults collide with your network:
 - `CONTAINER_APPS_SUBNET_PREFIX`
 - `SRE_AGENT_SUBNET_PREFIX`
 
-**Expect.** All six required variables are set, and the application address
-space **does not overlap** the runner address space. Overlapping ranges break
-peering and are the most common phase-1 failure.
+The application address space **must not overlap** the runner address space.
+Overlapping ranges break peering and are the most common phase-1 failure.
+
+On the **GitHub App path only**, add these three variables as well:
+
+| Variable | Value |
+| --- | --- |
+| `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID` | The App's client ID from step 4 |
+| `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_NAME` | `sre-code-access-github-app-key` |
+| `SRE_CODE_ACCESS_ENABLED` | `true` |
+
+The key name is yours to choose — it is the name the key is given inside Key
+Vault, not a fixed convention. The workflow builds the key URI from it, so it
+only has to be a valid Key Vault key name.
+
+Then, under **Secrets**, add one repository secret:
+
+| Secret | Value |
+| --- | --- |
+| `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM` | The **entire** contents of the App's `.pem` file, including the `-----BEGIN` and `-----END` lines |
+
+The deploy imports that PEM into Key Vault as a **key** and never writes it to
+the repository. GitHub masks it in workflow logs, and the workflow shreds its
+temporary copy on the runner whether the import succeeds or fails.
+
+**Expect.** Six required variables, plus three variables and one secret if you
+chose the App path.
 
 **Do not** create an Azure client secret, credentials JSON, storage key, or ACR
-admin credential. Deployment is OIDC-only.
+admin credential. Deployment is OIDC-only. The App PEM is the single stored
+credential in Scenario C, and it exists because there is no OIDC path for
+handing a GitHub App key to the SRE Agent service.
 
 ---
 
-## Phase 2 — Deploy and reconcile
+## Phase 2 — Deploy
 
-### Step 4. Run the deploy workflow
+### Step 6. Run the deploy workflow
 
 **Do.** Go to **Actions → deploy → Run workflow** and set:
 
@@ -145,10 +225,7 @@ admin credential. Deployment is OIDC-only.
 | Resource name prefix | `contosopay` | Any short lowercase prefix works |
 | Environment label | `demo` | Appears in names and the state key |
 | Azure region | `swedencentral` | Any region where SRE Agent is available |
-| Open incident PR | `false` | Leave this off; you arm the incident live in step 13 |
-
-Leave the Code Access variables unset for this run. Code Access is connected in
-phase 3, after this deploy has created the Key Vault it depends on.
+| Open incident PR | `false` | Leave this off; you arm the incident live in step 12 |
 
 **Expect.** The job is picked up by your labelled private runner and then:
 
@@ -157,16 +234,53 @@ phase 3, after this deploy has created the Key Vault it depends on.
    ARM connectors;
 3. builds and digest-pins all images;
 4. applies the applications;
-5. reconciles the global tool policy, the `gitops-remediation` custom agent, the
-   response plan, the scheduled health check, knowledge, and optional Code
-   Access from `agent/scenario-c/manifest.json`;
-6. **verifies** the resulting agent state.
+5. **imports the GitHub App key into Key Vault** from the repository secret, if
+   Code Access is enabled and the key is not already there;
+6. reconciles the global tool policy, the `gitops-remediation` custom agent, the
+   response plan, the scheduled health check, knowledge, and Code Access from
+   `agent/scenario-c/manifest.json`;
+7. **verifies** the resulting agent state.
+
+**This is the only deploy run you need.** Earlier revisions of this runbook
+required two — one to create the Key Vault, then a manual key import, then a
+second run to connect Code Access. The import now happens between the apply and
+the reconcile in the same job, so the chicken-and-egg is gone.
 
 **Expect on success.** The workflow summary lists the resource group, ACR,
 frontend URL, the activation variables, and a Scenario C bootstrap note
 confirming that the agent holds Reader on Azure and remediates by pull request.
 
 **If the job never starts**, your runner labels do not match step 2.
+
+> **Importing the key by hand instead.** The workflow skips the import if the
+> key already exists, so you can still place it yourself — for example if policy
+> forbids the PEM in a GitHub secret. Run this from a host on the runner network,
+> after the vault exists, and leave
+> `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM` unset:
+>
+> ```bash
+> az keyvault key import \
+>   --vault-name "<key-vault-name>" \
+>   --name "sre-code-access-github-app-key" \
+>   --pem-file "./code-access-app.pem" \
+>   --output none
+> ```
+>
+> That is the old two-run flow: deploy once with `SRE_CODE_ACCESS_ENABLED`
+> unset, import, then set the variables and deploy again. The vault name is
+> generated as `kv-<prefix>-<scenario>-<random>` and appears in the deploy
+> summary as `key_vault_name`.
+
+> **This differs from Microsoft's published guidance.** Those docs describe
+> storing the PEM as a Key Vault *secret* and copying the Secret Identifier. The
+> service now rejects that and answers:
+> *"For improved security, Key Vault secret URIs are no longer supported for
+> GitHub App credentials. Use a Key Vault key URI (.../keys/&lt;name&gt;) instead."*
+> The App JWT is signed inside Key Vault, so the private key is never read out.
+> GitHub issues PKCS#1 PEMs and `az keyvault key import` accepts them directly;
+> no `openssl` conversion is needed. Terraform grants a dedicated Code Access
+> identity `Key Vault Crypto User` **only at that key's scope**, and the agent's
+> action identity gets no Key Vault role at all.
 
 **Grant yourself access to the agent.** The deploy gives the *deployment
 identity* an agent role, not you. Subscription Owner does not reach the agent's
@@ -188,7 +302,7 @@ Allow about a minute for propagation. See
 [operator access](sre-agent-setup.md#operator-access-to-the-agent) for the role
 comparison and why the portal's error message points at the wrong thing.
 
-### Step 5. Activate push deployment
+### Step 7. Activate push deployment
 
 **Do.** Under **Actions → Variables**, add these **in this order**:
 
@@ -200,42 +314,12 @@ comparison and why the portal's error message points at the wrong thing.
 `apply-infra` on the private runner. Until the marker exists, push workflows are
 safe no-ops. The state blob is `<prefix>-C-<environment>.tfstate`.
 
----
+### Step 8. Connect Code Access over OAuth — the OAuth path only
 
-## Phase 3 — Connect Code Access (optional but recommended)
+Skip this step on the GitHub App path; the deploy already connected it.
 
-Code Access is how the agent correlates an incident to a commit, and how it
-opens the remediation pull request. Without it, the demo still works but loses
-its most persuasive evidence and the agent cannot propose the fix itself.
-
-**This phase comes after the deploy on purpose.** The Key Vault that holds the
-GitHub App key does not exist until phase 2 has run, and its name is generated
-with a random suffix, so it cannot be known in advance. The App path therefore
-takes two deploy runs: the one you have just completed, and a second one in
-step 9 that reconciles Code Access.
-
-Skip this phase to run without repository context. Leave the Code Access
-variables unset in that case; partial configuration fails closed.
-
-### Step 6. Choose the Code Access path
-
-**Do.** Pick one path and follow only its steps.
-
-| | Bring-your-own GitHub App | OAuth ("Your account") |
-| --- | --- | --- |
-| Configured by | Repository variables, reconciled from code | Portal, by hand |
-| Steps | 7, 8, and 9 | This step only |
-| Agent write verified? | **Yes — verified live** | **Yes — verified live** |
-| Survives a later deploy? | Yes, it is reconciled | **No — see the warning below** |
-| Pull request author | The App's bot account | The signed-in user |
-
-Under both paths the commit inside the pull request is authored by `Azure SRE
-Agent <noreply@microsoft.com>`, so the provenance story lands either way. They
-differ only in who opens the pull request: the App's `[bot]` account, or you.
-
-**For the OAuth path.** In the portal, open the agent, add this repository under
-Code Access, and choose **Your account**. Leave `SRE_CODE_ACCESS_ENABLED` unset.
-Then continue at [step 10](#step-10-verify-the-agent-configuration).
+**Do.** In the portal, open the agent, add this repository under Code Access,
+and choose **Your account**.
 
 > **The reconciler removes a hand-connected repository.** With
 > `SRE_CODE_ACCESS_ENABLED` unset or `false`, the deploy workflow's
@@ -245,116 +329,11 @@ Then continue at [step 10](#step-10-verify-the-agent-configuration).
 > after any later deploy. If your demo relies on OAuth, check the connection is
 > still present before you start.
 
-**For the GitHub App path.** Continue at step 7.
-
-> **Verified path.** Both the connection and the write are confirmed live.
-> Connecting with a Key Vault key URI succeeds and the service reports
-> `authType: GitHubApp` with the repository cloned and healthy; a probe against
-> this repository then had the agent create a branch, commit as `Azure SRE Agent
-> <noreply@microsoft.com>`, and open a pull request as the App's `[bot]` account.
-> The App is documented first because Scenario C's story is configuration from
-> code rather than portal clicks. OAuth remains a valid fallback, at the cost of
-> one manual step and the caveat above.
->
-> This only works because the global tool policy **allows the terminal**. Code
-> Access writes by running `git` and `gh` in its sandboxed clone, so an agent
-> with `RunInTerminal` denied cannot open a pull request at all — it will search
-> for a write tool, find none, and stop. Azure stays protected by Reader RBAC and
-> the `bash(...)` deny patterns, not by blocking the shell.
-
-### Step 7. Create the Code Access GitHub App
-
-**Do.** Create a dedicated GitHub App with **only**:
-
-| Permission | Level |
-| --- | --- |
-| Metadata | Read |
-| Contents | Read/Write |
-| Pull requests | Read/Write |
-
-`Contents: Read/Write` and `Pull requests: Read/Write` are what let the agent
-push a branch and open the remediation pull request. No Issues, Actions,
-Administration, Secrets, or Workflows permissions. Install it on **this
-repository only**.
-
-**Expect.** An App with a client ID and a downloaded private key (PEM).
-
-### Step 8. Import the App key into Key Vault
-
-**Do.** First find the vault that phase 2 created. You do not choose its name —
-Terraform generates it as `kv-<prefix>-<scenario>-<random>`, truncating the
-prefix so the result fits Key Vault's 24-character limit. The deploy summary
-lists it as `key_vault_name`, or:
-
-```bash
-az keyvault list \
-  --resource-group "rg-<prefix>-<environment>-c-<suffix>" \
-  --query "[0].name" --output tsv
-```
-
-Then, from a host that can reach the private Key Vault endpoint, import the PEM
-as a **key** — not a secret:
-
-```bash
-az keyvault key import \
-  --vault-name "<key-vault-name>" \
-  --name "sre-code-access-github-app-key" \
-  --pem-file "./code-access-app.pem" \
-  --output none
-```
-
-Then securely remove the local PEM according to your key-custody process.
-
-> **This differs from Microsoft's published guidance.** Those docs describe
-> storing the PEM as a Key Vault *secret* and copying the Secret Identifier. The
-> service now rejects that and answers:
-> *"For improved security, Key Vault secret URIs are no longer supported for
-> GitHub App credentials. Use a Key Vault key URI (.../keys/&lt;name&gt;) instead."*
-> The App JWT is signed inside Key Vault, so the private key is never read out.
-> The key URI path is verified live against this repository.
-
-**Expect.** The key exists in the vault. GitHub issues PKCS#1 PEMs and
-`az keyvault key import` accepts them directly; no `openssl` conversion was
-needed. Terraform attaches a dedicated Code Access identity and grants it
-`Key Vault Crypto User` **only at that key's scope**. The agent's action identity
-gets no Key Vault role, and the workflow passes only the key URI.
-
-**If the command cannot reach the vault**, run it from the same network as the
-deploy runner. Scenario C denies public access to Key Vault.
-
-### Step 9. Enable Code Access and re-run the deploy
-
-**Do.** Set these nonsecret repository variables, all three together:
-
-| Variable | Value |
-| --- | --- |
-| `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID` | The App's client ID |
-| `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_NAME` | `sre-code-access-github-app-key` |
-| `SRE_CODE_ACCESS_ENABLED` | `true` — **set this one last** |
-
-Then run **Actions → deploy → Run workflow** again with the same inputs as
-step 4. Nothing else changes; this run exists to reconcile Code Access.
-
-**Expect.** The reconciliation step builds the key URI from the vault name and
-the key name, connects the repository, and its verification confirms the
-connection. Setting `SRE_CODE_ACCESS_ENABLED=true` before the App exists and the
-key is imported fails the run by design.
-
-**To check without a full deploy**, the reconciler is a plain CLI tool. Export
-`SRE_CODE_ACCESS_ENABLED`, `SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID`,
-`SRE_CODE_ACCESS_PRIVATE_KEY_URI` (the `.../keys/<name>` URI),
-`SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID`, and
-`SRE_CODE_ACCESS_REPOSITORY_URL`, then run `scripts/reconcile-sre-agent.sh
---mode apply`. It reaches the agent's public API, so it needs no private-network
-access — only an SRE Agent role, as in
-[operator access](sre-agent-setup.md#operator-access-to-the-agent). That turns a
-full deploy cycle into seconds.
-
 ---
 
-## Phase 4 — Verify before the demo
+## Phase 3 — Verify before the demo
 
-### Step 10. Verify the agent configuration
+### Step 9. Verify the agent configuration
 
 **Do.** From an authenticated host that can reach the environment:
 
@@ -373,7 +352,7 @@ live.
 
 To inspect the desired state without any Azure access, use `--mode render`.
 
-### Step 11. Verify the healthy baseline
+### Step 10. Verify the healthy baseline
 
 **Do.**
 
@@ -405,9 +384,9 @@ To inspect the desired state without any Azure access, use `--mode render`.
 
 ---
 
-## Phase 5 — Run the demo live
+## Phase 4 — Run the demo live
 
-### Step 12. Establish the healthy baseline (about 4 minutes)
+### Step 11. Establish the healthy baseline (about 4 minutes)
 
 Scenario C's baseline is a bigger part of the story than in A or B — the
 network posture *is* the value.
@@ -419,7 +398,7 @@ network posture *is* the value.
   disabled and private endpoints in place.
 - The deployment run — executed on a runner inside the network, authenticated
   with OIDC, with no stored Azure credential anywhere.
-- The verified agent configuration from step 10.
+- The verified agent configuration from step 9.
 - The agent's access level — **Reader**.
 - The flat memory chart.
 
@@ -430,7 +409,7 @@ VNet. Private endpoints protect state, ACR, and Key Vault. Do not describe the
 agent workspace as fully private, and never present network placement as an
 authentication boundary.
 
-### Step 13. Arm the incident through a pull request
+### Step 12. Arm the incident through a pull request
 
 **Do.**
 
@@ -446,7 +425,7 @@ pwsh ./scripts/trigger-incident-gitops.ps1
 diff, then merge it. `apply-infra` runs on the private runner, verifies the C
 state, applies the flag, and rolls a new `payment-service` revision.
 
-### Step 14. Narrate while memory climbs (8–12 minutes)
+### Step 13. Narrate while memory climbs (8–12 minutes)
 
 **Say and show.**
 
@@ -459,7 +438,7 @@ state, applies the flag, and rolls a new `payment-service` revision.
 
 **Expect.** The Sev2 alert fires and reaches the agent as an incident.
 
-### Step 15. Walk the investigation
+### Step 14. Walk the investigation
 
 **Do.** Open the incident and read the agent's evidence.
 
@@ -477,7 +456,7 @@ Reader on the subscription and the tool policy denies Azure writes. It offers
 the pull request instead. The guardrail is demonstrated live rather than
 described.
 
-### Step 16. Watch the agent open the remediation pull request
+### Step 15. Watch the agent open the remediation pull request
 
 **Say.** "The agent cannot touch Azure. What it *can* do is propose the fix the
 same way any engineer would — as a reviewable pull request."
@@ -510,7 +489,7 @@ pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
 Terraform and be reversed by the next apply — and it would contradict the entire
 scenario.
 
-### Step 17. Review, merge, and verify
+### Step 16. Review, merge, and verify
 
 **Do.** Review the agent's pull request — one file, one line, no workflow or
 secret changes — and merge it. You are the approver; the agent cannot approve or
@@ -526,9 +505,9 @@ environment. Nothing reached Azure outside the pipeline."
 
 ---
 
-## Phase 6 — Tear down
+## Phase 5 — Tear down
 
-### Step 18. Destroy the environment
+### Step 17. Destroy the environment
 
 **Do.** Go to **Actions → destroy → Run workflow** and set:
 
@@ -542,7 +521,7 @@ environment. Nothing reached Azure outside the pipeline."
 **Expect.** The job runs on the private runner and verifies the state profile
 before destroying anything.
 
-### Step 19. Clean up external material
+### Step 18. Clean up external material
 
 **Do.** Remove or rotate, when no longer required:
 
@@ -567,13 +546,13 @@ not own them.
 | Terraform fails reaching the state account | The runner cannot reach the private endpoint, or peering is missing | Verify `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, `RUNNER_PE_SUBNET_NAME` and runner network reachability |
 | Peering or subnet creation fails | Application and runner address spaces overlap | Override `APP_VNET_ADDRESS_SPACE` and the subnet prefixes |
 | Code Access reconciliation fails | Partial configuration — App, key, or variables missing | Set all three variables together, or leave `SRE_CODE_ACCESS_ENABLED` unset |
-| Reconciliation fails with "Key Vault secret URIs are no longer supported" | The App credential was stored as a Key Vault *secret* | Import it as a **key** instead; see [step 8](#step-8-import-the-app-key-into-key-vault) |
-| The Key Vault does not exist yet | Phase 3 was attempted before the phase 2 deploy | Run [step 4](#step-4-run-the-deploy-workflow) first; the vault name is generated during that run |
-| Code Access was connected but has disappeared | A later deploy reconciled it away because `SRE_CODE_ACCESS_ENABLED` is unset | Expected for the OAuth path — re-connect it in [step 6](#step-6-choose-the-code-access-path) after the final deploy |
-| The agent proposes the fix but opens no pull request | The global tool policy denies `RunInTerminal`, or Code Access is disabled, or the App lacks `Contents: Read/Write` and `Pull requests: Read/Write` | Check the tool policy allows the terminal first — that failure looks like a refusal but is really a missing tool, and the agent's own message names `RunInTerminal`. Then raise the App permissions in [step 7](#step-7-create-the-code-access-github-app) and reinstall |
+| Reconciliation fails with "Key Vault secret URIs are no longer supported" | The App credential was stored as a Key Vault *secret* | Import it as a **key** instead; see [step 6](#step-6-run-the-deploy-workflow) |
+| The Key Vault does not exist yet | The key was imported by hand before the first deploy | Run [step 6](#step-6-run-the-deploy-workflow) first; the vault name is generated during that run |
+| Code Access was connected but has disappeared | A later deploy reconciled it away because `SRE_CODE_ACCESS_ENABLED` is unset | Expected for the OAuth path — re-connect it in [step 8](#step-8-connect-code-access-over-oauth--the-oauth-path-only) after the final deploy |
+| The agent proposes the fix but opens no pull request | The global tool policy denies `RunInTerminal`, or Code Access is disabled, or the App lacks `Contents: Read/Write` and `Pull requests: Read/Write` | Check the tool policy allows the terminal first — that failure looks like a refusal but is really a missing tool, and the agent's own message names `RunInTerminal`. Then raise the App permissions in [step 4](#step-4-create-the-code-access-github-app) and reinstall |
 | The agent proposes nothing | Response plan or logs connector missing | Re-run `reconcile-sre-agent` with `--mode apply`, then `--mode verify` |
 | Memory climbs but no alert fires | Fewer than ~8 minutes elapsed, or the wrong app is charted | The rule uses a five-minute average; confirm you are charting `payment-service` |
-| Merging a PR deploys nothing | The activation marker is unset | Complete [step 5](#step-5-activate-push-deployment) |
+| Merging a PR deploys nothing | The activation marker is unset | Complete [step 7](#step-7-activate-push-deployment) |
 
 ---
 

@@ -495,6 +495,60 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Removes the second deploy pass. The GitHub App key can only be imported
+      # after Key Vault exists, which is why this used to be a manual step
+      # between two runs. Doing it here keeps Scenario C a single run.
+      - name: Import the Code Access GitHub App key
+        if: ${{ inputs.scenario == 'C' && (vars.SRE_CODE_ACCESS_ENABLED || 'false') == 'true' }}
+        shell: bash
+        env:
+          CODE_ACCESS_KEY_NAME: ${{ vars.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_NAME }}
+          CODE_ACCESS_KEY_PEM: ${{ secrets.SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          KEY_VAULT_NAME="$(terraform -chdir=infra output -raw key_vault_name)"
+
+          if az keyvault key show --vault-name "${KEY_VAULT_NAME}" --name "${CODE_ACCESS_KEY_NAME}" >/dev/null 2>&1; then
+            echo "Key '${CODE_ACCESS_KEY_NAME}' already present; leaving it untouched."
+            exit 0
+          fi
+
+          # Purge protection is on, so a same-named key from a previous demo is
+          # recoverable rather than gone. Importing over it would fail.
+          if az keyvault key list-deleted --vault-name "${KEY_VAULT_NAME}" \
+               --query "[?name=='${CODE_ACCESS_KEY_NAME}'] | length(@)" -o tsv 2>/dev/null | grep -qx '[1-9][0-9]*'; then
+            echo "Recovering the soft-deleted key '${CODE_ACCESS_KEY_NAME}'."
+            az keyvault key recover --vault-name "${KEY_VAULT_NAME}" --name "${CODE_ACCESS_KEY_NAME}" -o none
+            for _ in $(seq 1 12); do
+              az keyvault key show --vault-name "${KEY_VAULT_NAME}" --name "${CODE_ACCESS_KEY_NAME}" >/dev/null 2>&1 && exit 0
+              sleep 5
+            done
+            echo "::error::Key recovery did not complete in time."
+            exit 1
+          fi
+
+          if [[ -z "${CODE_ACCESS_KEY_PEM}" ]]; then
+            echo "::error::Repository secret SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM is required when SRE_CODE_ACCESS_ENABLED is true and the key is not already in Key Vault. Paste the GitHub App's downloaded .pem file into that secret, or import the key by hand and re-run."
+            exit 1
+          fi
+
+          PEM_FILE="${RUNNER_TEMP}/code-access-app.pem"
+          # Delete the private key material even if the import fails.
+          trap 'shred -u "${PEM_FILE}" 2>/dev/null || rm -f "${PEM_FILE}"' EXIT
+          (umask 077 && printf '%s\n' "${CODE_ACCESS_KEY_PEM}" > "${PEM_FILE}")
+
+          grep -q -- "-----BEGIN .*PRIVATE KEY-----" "${PEM_FILE}" || {
+            echo "::error::SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM does not look like a PEM private key. Paste the whole file, including the BEGIN and END lines."
+            exit 1
+          }
+
+          echo "Importing '${CODE_ACCESS_KEY_NAME}' into ${KEY_VAULT_NAME}."
+          az keyvault key import \
+            --vault-name "${KEY_VAULT_NAME}" \
+            --name "${CODE_ACCESS_KEY_NAME}" \
+            --pem-file "${PEM_FILE}" \
+            -o none
+
       - name: Reconcile and verify Scenario C SRE Agent
         if: ${{ inputs.scenario == 'C' }}
         shell: bash
