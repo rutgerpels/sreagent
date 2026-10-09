@@ -616,8 +616,9 @@ jobs:
             else
               echo "### Scenario C external bootstrap"
               echo "Terraform and the supported SRE Agent APIs configured networking, observability connectors, global policy, the custom agent, knowledge, response plan, and scheduled health check."
-              echo "1. Enable automated Code Access only after its PEM is stored as a Key Vault secret and its nonsecret repository variables are set."
-              echo "2. The agent holds Reader on Azure. It cannot mutate the deployment; it remediates by opening a pull request that a human reviews and merges."
+              echo "1. When Code Access is enabled, this run imports the GitHub App PEM as a Key Vault key (or reuses an existing key) and verifies the connection using its key URI."
+              echo "2. The agent identities hold Reader on the workload and Monitoring Contributor at subscription scope for monitoring and the alert lifecycle. The reconciled tool policy denies direct workload changes; remediation is a human-reviewed pull request."
+              echo "3. Do not authorize on-behalf-of Azure elevation during this GitOps scenario."
               echo ""
               echo "No undocumented connector authentication is used."
             fi

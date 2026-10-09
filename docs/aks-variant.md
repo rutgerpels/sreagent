@@ -67,7 +67,9 @@ telemetry for the `payment-service` workload rather than the Container Apps
 Preserve the same security model:
 
 - Code Access backed by a bring-your-own GitHub App, with no PAT for writes;
-- the agent holds Reader on Azure and cannot mutate the cluster;
+- workload Reader access and the tool policy deny direct cluster changes;
+- subscription-level Monitoring Contributor remains a monitoring-write
+  exception, and on-behalf-of elevation is not authorized for this scenario;
 - remediation is a one-file pull request that a human reviews and merges;
 - the merge, not the agent, triggers the pipeline that applies the change.
 

@@ -28,6 +28,66 @@ needs, scoped as narrowly as your bootstrap design permits.
 Scenario C additionally requires `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, and
 `RUNNER_PE_SUBNET_NAME`.
 
+### Clean-fork identity bootstrap
+
+The human bootstrap operator and the workflow identity are separate principals.
+The operator needs permission to create the identity and its federation,
+create resources, and assign roles. User Access Administrator alone cannot
+create the deployment resources; use Owner, or Contributor plus User Access
+Administrator, at the required scopes.
+
+For the current workflows, the deployment identity needs resource-creation
+access, role-assignment authority, and Blob data-plane access to its backend.
+They create resource groups and subscription-scoped agent Monitoring
+Contributor assignments. Scenario C also writes peering and private endpoints
+in the existing runner network resource group, and links or records in any
+reused private DNS zone. A dedicated demo subscription is the simplest
+isolation boundary for the current bootstrap. Do not copy subscription-wide
+Owner grants into a production subscription; have its administrator design
+the required scopes first.
+
+From an authorized Azure portal session:
+
+1. Create a **user-assigned managed identity** in a dedicated bootstrap
+   resource group, outside the application group destroyed by the demo.
+2. In the identity's **Federated credentials**, add a credential for GitHub
+   Actions. Set issuer `https://token.actions.githubusercontent.com` and
+   audience `api://AzureADTokenExchange`.
+3. Trust only the actual fork's production `main` subject. A name-based
+   subject is `repo:<owner>/<repository>:ref:refs/heads/main`. Repositories
+   using immutable subjects instead emit
+   `repo:<owner>@<owner-id>/<repository>@<repository-id>:ref:refs/heads/main`.
+   Check the fork's OIDC configuration and the assertion subject reported by
+   `azure/login`; do not assume the upstream or legacy subject matches.
+   If the portal's GitHub template only generates the legacy form, use its
+   **Other issuer** option to enter the exact subject.
+4. Have the bootstrap administrator assign the deployment permissions at the
+   intended scopes. Contributor plus User Access Administrator is sufficient
+   for control-plane creation and role assignment where assigned; backend Blob
+   access is granted by the workflow at the state account. Check access to
+   the shared runner network and reused DNS groups separately.
+5. Copy the identity's **Client ID**, the directory **Tenant ID**, and target
+   **Subscription ID** into the three nonsecret Actions variables above.
+   The identity's principal/object ID is not its client ID.
+6. Read back the federated credential and role assignments in the portal.
+   Verify issuer, audience, exact subject, principal, and scopes. Dispatch
+   production workflows from `main`, then confirm Azure login succeeds.
+   Never print or copy the raw OIDC JWT into a ticket or repository.
+
+`dev-test.yml` requests a token for the **dev-test** GitHub environment rather
+than a branch. Add a separate credential whose subject ends in
+`:environment:dev-test`, using the repository's actual name-based or immutable
+prefix. Configure that GitHub environment's allowed branches and reviewers;
+do not widen the production credential to arbitrary branches.
+
+The workflow's backend role-assignment command currently suppresses creation
+errors. If login succeeds but backend creation fails, inspect the deployment
+identity's role-assignment authority before assuming a networking problem.
+That behavior needs a separate fail-fast correction.
+
+See [GitHub OIDC subject formats](https://docs.github.com/en/actions/reference/security/oidc)
+and [managed-identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation-create-trust-user-assigned-managed-identity).
+
 ---
 
 ## Profile and state safety
@@ -40,6 +100,12 @@ profile**. It is not a set of independent toggles.
 | **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
 | **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Code Access, signed in with a user account (OAuth); no connector and no token |
 | **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
+
+Reader describes workload access, not the identities' entire permission set.
+Both agent identities also hold subscription-level Monitoring Contributor for
+the alert lifecycle and monitoring settings. B/C require the tool policy
+alongside workload Reader access and must not use on-behalf-of elevation for
+direct Azure remediation. See [agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions).
 
 Resource names and tags include the selected scenario. State is isolated too:
 
@@ -151,6 +217,15 @@ environment:
 Teardown verifies the scenario recorded in state before destroying anything.
 Never destroy by guessed resource-name patterns.
 
+For capacity failures, retain the isolated state until the exact application
+resource group's removal is verified, including resources left outside state
+by failed provider operations. A successful Terraform destroy alone is not
+proof of absence. Follow Scenario C's
+[capacity recovery sequence](scenario-c-private-gitops.md#capacity-recovery-before-changing-regions)
+before changing regions. Force recovery resets the isolated blob itself and
+may tolerate a recognized stopped agent orphan; verify actual group removal
+before treating that result as a clean regional redeployment.
+
 If you intend to select another scenario, delete `DEPLOYMENT_SCENARIO`,
 `TF_PREFIX`, and `TF_ENVIRONMENT` **only after** the destroy succeeds. Leaving
 the marker absent keeps push automation in its safe no-op state.
@@ -205,6 +280,25 @@ These hold in every scenario:
 | `scripts/` | Local A/B deploy, teardown, incident triggers, SRE Agent reconciliation |
 | `agent/` | Declarative Scenario C manifest, tool policy, custom-agent prompts, runbook |
 | `docs/` | Scenario walkthroughs and references |
+
+### Offline regression checks
+
+The `validate` workflow runs on pull requests and main pushes with read-only
+repository permissions, no Azure login, and no private runner or secrets.
+
+```bash
+python3 scripts/tests/terraform-network-dependencies.test.py
+node --test scripts/tests/sre-agent-reconciler.test.mjs
+```
+
+The network check needs Python 3 and Terraform 1.9+. It copies the actual
+`infra/network.tf` into a temporary, backend-free fixture using the repository's
+locked AzureRM provider, then checks Terraform graph edges and six mocked plan
+configurations: managed, shared, each mixed-zone case, and A/B without private
+networking. Provider installation needs HTTPS to the Terraform registry;
+the mocked plans never authenticate to Azure or create resources.
+Fixtures supply only the surrounding resources needed by networking, so these
+checks are not a full infrastructure or live capacity validation.
 
 ---
 

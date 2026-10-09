@@ -138,8 +138,10 @@ with `RunInTerminal` denied searches for one, finds none, and stops. Any policy
 you apply must leave the terminal available.
 
 In every case a pull request is only a *proposal*. The agent cannot merge it,
-and Reader RBAC plus the tool policy stop it from touching Azure regardless of
-what its GitHub connection allows.
+and workload Reader access plus the tool policy deny direct workload changes.
+Both identities also receive subscription-level Monitoring Contributor for
+monitoring writes and the alert lifecycle. Do not describe them as completely
+read-only or authorize on-behalf-of Azure elevation in the GitOps scenarios.
 
 Scenario C imports the Code Access App private key as a Key Vault **key**, not a
 secret. The service signs the App JWT inside Key Vault, so the private key is
@@ -173,8 +175,11 @@ the deterministic leak produce an explainable 8–12 minute trend.
 - B and C use Review mode.
 
 Review mode makes proposed GitOps actions visible for human approval. It is not
-an authorization boundary by itself. Reader RBAC and the global tool policy
-enforce the boundary.
+an authorization boundary by itself. Workload Reader RBAC and the global tool
+policy enforce the direct-workload-change boundary. Monitoring Contributor
+remains a subscription-wide exception. Microsoft also supports temporary
+[on-behalf-of elevation](https://learn.microsoft.com/azure/sre-agent/permissions#on-behalf-of-obo);
+do not authorize it during B/C.
 
 Scenario C reconciles
 [`agent/tool-access-policy.api.json`](../agent/tool-access-policy.api.json)
@@ -198,7 +203,8 @@ remediation pull request through that same connection.
 OAuth grants the agent the signed-in user's GitHub reach, which is broader than
 a repository-scoped fine-grained token would be. That is a deliberate trade of
 credential scope for the removal of a whole credential lifecycle. The mutation
-boundary is Reader RBAC plus the tool policy, not the GitHub credential's scope.
+boundary is workload Reader RBAC plus the tool policy, not the GitHub
+credential's scope or an entirely read-only Azure identity.
 
 ### Scenario C
 
@@ -239,7 +245,7 @@ agent configuration.
 ## Response-plan outcomes
 
 - A directly mitigates Azure under its Autonomous policy.
-- B investigates with Reader-only Azure access and opens an unmerged one-file
+- B investigates with workload Reader access and the tool policy, and opens an unmerged one-file
   Pull Request over OAuth Code Access.
 - C does the same over bring-your-own-App Code Access, which a human reviews and
   merges.

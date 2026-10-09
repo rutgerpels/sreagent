@@ -42,7 +42,8 @@ locals {
       private_network_enabled = true
       control_endpoint_access = "Private ACR/Key Vault; public frontend only"
       # The agent authors its remediation pull request through Code Access. It
-      # holds Reader on Azure, so it can propose but never apply the fix.
+      # holds workload Reader access; tool policy denies direct workload writes.
+      # Subscription-level Monitoring Contributor remains an exception.
       github_integration = "API-managed Code Access; agent-authored remediation pull requests"
       agent_key          = "c-private-gitops"
       agent = {

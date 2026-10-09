@@ -5,8 +5,10 @@ GitOps-only operator. Scenario B uses OAuth Code Access for the fast
 public-endpoint demo, with no connector and no token. Scenario C uses BYO GitHub
 App Code Access, Azure VNet integration, and API reconciliation. In both, the
 agent opens its remediation pull request itself over Code Access.
-In all paths the agent is **structurally unable to modify the live Azure
-resources** when the tool access policy is applied.
+Workload Reader access and the tool policy deny direct workload writes.
+Both identities also hold subscription-level Monitoring Contributor for
+monitoring and alert lifecycle writes; they are not entirely read-only.
+Do not authorize on-behalf-of Azure elevation during B/C.
 
 > These artifacts are used **only in the GitOps scenarios**: Scenario B and
 > Scenario C. Scenario A (autonomous direct remediation) does **not** use them — see
@@ -38,8 +40,9 @@ artifacts are applied and verified by `scripts/reconcile-sre-agent.*` (see
   write tool. Denying `RunInTerminal` therefore blocks the remediation pull
   request itself, which is the one thing B and C exist to demonstrate.
 - Denying the terminal was never what stopped Azure mutation. Two things do, and
-  both are still in force: **Reader RBAC**, and the command-level `bash(...)`
-  deny patterns. Verified live — with `RunInTerminal` allowed, the agent opened a
+  both are still in force: **workload Reader RBAC**, and command-level `bash(...)`
+  deny patterns. These do not remove the Monitoring Contributor exception.
+  Verified live — with `RunInTerminal` allowed, the agent opened a
   pull request, and an `az containerapp revision restart` in the same terminal
   was still refused with `Tool 'RunInTerminal' is blocked by a permission rule`.
   Note that the block message names the *tool* even when a `bash(...)` pattern is
