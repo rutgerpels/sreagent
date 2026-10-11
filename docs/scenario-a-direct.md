@@ -1,9 +1,16 @@
-# Scenario A: autonomous direct remediation
+# Scenario A: autonomous investigation, approved direct remediation
 
 **The story you tell.** A payment service starts leaking memory. Azure Monitor
-raises an incident. The Azure SRE Agent investigates on its own, explains what
-broke and why, proposes a fix, and — after you approve — applies that fix
-directly to Azure. Nobody opens a terminal.
+fires an alert. The Azure Copilot Observability Agent automatically creates an
+Azure Monitor issue from that individual alert and starts an investigation.
+You hand its evidence to the Azure SRE Agent, which checks the revision,
+configuration change and source, proposes a durable fix, and applies it
+directly to Azure only after you approve. Nobody opens a terminal to fix it.
+
+This is one incident, using the existing slow memory leak. Only Scenario A
+includes the Observability Agent flow; B and C remain GitOps demonstrations.
+The evidence handoff is explicit and operator-mediated, not a claimed native
+agent-to-agent integration.
 
 **Who this is for.** Audiences who want to see the agent *act*: platform teams,
 operations leadership, and anyone evaluating "can it actually fix things?"
@@ -14,7 +21,7 @@ operations leadership, and anyone evaluating "can it actually fix things?"
 | --- | --- | --- |
 | 1 | Prepare the repository | ~5 minutes |
 | 2 | Deploy the environment | ~20 minutes (mostly unattended) |
-| 3 | Configure the SRE Agent | ~10 minutes |
+| 3 | Configure both agents and rehearse the approval boundary | Allow extra preparation time for preview onboarding and a full incident rehearsal |
 | 4 | Run the demo live | ~20 minutes |
 | 5 | Reset and repeat | ~5 minutes |
 | 6 | Tear down | ~15 minutes (unattended) |
@@ -30,10 +37,18 @@ in front of the audience.
    internet.
 2. You arm a fault. Memory on `payment-service` starts climbing.
 3. Azure Monitor fires a Sev2 alert roughly 8–12 minutes later.
-4. The SRE Agent correlates the alert with telemetry, the running revision, the
-   feature flag, and the recent change — and explains its reasoning.
-5. The agent proposes a mitigation. You approve it. Azure changes.
-6. Memory flattens, the alert resolves, and the agent records what it did.
+4. Without anyone selecting **Investigate**, the Observability Agent creates an
+   Azure Monitor issue and starts investigating the memory trend and impact.
+5. You hand the findings to SRE Agent in its existing incident thread. It checks
+   the running revision, feature flag, recent change and source.
+6. SRE Agent proposes a mitigation. A human approves the infrastructure write.
+7. Memory stays stable, the alert resolves, and both investigation and action
+   evidence are recorded. A human resolves the Azure Monitor issue.
+
+> **Preview acceptance, not a claim of live verification.** Rehearse automatic
+> promotion of this Container Apps memory alert into an issue against the
+> monitored Application Insights topology before presenting. An on-demand
+> investigation or manually created issue does not prove autonomous operation.
 
 ---
 
@@ -46,9 +61,12 @@ Confirm all of the following. Missing any one of them will stop you mid-demo.
 | An Azure subscription where you can create resources **and role assignments** | Owner, or Contributor plus User Access Administrator, at the required scopes |
 | A GitHub OIDC deployment identity federated to this repository | See [deployment reference](deployment-reference.md#github-actions-oidc) |
 | Permission to create an Azure SRE Agent | The SRE Agent preview must be available in your tenant and region |
+| Azure Copilot access and Observability Agent preview availability | Confirm the **Observability Agents** portal experience is available in West Europe |
+| Permission to onboard the Observability Agent | Monitoring Contributor on its resource group; Terraform prepares the identity and its roles |
+| Subscription-level monitoring bootstrap permissions | The deployment identity must be able to assign Monitoring Reader at subscription scope and register Microsoft.Monitor if needed |
 | Permission to set repository Actions variables | Repository admin |
 | A local clone of this repository | `git clone` |
-| Azure CLI, Terraform 1.9+, and Bash or PowerShell locally | Only needed for the incident trigger in phase 3 |
+| Azure CLI, Terraform 1.9+, and Bash or PowerShell locally | Used for Terraform outputs and the incident trigger |
 
 > **Scenario A is a single, immutable profile.** If another scenario (B or C) is
 > currently active in this repository, you must destroy it before deploying A.
@@ -123,10 +141,17 @@ provisions the Scenario A SRE Agent.
 - the resource group name;
 - the ACR name;
 - the public frontend URL;
+- the Scenario A Azure Monitor workspace name and its West Europe location;
 - the exact `TF_PREFIX`, `TF_ENVIRONMENT`, and `DEPLOYMENT_SCENARIO` values to
   set next.
 
 Copy the resource group name and frontend URL — you need both later.
+
+Terraform also creates the Observability Agent's user-assigned identity and
+roles. The **Observability Agent itself is not provisioned**: current preview
+onboarding is a separate portal step, because Terraform provisioning is not
+supported. The Azure Monitor workspace stores issues; it does not replace the
+Log Analytics workspace or move application telemetry.
 
 ### Step 5. Activate push deployment
 
@@ -180,7 +205,7 @@ never run against a half-configured target.
 
 ---
 
-## Phase 3 — Configure the SRE Agent
+## Phase 3 — Configure both agents
 
 ### Step 7. Open the agent
 
@@ -205,8 +230,9 @@ az role assignment create \
   --scope "$AGENT_ID"
 ```
 
-Allow about a minute for propagation. Scenario A is autonomous, so
-`SRE Agent Standard User` is also sufficient here; see
+Allow about a minute for propagation. Use **SRE Agent Administrator** for the
+operator who will approve infrastructure actions; Standard User is not enough
+to approve them. See
 [operator access](sre-agent-setup.md#operator-access-to-the-agent).
 
 > **If the agent site later fails to load**, the portal reports a timeout or a
@@ -231,7 +257,8 @@ differs.
 | --- | --- |
 | Access level | **High** |
 | Role on the demo resource group | **Contributor** |
-| Mode | **Autonomous** |
+| Agent-level fallback mode | **Autonomous**, as provisioned by the profile |
+| Memory-incident response plan autonomy level | **Review**; required for this paired-agent demo |
 | Managed resource | Only the Scenario A demo resource group |
 | Incident platform | Azure Monitor |
 
@@ -259,21 +286,23 @@ and incident platform all appear as connected.
 > Do **not** give this agent a GitHub write path. Scenario A remediates Azure
 > directly; the GitOps write path belongs to B and C, which use Code Access.
 
-### Step 10. Decide your approval story
+### Step 10. Require approval for SRE infrastructure writes
 
-Autonomous mode means the agent may act without pausing. That is a strong demo
-moment — but only if you know in advance what will happen on stage.
+**Do.** Edit the response plan that handles the Sev2 payment memory alert.
+Set its **Agent autonomy level** to **Review**, save it, and confirm that no
+other matching response plan handles this alert in Autonomous mode. Keep the
+Terraform-provisioned agent-level fallback unchanged; the response plan's
+per-incident mode is the approval boundary for this demonstration.
 
-**Do.** Decide one of:
+**Expect.** SRE can investigate automatically, but an Azure infrastructure write
+shows **Approve** and **Deny**. Do not rely on a prompt such as "ask first" as a
+substitute for Review mode. Do not approve a mitigation before the Observability
+Agent's investigation has been shown and handed over.
 
-- **Let it act.** Leave the portal approval policy as is and narrate "the agent
-  is authorised to act inside this resource group."
-- **Show a human gate.** Configure the portal approval policy for the direct
-  mutation tools, then test it once with a harmless action before the demo.
-
-**Expect.** You can state, out loud and correctly, whether the next action will
-pause for your approval or execute immediately. Keep the profile on
-**Autonomous** either way; do not switch it to Review.
+During rehearsal, confirm the resulting incident thread is in Review mode.
+Continue the evidence handoff in that thread, not in a new chat that could use
+the Autonomous fallback. If the write runs without approval, reset the demo and
+correct the response plan before presenting.
 
 ### Step 11. Prepare the incident trigger
 
@@ -329,11 +358,81 @@ terraform -chdir=infra output -raw scenario
 fails, you are pointed at the wrong state — do not continue, and re-check the
 prefix, scenario, and environment values from step 5.
 
+### Step 12. Enable autonomous Observability Agent operations
+
+**Do.** Read the nonsecret onboarding details from the initialized Scenario A
+state:
+
+```bash
+terraform -chdir=infra output -json observability_agent_onboarding
+```
+
+The same command works in PowerShell. Keep the output local; it contains your
+deployment's resource IDs, not values to commit into this public repository.
+
+**Expect.** The output identifies the Azure Monitor workspace, user-assigned
+identity, Application Insights resource, exact memory alert name, and
+environment-specific custom instructions.
+
+Terraform owns these prerequisites:
+
+| Resource or permission | Purpose |
+| --- | --- |
+| Azure Monitor workspace in **West Europe** | Durable Azure Monitor issue container, separate from Log Analytics |
+| User-assigned Observability Agent identity | Dedicated identity for background operations, not the SRE identity |
+| **Issue Contributor** on that workspace | Create and update issues without workload write access |
+| **Monitoring Reader** on the subscription | Documented preview requirement for alert discovery and telemetry reads |
+
+Subscription-wide monitoring reads are a documented preview requirement, not
+subscription-wide workload Contributor. Do not substitute the broader
+subscription Monitoring Contributor shortcut when these narrower roles work.
+Scenario A's workspace uses a public, Azure-RBAC-protected monitoring endpoint
+because the agent and operator have no private-link path. No new application
+ingress is exposed.
+
+**Do in the Azure portal.**
+
+1. Search for **Observability Agents**, then select **Create**.
+2. Select the Scenario A subscription and resource group from the output.
+3. Choose **West Europe** and the Terraform-created Azure Monitor workspace.
+   The workspace and agent must share a region. The application can remain in
+   its existing region; the monitored Application Insights resource must be in
+   the agent's subscription.
+4. Select **User-assigned managed identity**, then choose the exact identity
+   from `managed_identity_resource_id`. Do not reuse the SRE identity or choose
+   System-assigned: the preassigned roles belong to this user-assigned identity.
+5. On **Operations**, choose `application_insights_name` as **Monitored application**.
+6. Set **Allow the agent to run autonomously** to **On**. Enable both
+   **Correlation + issue creation** and **Investigation**. Investigation is
+   required for this demo, even though the product permits opting out.
+7. Paste the plain-text `custom_instructions` value from the output, with actual
+   line breaks rather than JSON quotes or escaped `\n`. It promotes the exact
+   individual memory alert into an issue even when nothing else is firing,
+   identifies the service chain, and keeps other demo resource groups separate.
+   These instructions guide issue creation; the Investigation setting is what
+   starts investigations automatically.
+8. Review and create the resource. Verify its settings after creation and allow
+   role assignments and topology discovery to settle before rehearsal.
+
+**Optional notifications.** Configure issue action groups on this Azure Monitor
+workspace if the audience needs an on-call notification. The existing
+Terraform action group has no receivers; merely selecting it does not deliver
+an email. Neither notifications nor an action-group receiver start the agent's
+autonomous investigation.
+
+**Rehearsal gate.** Run phase 4 once before the live presentation. Record the
+fired alert, agent-created issue provenance, automatic investigation, SRE
+approval prompt, and recovery. If the Container Apps alert is not promoted,
+check identity permissions, monitored-application topology and the exact alert
+name. Do not replace a failed autonomous run with a manual **Investigate**
+click and call it autonomous. Reset the fault while resolving the preview
+limitation; do not present the paired-agent flow as verified.
+
 ---
 
 ## Phase 4 — Run the demo live
 
-### Step 12. Establish the healthy baseline (about 2 minutes)
+### Step 13. Establish the healthy baseline (about 2 minutes)
 
 **Say and show.**
 
@@ -343,8 +442,11 @@ prefix, scenario, and environment values from step 5.
 - Managed identities pulling from ACR and reading Key Vault — "no keys, no
   admin credentials, no connection strings in the app."
 - The flat memory chart — "this is healthy."
+- Both agents' boundaries: "Observability can read monitoring data and write
+  issues. SRE can change this resource group, but this incident requires human
+  approval."
 
-### Step 13. Arm the incident
+### Step 14. Arm the incident
 
 **Do.**
 
@@ -366,7 +468,7 @@ traffic is running.
 group or app that does not match Terraform state, and it will not run against a
 B or C state. Re-check step 11.
 
-### Step 14. Narrate while memory climbs (8–12 minutes)
+### Step 15. Narrate while memory climbs (8–12 minutes)
 
 This wait is the most useful part of the demo. Use it.
 
@@ -375,30 +477,65 @@ This wait is the most useful part of the demo. Use it.
 - The rising working-set chart in Application Insights.
 - The alert rule — "it averages over five minutes, so it will not fire on a
   spike; it fires on a trend."
-- The security boundary — "the agent holds Contributor on this one resource
-  group. Nothing else."
+- The security boundary — "SRE has workload Contributor on this resource group;
+  Observability has monitoring reads and issue creation, not workload writes."
 - The state isolation — "this environment has its own Terraform state, keyed by
   subscription, prefix, scenario, and environment."
 
 **Expect.** When the five-minute average crosses the threshold, a Sev2 Azure
 Monitor alert fires and appears in the agent as an incident.
 
-### Step 15. Walk the investigation
+### Step 16. Show the automatically created issue and investigation
 
-**Do.** Open the incident in the SRE Agent and read its findings out loud.
+**Do.** Open **Azure Monitor → Issues**, scoped to the Scenario A workspace.
+Open the issue generated from the payment memory alert. Do not select
+**Investigate** or manually create an issue.
 
-**Expect** the agent to have correlated:
+**Expect.**
 
-- the fired alert and the working-set trend;
-- the affected `payment-service` revision;
-- the `ENABLE_SLOW_LEAK` feature flag;
-- the recent configuration change that set it;
-- source and runbook context from Code Access.
+- The issue links the exact fired memory alert.
+- Its title has the agent-generated application prefix and `[OPS-REVIEW]`.
+- Its Background begins with **Observability Agent created this issue for**.
+- An investigation has started automatically on that issue.
+- Findings link to the signals and time window that support the hypothesis.
 
-The point to make: this is not a dashboard telling you memory is high. It is an
-explanation of *why*, assembled from telemetry plus your code.
+Show what the evidence actually establishes: the payment memory trend, observed
+checkout latency/failures, and any alternative explanations considered. RSS
+and heap gauges can help distinguish off-heap growth; they do not by themselves
+prove a leaking code path. A healthy `/health` response does not rule out the
+leak, and high memory alone does not prove customer requests have failed.
 
-### Step 16. Approve the remediation
+**Say.** "One important alert was enough. Nobody asked the agent to investigate;
+the incident record and investigation were prepared in the background."
+
+### Step 17. Hand evidence to SRE Agent
+
+**Do.** In the existing, **Review-mode** SRE incident thread, paste the
+Observability issue URL and its findings, resource IDs, UTC time window and
+supporting queries. A URL alone does not guarantee SRE can read issue contents.
+Use this handoff:
+
+```text
+The Observability Agent created this issue and investigated it autonomously.
+Here are its issue URL, findings, affected resources, UTC time window and
+supporting queries: <paste the evidence>.
+Check this evidence against the active payment-service revision, recent
+configuration changes and repository source. Explain the durable fix and why
+restarting or scaling alone would not remove this timer-driven leak.
+Propose the direct Azure remediation in this Review-mode incident thread.
+```
+
+**Expect.** SRE checks the alert and trend, active revision, `ENABLE_SLOW_LEAK`,
+the direct configuration change, and source context from Code Access. It may
+already have investigated the same alert independently; the handoff adds
+shared context, not an automatic agent-to-agent dependency.
+
+If memory approaches the container limit before the investigation completes,
+use the documented `--reset` / `-Reset` trigger as an operator safety action,
+record the intervention, and rehearse again. Do not describe that reset as
+agent remediation.
+
+### Step 18. Approve the remediation
 
 **Expect** the agent to propose one or more of:
 
@@ -406,16 +543,17 @@ explanation of *why*, assembled from telemetry plus your code.
 | --- | --- |
 | Disable the leak flag and roll a healthy revision | **Durable** — removes the trigger |
 | Restart the affected revision | Recoverable, but the fault returns while the flag is on |
-| Increase the scale rule | Temporary capacity relief only |
+| Increase the scale rule | Does not stop this timer-driven leak; each replica leaks independently |
 
-**Do.** Approve the durable fix — disabling the flag. If your portal policy is
-configured for approval, this is where the human gate appears; if not, narrate
-that the agent is acting under its Autonomous policy.
+**Do.** Review the proposed change and approve the durable fix: disabling the
+flag and rolling a healthy revision. The Review-mode incident must show the
+human approval gate before the Azure write. Do not approve a restart-only or
+scale-only action as the durable remedy.
 
 **Say.** "A restart clears the symptom. Turning the flag off removes the cause.
 The agent distinguishes between the two."
 
-### Step 17. Verify recovery
+### Step 19. Verify recovery
 
 **Expect**, within a few minutes:
 
@@ -427,6 +565,13 @@ The agent distinguishes between the two."
 
 Show all four. The recorded evidence trail is what makes this auditable rather
 than magical.
+
+Keep the same steady checkout traffic running and observe memory for at least
+five minutes: it should remain near the healthy baseline, not resume its prior
+upward slope. Check successful orders and observed latency/failure telemetry.
+Add the SRE action/thread link and before/after evidence to the Azure Monitor
+issue, then have a human resolve it. Alert auto-resolution does not imply the
+Observability Agent resolves the issue automatically.
 
 ---
 
@@ -445,13 +590,20 @@ pwsh ./scripts/trigger-incident-direct.ps1 -Reset
 **Expect.** `ENABLE_SLOW_LEAK` returns to `false` and a fresh revision starts.
 
 **Optional second run.** Re-arm the incident to show the agent recognising a
-pattern it has already seen and reaching the same conclusion faster. You can
-also add a scheduled health check that reports current memory, active alerts,
-revision health, and the feature-flag state.
+pattern it has already seen. Compare recorded results rather than promising
+faster resolution or cross-agent memory sharing. Confirm that new alert
+activity receives the expected issue/investigation treatment; do not assume
+that the agent will always create a new issue rather than reuse related context.
 
 ---
 
 ## Phase 6 — Tear down
+
+**First:** delete the portal-created Observability Agent, after recording any
+issue evidence you want to retain. This stops background runs before removing
+its prerequisites. If you created additional portal-owned action groups or
+role assignments, remove those explicitly; do not delete shared monitoring
+resources or the whole subscription's role assignments.
 
 **Do.** Go to **Actions → destroy → Run workflow** and set:
 
@@ -473,6 +625,11 @@ A before destroying anything. A Terraform-provisioned agent is destroyed with
 the environment; an agent you created by hand in the portal must be removed
 separately.
 
+Terraform removes Scenario A's Azure Monitor workspace, dedicated identity and
+its issue/monitoring role assignments. The workspace is the issue container;
+export any required evidence before destroying it. The Observability Agent is
+portal-owned and must not be left behind after its identity/workspace disappear.
+
 **If you plan to move to Scenario B or C:** finish this destroy first, then
 delete `DEPLOYMENT_SCENARIO`, `TF_PREFIX`, and `TF_ENVIRONMENT`. Never reuse or
 migrate Scenario A state.
@@ -488,6 +645,10 @@ migrate Scenario A state.
 | Trigger script exits with "restricted to Scenario A" | Local Terraform state points at another profile | Redo [step 11](#step-11-prepare-the-incident-trigger) with the correct prefix, scenario, and environment |
 | `terraform init` fails on the state account | Wrong subscription selected, or Azure AD data-plane auth not enabled | `az account set --subscription <id>` and export `ARM_USE_AZUREAD=true` |
 | Memory climbs but no alert fires | Fewer than ~8 minutes have passed, or you are charting the wrong app | The rule uses a five-minute average; confirm you are charting `payment-service` |
+| Alert fires but no Observability issue appears | Wrong monitored application/identity, permissions still propagating, disabled issue creation, or alert not associated with the discovered topology | Verify step 12 and exact alert-name instructions; reset and stop the paired-agent demo if autonomous promotion cannot be established |
+| Issue exists but no automatic investigation starts | Investigation is disabled or preview execution failed | Enable Investigation, inspect the agent's reported failure, reset and rehearse; a manual investigation is not equivalent |
+| Workspace cannot be selected | Wrong subscription or agent region | Select the output's workspace and West Europe; the agent and workspace must share a region |
+| SRE writes without an approval prompt | Incident uses Autonomous mode or another matching response plan | Reset, set the memory response plan to Review, and verify the incident mode before continuing |
 | Agent has no telemetry to reason about | Logs connector missing | Redo [step 9](#step-9-connect-the-evidence-sources), item 2 |
 | Agent proposes nothing | Response plan does not include the Sev2 alert | Redo [step 9](#step-9-connect-the-evidence-sources), item 4 |
 | Push to `main` deploys nothing | `DEPLOYMENT_SCENARIO` is unset | Expected — this is the safe no-op state. Complete [step 5](#step-5-activate-push-deployment) |
@@ -500,13 +661,18 @@ migrate Scenario A state.
 | --- | --- |
 | Terraform profile | `scenario = "A"` |
 | SRE Agent access | High; Contributor on the demo resource group only |
-| Run mode | Autonomous |
+| SRE agent-level fallback | Autonomous |
+| SRE memory-incident response plan | Review; human approval required for infrastructure writes |
+| Observability Agent | Portal-owned; autonomous issue creation and Investigation enabled |
+| Observability Agent scope | Scenario A Application Insights topology; Monitoring Reader on the subscription |
+| Azure Monitor issue permissions | Issue Contributor on the dedicated Scenario A workspace |
 | Deployment control endpoints | Public, protected by Azure RBAC and TLS |
 | Deployment runner | GitHub-hosted, or the local wrapper |
 | Code Access | Read-only source and commit correlation |
 | GitHub write connector | None |
 | Incident trigger | Direct update of the running `payment-service` |
-| Remediation path | Direct Azure action |
+| Evidence handoff | Operator copies issue findings into the Review-mode SRE incident |
+| Remediation path | Direct Azure action after human approval |
 
 The public deployment endpoints are a deliberate trade for demo speed. The
 security invariants still hold: ACR admin and anonymous access are disabled,
@@ -527,5 +693,10 @@ Scenario A deliberately has **no** GitHub write path. If your audience asks
 - [Azure SRE Agent setup reference](sre-agent-setup.md)
 - [Azure SRE Agent permissions](https://learn.microsoft.com/azure/sre-agent/permissions)
 - [Azure SRE Agent run modes](https://learn.microsoft.com/azure/sre-agent/run-modes)
+- [Create an Observability Agent in the portal](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource-create-portal)
+- [Autonomous Observability Agent operations](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-autonomous-operations)
+- [Observability Agent custom instructions](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-custom-instructions)
+- [Azure Monitor issues](https://learn.microsoft.com/azure/azure-monitor/aiops/issues-overview)
+- [Observability Agent preview regions and Terraform limitations](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource)
 - [Container Apps ingress](https://learn.microsoft.com/azure/container-apps/ingress-overview)
 - [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)

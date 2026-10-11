@@ -55,6 +55,28 @@ output "app_insights_name" {
   value       = azurerm_application_insights.this.name
 }
 
+output "observability_agent_onboarding" {
+  description = "Scenario A only: nonsecret prerequisites for portal-owned autonomous Observability Agent onboarding; null for B/C. This does not provision the agent."
+  value = var.scenario == "A" ? {
+    resource_group_name              = azurerm_resource_group.this.name
+    location                         = azurerm_monitor_workspace.observability_agent[0].location
+    workspace_name                   = azurerm_monitor_workspace.observability_agent[0].name
+    workspace_resource_id            = azurerm_monitor_workspace.observability_agent[0].id
+    managed_identity_name            = azurerm_user_assigned_identity.observability_agent[0].name
+    managed_identity_resource_id     = azurerm_user_assigned_identity.observability_agent[0].id
+    application_insights_name        = azurerm_application_insights.this.name
+    application_insights_resource_id = azurerm_application_insights.this.id
+    memory_alert_name                = var.deploy_apps ? azurerm_monitor_metric_alert.payment_memory[0].name : null
+    custom_instructions = join("\n", [
+      "Always create an issue for alert-payment-memory-${local.suffix}, even when it is the only fired alert.",
+      "The payment-service cloud role belongs to the ContosoPay checkout dependency chain: frontend calls checkout-api, which calls payment-service.",
+      "The checkout and payment paths are business-critical.",
+      "Do not correlate alerts from other demo resource groups with alerts from ${azurerm_resource_group.this.name}.",
+      "Include [OPS-REVIEW] in every issue title.",
+    ])
+  } : null
+}
+
 output "container_app_environment" {
   description = "Container Apps environment name."
   value       = azurerm_container_app_environment.this.name
@@ -144,4 +166,3 @@ output "sre_agent_telemetry" {
     log_analytics_workspace_id       = azurerm_log_analytics_workspace.this.workspace_id
   } : null
 }
-
