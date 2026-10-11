@@ -15,4 +15,4 @@
 #
 # Keep this `false` in main so the demo always starts from a healthy state.
 # ============================================================================
-enable_slow_leak = true
+enable_slow_leak = false
