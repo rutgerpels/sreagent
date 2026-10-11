@@ -56,8 +56,11 @@ output "app_insights_name" {
 }
 
 output "observability_agent_onboarding" {
-  description = "Scenario A only: nonsecret prerequisites for portal-owned autonomous Observability Agent onboarding; null for B/C. This does not provision the agent."
-  value = var.scenario == "A" ? {
+  description = "Nonsecret paired-agent details for A/C; A requires operator onboarding, C is Terraform-managed. Null for B."
+  value = local.observability_enabled ? {
+    terraform_managed                = var.scenario == "C"
+    agent_name                       = var.scenario == "C" ? azapi_resource.observability_agent[0].name : null
+    agent_resource_id                = var.scenario == "C" ? azapi_resource.observability_agent[0].id : null
     resource_group_name              = azurerm_resource_group.this.name
     location                         = azurerm_monitor_workspace.observability_agent[0].location
     workspace_name                   = azurerm_monitor_workspace.observability_agent[0].name
@@ -67,13 +70,7 @@ output "observability_agent_onboarding" {
     application_insights_name        = azurerm_application_insights.this.name
     application_insights_resource_id = azurerm_application_insights.this.id
     memory_alert_name                = var.deploy_apps ? azurerm_monitor_metric_alert.payment_memory[0].name : null
-    custom_instructions = join("\n", [
-      "Always create an issue for alert-payment-memory-${local.suffix}, even when it is the only fired alert.",
-      "The payment-service cloud role belongs to the ContosoPay checkout dependency chain: frontend calls checkout-api, which calls payment-service.",
-      "The checkout and payment paths are business-critical.",
-      "Do not correlate alerts from other demo resource groups with alerts from ${azurerm_resource_group.this.name}.",
-      "Include [OPS-REVIEW] in every issue title.",
-    ])
+    custom_instructions              = local.observability_instructions
   } : null
 }
 

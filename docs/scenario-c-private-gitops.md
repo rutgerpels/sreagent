@@ -7,6 +7,13 @@ instead of a personal token; and an SRE Agent whose entire configuration —
 policy, custom agent, response plan, health schedule, knowledge — is declared in
 code and reconciled, not clicked together in a portal.
 
+Terraform also provisions the Azure Copilot Observability Agent. It
+autonomously creates Azure Monitor issues from the individual memory alert or
+related alerts and starts investigations. An operator hands its evidence to
+the Review-mode SRE incident; SRE proposes a remediation PR and a human merges
+it. This paired-agent extension requires a live rehearsal before it can be
+presented as verified.
+
 **Who this is for.** Regulated industries, security architects, and platform
 teams who will ask "can this run in *our* network, configured from *our*
 pipeline?" before they ask what the agent can do.
@@ -335,6 +342,11 @@ recreates the managed environment. Never convert partial state in place.
    `agent/scenario-c/manifest.json`;
 7. **verifies** the resulting agent state.
 
+Terraform also creates a dedicated Azure Monitor workspace and Observability
+identity in West Europe, the Observability Agent, and its monitored Application
+Insights child. Issue creation and Investigation are both `Auto`; no manual
+portal onboarding is needed. The application's selected region is unchanged.
+
 **One successful deploy run configures the whole profile.** Earlier revisions
 required two planned runs: one to create the vault, then a manual key import,
 then another run to connect Code Access. Import now happens between apply and
@@ -476,6 +488,42 @@ live.
 
 To inspect the desired state without any Azure access, use `--mode render`.
 
+### Step 9a. Verify autonomous Observability
+
+**Do.** On the private runner, using the exact C state initialized by the
+deployment, read:
+
+```bash
+terraform -chdir=infra output -json observability_agent_onboarding
+```
+
+**Expect.** `terraform_managed` is `true`. The output identifies the exact
+agent, workspace, dedicated identity, Application Insights target and memory
+alert. Inspect that agent in **Azure Monitor → Observability Agents**:
+
+- **Allow the agent to run autonomously** is on.
+- **Correlation + issue creation** and **Investigation** are enabled.
+- The monitored application is this deployment's Application Insights, not
+  another demo.
+- The instructions promote the exact memory alert even when it fires alone,
+  isolate the resource group and include `[OPS-REVIEW]` in issue titles.
+
+The implementation follows the documented
+[Observability Agent resource API](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource-create-template).
+Its dedicated identity holds **Issue Contributor** at workspace scope and
+**Monitoring Reader** on the subscription; it cannot modify workloads. The
+workspace's public network access is disabled in C. This is not a claim that
+the managed agents have private inbound endpoints or that every connector
+traverses the runner VNet. If policy or the preview service prevents topology,
+issue creation or investigation, record the limitation and stop the paired
+demo rather than broadening access or substituting a manual investigation.
+
+**Rehearsal gate.** Prove a real fired alert, automatically created Azure
+Monitor issue, automatically started investigation, evidence handoff to the
+Review-mode SRE incident, agent-authored remediation PR, human merge and
+sustained recovery. The mocked tests validate configuration, not this live
+behavior. Do not approve or merge the agent's own PR on its behalf.
+
 ### Step 10. Verify the healthy baseline
 
 **Do.**
@@ -562,6 +610,36 @@ state, applies the flag, and rolls a new `payment-service` revision.
 
 **Expect.** The Sev2 alert fires and reaches the agent as an incident.
 
+### Step 13a. Show the autonomous issue and hand over evidence
+
+**Do.** Open **Azure Monitor → Issues**, scoped to the deployment's workspace.
+Do not manually create an issue or click **Investigate**.
+
+**Expect.** The issue links the exact fired memory alert, has the application
+prefix and `[OPS-REVIEW]` in its title, and its Background starts with
+**Observability Agent created this issue for**. An investigation starts without
+a user request. Record its findings, UTC window, affected resource IDs and
+supporting queries; separate observed memory growth from unproven customer
+impact.
+
+Paste the URL **and evidence** into the existing **Review-mode** SRE incident:
+
+```text
+The Observability Agent created and investigated this issue autonomously.
+Issue URL: <url>
+Findings, affected resource IDs, UTC window and supporting queries: <evidence>
+Compare this evidence with the current revision and GitHub deployment.
+Propose the smallest durable fix through a remediation PR.
+Do not change Azure resources, request on-behalf-of Azure elevation, approve
+or merge a PR, or enable automatic merge.
+```
+
+There is no automatic agent-to-agent handoff. A URL alone does not prove that
+SRE can read the issue contents. Continue in the existing incident, not a new
+chat with potentially different settings. If the autonomous issue or
+investigation is missing, use the normal human-reviewed GitOps reset and
+record the failure; a manually started investigation does not pass this gate.
+
 ### Step 14. Walk the investigation
 
 **Do.** Open the incident and read the agent's evidence.
@@ -629,6 +707,11 @@ merge its own work.
 **Expect.** `apply-infra` applies the healthy flag through the private runner,
 its Scenario C reconciliation step confirms the agent configuration has not
 drifted, a new revision starts, memory flattens, and the alert resolves.
+
+Keep comparable checkout traffic running for at least five minutes after
+recovery. Verify successful orders, the disabled leak flag and the serving
+revision, not only alert resolution. Observability does not repair workloads
+or automatically close its issue; a human closes it after verifying recovery.
 
 > **The chart will lag — do not panic on stage.** Container Apps metrics arrive
 > in batches, so the recovery can take ten minutes or more to render. In a
@@ -703,6 +786,11 @@ and state belonging to other profiles.
 
 **Expect.** The job runs on the private runner and verifies the state profile
 before destroying anything.
+
+Terraform deletes the monitored application and Observability Agent before
+their workspace and identity. Autonomous investigations are
+[billable](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-billing);
+verify the agent is gone rather than leaving background operations running.
 
 ### Step 18. Clean up external material
 

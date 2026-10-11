@@ -65,8 +65,10 @@ refused.
 | SRE Agent Administrator | Yes | Yes |
 
 Scenarios B and C run in **Review** mode, so the presenter must be able to
-approve; only Administrator can. Scenario A is autonomous and needs chat alone,
-where Standard User is enough. Granting **SRE Agent Administrator** scoped to the
+approve; only Administrator can. Paired Scenario A also requires Review on its
+memory-incident response plan despite its Autonomous agent-level fallback.
+Standard User can chat but cannot approve that incident's recovery.
+Granting **SRE Agent Administrator** scoped to the
 agent — and nothing wider — works for all three:
 
 ```bash

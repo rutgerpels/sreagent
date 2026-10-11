@@ -39,5 +39,12 @@ jobs:
       - name: Check SRE Agent reconciler
         run: node --test scripts/tests/sre-agent-reconciler.test.mjs
 
+      - name: Check paired Observability configuration and recovery
+        run: |
+          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra validate
+          terraform -chdir=infra test
+          python3 scripts/tests/observability-recovery.test.py
+
       - name: Check whitespace
         run: git diff --check HEAD^ HEAD

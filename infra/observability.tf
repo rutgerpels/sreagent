@@ -21,10 +21,21 @@ resource "azurerm_application_insights" "this" {
   tags                = local.tags
 }
 
-# Scenario A's portal-owned Observability Agent needs an issue container distinct
-# from Log Analytics. West Europe supports the preview; the app region is unchanged.
+locals {
+  observability_enabled = contains(["A", "C"], var.scenario)
+  observability_instructions = join("\n", [
+    "Always create an issue for alert-payment-memory-${local.suffix}, even when it is the only fired alert.",
+    "The payment-service cloud role belongs to the ContosoPay checkout dependency chain: frontend calls checkout-api, which calls payment-service.",
+    "The checkout and payment paths are business-critical.",
+    "Do not correlate alerts from other demo resource groups with alerts from ${azurerm_resource_group.this.name}.",
+    "Include [OPS-REVIEW] in every issue title.",
+  ])
+}
+
+# Issues need a workspace distinct from Log Analytics. West Europe supports the
+# preview; the application region is unchanged. A keeps operator-owned onboarding.
 resource "azurerm_monitor_workspace" "observability_agent" {
-  count = var.scenario == "A" ? 1 : 0
+  count = local.observability_enabled ? 1 : 0
 
   name                = "amw-observability-${local.suffix}"
   resource_group_name = azurerm_resource_group.this.name
@@ -32,12 +43,12 @@ resource "azurerm_monitor_workspace" "observability_agent" {
 
   # Scenario A has no private-link path for the Azure-hosted agent or operator.
   # This public monitoring endpoint requires Azure RBAC; it is not app ingress.
-  public_network_access_enabled = true
+  public_network_access_enabled = !local.profile.private_network_enabled
   tags                          = local.tags
 }
 
 resource "azurerm_user_assigned_identity" "observability_agent" {
-  count = var.scenario == "A" ? 1 : 0
+  count = local.observability_enabled ? 1 : 0
 
   name                = "id-observability-${local.suffix}"
   resource_group_name = azurerm_resource_group.this.name
@@ -46,7 +57,7 @@ resource "azurerm_user_assigned_identity" "observability_agent" {
 }
 
 resource "azurerm_role_assignment" "observability_agent_issues" {
-  count = var.scenario == "A" ? 1 : 0
+  count = local.observability_enabled ? 1 : 0
 
   scope                            = azurerm_monitor_workspace.observability_agent[0].id
   role_definition_name             = "Issue Contributor"
@@ -57,12 +68,70 @@ resource "azurerm_role_assignment" "observability_agent_issues" {
 # The preview requires subscription-level alert discovery and telemetry reads.
 # Monitoring Reader is the documented read-only exception, not workload Contributor.
 resource "azurerm_role_assignment" "observability_agent_monitoring" {
-  count = var.scenario == "A" ? 1 : 0
+  count = local.observability_enabled ? 1 : 0
 
   scope                            = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
   role_definition_name             = "Monitoring Reader"
   principal_id                     = azurerm_user_assigned_identity.observability_agent[0].principal_id
   skip_service_principal_aad_check = true
+}
+
+# C owns the preview resource and its autonomous configuration, including teardown.
+# See Microsoft's observability-agent-resource-create-template API contract.
+resource "azapi_resource" "observability_agent" {
+  count     = var.scenario == "C" ? 1 : 0
+  type      = "Microsoft.Monitor/observabilityAgents@2026-05-01-preview"
+  name      = "obs-${var.prefix}-${local.suffix}"
+  parent_id = azurerm_resource_group.this.id
+  location  = azurerm_monitor_workspace.observability_agent[0].location
+  tags      = local.tags
+
+  schema_validation_enabled = false
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.observability_agent[0].id]
+  }
+
+  body = {
+    properties = {
+      monitoringAccountId = azurerm_monitor_workspace.observability_agent[0].id
+      enabled             = true
+      operations = [
+        {
+          type         = "IssueCreation"
+          mode         = "Auto"
+          instructions = local.observability_instructions
+        },
+        {
+          type = "Investigation"
+          mode = "Auto"
+        },
+      ]
+    }
+  }
+
+  depends_on = [
+    azurerm_role_assignment.observability_agent_issues,
+    azurerm_role_assignment.observability_agent_monitoring,
+  ]
+}
+
+resource "azapi_resource" "observability_application" {
+  count     = var.scenario == "C" ? 1 : 0
+  type      = "Microsoft.Monitor/observabilityAgents/monitoredResources@2026-05-01-preview"
+  name      = "contosopay"
+  parent_id = azapi_resource.observability_agent[0].id
+
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      resourceId   = azurerm_application_insights.this.id
+      enabled      = true
+      isAutonomous = true
+    }
+  }
 }
 
 # --- Diagnostic settings to Log Analytics for auditability ---

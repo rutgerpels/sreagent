@@ -28,6 +28,11 @@ on:
         type: boolean
         required: false
         default: false
+      ephemeral:
+        description: "Destroy a dev/test environment using its dev-test OIDC identity; refuses the active profile"
+        type: boolean
+        required: false
+        default: false
 
   # Callable so the dev/test pipeline can tear down its ephemeral environment.
   workflow_call:
@@ -77,7 +82,7 @@ concurrency:
 jobs:
   destroy:
     runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
-    environment: ${{ inputs.environment_name }}
+    environment: ${{ inputs.environment_name || (inputs.ephemeral && 'dev-test' || '') }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -340,7 +345,36 @@ jobs:
             fi
           done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
 
+          OBSERVABILITY_ROLES="$(jq -ce --arg scope "/subscriptions/${ARM_SUBSCRIPTION_ID}" '
+            [.resources[]
+             | select(.mode == "managed" and .type == "azurerm_user_assigned_identity" and .name == "observability_agent")
+             | .instances[].attributes.principal_id] as $principals
+            | [.resources[]
+               | select(.mode == "managed" and .type == "azurerm_role_assignment" and .name == "observability_agent_monitoring")
+               | .instances[].attributes
+               | if ((.scope | ascii_downcase) == ($scope | ascii_downcase)
+                     and (.principal_id as $principal | $principals | index($principal)) != null)
+                 then . else error("unexpected Observability monitoring assignment") end]
+            | if length <= 1 then . else error("expected at most one Observability monitoring assignment") end
+          ' "${STATE_FILE}")"
+          while IFS= read -r assignment_id; do
+            [[ "${assignment_id,,}" =~ ^/subscriptions/${ARM_SUBSCRIPTION_ID,,}/providers/microsoft.authorization/roleassignments/[0-9a-f-]{36}$ ]] || {
+              echo "::error::Verified state contains an unexpected Observability role assignment ID."
+              exit 1
+            }
+            az role assignment delete --ids "${assignment_id}"
+            REMAINING_ROLES="$(az role assignment list --scope "/subscriptions/${ARM_SUBSCRIPTION_ID}" --output json)"
+            jq -e --arg id "${assignment_id}" 'all(.[]; (.id | ascii_downcase) != ($id | ascii_downcase))' <<< "${REMAINING_ROLES}" >/dev/null || {
+              echo "::error::Observability monitoring assignment remains; retaining state."
+              exit 1
+            }
+          done < <(jq -r '.[].id' <<< "${OBSERVABILITY_ROLES}")
+
           if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then
+            for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Monitor/observabilityAgents --query '[].id' -o tsv); do
+              echo "Deleting Observability Agent before its identity: ${id}"
+              az resource delete --ids "${id}" --api-version 2026-05-01-preview
+            done
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
               echo "Stopping SRE Agent before force delete: ${id}"
               az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true

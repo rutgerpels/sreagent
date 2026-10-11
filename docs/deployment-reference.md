@@ -112,20 +112,33 @@ Resource names and tags include the selected scenario. State is isolated too:
 - the state storage-account name hashes subscription, prefix, and scenario;
 - the blob key is `<prefix>-<scenario>-<environment>.tfstate`.
 
-**Scenario A Observability prerequisites.** Terraform additionally owns an Azure
+**Scenarios A/C Observability resources.** Terraform additionally owns an Azure
 Monitor workspace in West Europe, a dedicated user-assigned identity, Issue
 Contributor on that workspace and Monitoring Reader on the subscription.
 `terraform -chdir=infra output -json observability_agent_onboarding` supplies the
 nonsecret portal setup values and exact single-alert promotion instructions.
-The Observability Agent preview resource remains portal-owned because
-Terraform provisioning is not supported. B/C create none of these prerequisites.
+A keeps separate operator-owned onboarding. C also manages the agent and its
+monitored Application Insights child with the documented
+[`2026-05-01-preview` API](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource-create-template),
+using the existing AzAPI provider. Both issue creation and Investigation are
+`Auto`; the dedicated identity has no workload write role. C disables public
+workspace network access; the managed agent's control-plane issue operations
+are not a claim of private agent ingress. B creates none of these resources.
 Follow [Scenario A](scenario-a-direct.md#step-12-enable-autonomous-observability-agent-operations)
 to enable autonomous issue creation and Investigation and set the SRE
 memory-incident response plan to **Review**. Delete the portal-owned agent before
-destroying its Terraform-owned identity and issue workspace.
+its identity/workspace. Follow [Scenario C](scenario-c-private-gitops.md#step-9a-verify-autonomous-observability)
+for Terraform-managed onboarding, evidence handoff, human-reviewed GitOps recovery
+and teardown.
 
-The deploy workflow runs targeted mocked Terraform tests for Scenario A's
-workspace, identity, role scopes and exclusion from B/C. To run them locally
+For a retained `dev-test` deployment, dispatch `destroy` with its exact prefix,
+scenario and environment label, **Ephemeral = true**, and **Delete state blob =
+true**. This selects the `dev-test` OIDC environment and rejects the active
+repository profile, including when dispatched from a feature branch. The
+shared state account and runner network are retained.
+
+The deploy workflow runs targeted mocked Terraform tests for A/C's workspace,
+identity and role scopes, C's autonomous settings, and B's exclusion. To run them locally
 without provisioning Azure:
 
 ```bash

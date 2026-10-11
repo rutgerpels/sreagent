@@ -46,14 +46,16 @@ Analytics, Azure Monitor alerting, and optional Azure Managed Grafana. Terraform
 owns the demo infrastructure. GitHub Actions authenticates with OpenID Connect —
 there are no stored Azure credentials.
 
-**Scenario A additionally pairs the Azure Copilot Observability Agent with SRE
+**Scenarios A and C pair the Azure Copilot Observability Agent with SRE
 Agent.** Terraform prepares a dedicated Azure Monitor workspace in West Europe
 and a managed identity with monitoring-read and issue-creation roles. The
 Observability Agent is onboarded separately in the portal: it autonomously
 creates Azure Monitor issues and investigates the existing memory alert. An
 operator hands the findings to SRE, which remediates directly after approval.
-The workspace is separate from Log Analytics; application telemetry stays in
-its existing location. Scenarios B/C do not receive these extra resources.
+Scenario C creates the Observability Agent and its autonomous settings through
+Terraform; SRE proposes a remediation PR rather than changing Azure. The
+workspace is separate from Log Analytics; application telemetry stays in its
+existing location. Scenario B does not receive these extra resources.
 
 ```text
 Internet --TLS--> frontend (external ingress)
@@ -91,8 +93,8 @@ Every scenario shares the same five acts:
 4. Let the agent investigate and explain.
 5. Remediate through that scenario's boundary, then verify recovery.
 
-Scenario A adds autonomous Observability issue creation and investigation before
-the approved SRE fix. No automatic agent-to-agent handoff is assumed.
+Scenarios A/C add autonomous Observability issue creation and investigation before
+the approved SRE fix or GitOps PR. No automatic agent-to-agent handoff is assumed.
 
 ---
 
@@ -141,10 +143,11 @@ As a rough order of magnitude that lands around **$3–5 per day for A or B** an
 the SRE Agent itself. Check current SRE Agent pricing separately — it is in
 preview and not included above. Your negotiated rates and region will differ.
 
-Scenario A's autonomous Observability Agent investigations are also billable
+Scenarios A/C's autonomous Observability Agent investigations are also billable
 and excluded from these infrastructure estimates. Review the
 [Observability Agent billing guidance](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-billing)
-before enabling background runs, and delete the portal-owned agent at teardown.
+before enabling background runs. Delete A's operator-owned agent at teardown;
+Terraform destroys C's agent.
 
 > **Grafana is the easiest saving.** `enable_grafana` defaults to `true` and is
 > the largest fixed line item after the registry. If you are not showing
@@ -177,7 +180,13 @@ presenting it.
 
 ### [Scenario C — the agent proposes, a human approves, inside your network](docs/scenario-c-private-gitops.md)
 
-*Show governance.* ~100 min prep, ~25 min live.
+*Show paired-agent governance.* ~100 min prep, ~25 min live.
+
+Terraform enables autonomous Observability issue creation and investigation for
+the application's memory alert. An operator hands the findings to the existing
+Review-mode SRE incident; a URL alone is not an automatic integration. This new
+paired-agent path must pass the walkthrough's live rehearsal gate before it is
+presented as verified.
 
 The agent holds **Reader on the workload**, with a separate subscription-level
 Monitoring Contributor grant. Asked to restart the service, it refuses under
@@ -212,7 +221,7 @@ of the same demo.
 | Story | Autonomous investigation, approved direct recovery | Enterprise GitOps | Private-network enterprise GitOps |
 | Agent profile | High / Contributor / Autonomous | Low / Reader / Review | Low / Reader / Review |
 | Memory-incident response plan | Review, with approved direct Azure writes | Review, GitOps | Review, GitOps |
-| Observability Agent | Autonomous issue creation + investigation; separate portal onboarding | Not included | Not included |
+| Observability Agent | Autonomous issue creation + investigation; separate portal onboarding | Not included | Autonomous issue creation + investigation; Terraform-managed |
 | Control endpoints | Public | Public, RBAC and TLS protected | Private state, ACR, and Key Vault |
 | Deployment runner | GitHub-hosted or local wrapper | GitHub-hosted or local wrapper | Private self-hosted runner |
 | Code context | Code Access | Code Access, signed in with your account (OAuth) | Code Access via a bring-your-own GitHub App |
