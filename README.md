@@ -21,8 +21,10 @@ explain it, and produces a root-cause hypothesis in plain language.
 What it does *next* depends entirely on how you configure it:
 
 - **Autonomous mode with write permissions** — it can act on Azure directly.
-- **Review mode with Reader only** — it cannot touch Azure at all. It proposes
-  the fix as a pull request and waits for a human.
+- **Review mode with workload Reader access and a tool policy** — direct
+  workload changes are denied; it proposes a pull request for a human.
+  Subscription-level Monitoring Contributor remains an exception for the
+  alert lifecycle and monitoring settings, not a fully read-only identity.
 
 That configuration choice is the entire point of this demo. The three scenarios
 below are the same incident, resolved through three different boundaries.
@@ -88,7 +90,7 @@ Confirm all of these. Missing any one will stop you mid-demo.
 
 | Requirement | Notes |
 | --- | --- |
-| An Azure subscription where you can create resources **and role assignments** | Owner or User Access Administrator on the target scope |
+| An Azure subscription where you can create resources **and role assignments** | Owner, or Contributor plus User Access Administrator, at the required scopes |
 | The Azure SRE Agent available in your tenant and region | It is in preview; check availability before scheduling a demo |
 | A GitHub repository you administer | You will set Actions variables and run workflows |
 | A GitHub OIDC deployment identity federated to that repository | Setup is in the [deployment reference](docs/deployment-reference.md#github-actions-oidc) |
@@ -96,7 +98,8 @@ Confirm all of these. Missing any one will stop you mid-demo.
 
 **Scenario C additionally needs** a self-hosted GitHub Actions runner inside the
 virtual network, and a GitHub App you create and later revoke. Budget an extra
-hour for those. Its walkthrough covers both.
+hour for those. Its walkthrough covers registration and configuration; you
+must pre-provision the runner host and network.
 
 > **Being subscription Owner is not enough to open the agent's own UI.** The SRE
 > Agent has a separate data-plane role. Every walkthrough grants it in its setup
@@ -151,8 +154,9 @@ Use it when the question in the room is *"can it actually do anything?"*
 
 *Show governance.* ~100 min prep, ~25 min live.
 
-The agent holds only **Reader**. Asked to restart the service, it refuses —
-because Azure RBAC will not let it. Instead it opens a pull request containing
+The agent holds **Reader on the workload**, with a separate subscription-level
+Monitoring Contributor grant. Asked to restart the service, it refuses under
+the configured workload RBAC and tool policy. Instead it opens a pull request containing
 one line of change, which a human reviews and merges through the existing
 pipeline. Everything runs against private endpoints on a self-hosted runner,
 and the agent's entire configuration is declared in a committed manifest and
@@ -165,7 +169,8 @@ industries, security architects, change-management audiences.
 
 *A lighter-weight variant.* ~45 min prep, ~25 min live.
 
-B tells the **same story as C** — Reader only, refuses to act, opens the pull
+B tells the **same story as C** — workload Reader, refuses direct workload
+changes, opens the pull
 request — but over public endpoints, a GitHub-hosted runner, and Code Access
 signed in with your own account instead of a GitHub App. It is 55 minutes
 cheaper to set up and leaves **no credential to revoke** afterwards.
@@ -196,11 +201,13 @@ remediation pull requests — the agent creates the branch, commits, and raises
 the PR itself. Neither needs a separate write connector or a token. Scenario A
 has no GitHub write path at all.
 
-**The guarantee is Azure RBAC, not a missing GitHub credential.** In B and C the
-agent holds Reader and the tool policy denies Azure writes, so it physically
-cannot mutate production. Being able to open a pull request does not weaken
-that: a human still reviews and merges, and `apply-infra.yml` performs the
-actual change.
+**The boundary combines workload RBAC and tool policy, not missing GitHub
+credentials.** In B and C the agent holds workload Reader access, and the
+tool policy denies direct workload writes. Both agent identities also hold
+Monitoring Contributor at subscription scope, including monitoring writes.
+Do not authorize on-behalf-of Azure elevation in these GitOps scenarios.
+A human reviews and merges the proposed PR; `apply-infra.yml` deploys the fix.
+See [the permission model](https://learn.microsoft.com/azure/sre-agent/permissions).
 
 > **What is verified.** The full incident-to-pull-request loop is verified end to
 > end in Scenario C. An Azure Monitor Sev2 alert opened the thread, and the agent
@@ -215,8 +222,9 @@ actual change.
 >
 > Code Access writes through the terminal, so the global tool policy must
 > **allow** `RunInTerminal`. Denying it silently removes the agent's only write
-> path. Azure remains protected by Reader RBAC and by command-level `bash(...)`
-> deny patterns — verified live in the same session.
+> path. Direct workload changes are denied by workload Reader access and
+> command-level `bash(...)` patterns, verified live in the same session.
+> This does not remove the monitoring-write exception.
 
 ---
 

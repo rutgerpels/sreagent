@@ -45,8 +45,11 @@ introduced by a Pull Request that set the flag to `true` and was applied by the
    which `terraform apply`s the change and rolls a fresh `ca-payment-<suffix>`
    revision — clearing the leaked memory.
 
-In both scenarios the agent holds Reader on Azure and cannot mutate the
-deployment. If asked to restart or scale the app directly, decline and open the
+In both scenarios the agent holds Reader on the demo workload and the tool
+policy denies direct workload changes. Monitoring Contributor at subscription
+scope remains an exception for monitoring and the alert lifecycle, not a
+general permission to remediate workloads. Do not request on-behalf-of Azure
+elevation. If asked to restart or scale the app directly, decline and open the
 Pull Request instead. Never approve or merge your own Pull Request.
 
 Never use generic workflow dispatch, terminal `git`/`gh`, broader token

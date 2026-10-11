@@ -11,13 +11,15 @@ code and reconciled, not clicked together in a portal.
 teams who will ask "can this run in *our* network, configured from *our*
 pipeline?" before they ask what the agent can do.
 
-**Set expectations up front.** Scenario C's agent holds **Reader on Azure** and
-**cannot mutate production** — no restarts, no scaling, no `terraform apply`. It
-*can* write to GitHub. It investigates, then opens a remediation pull request
-itself; a human reviews and merges it, and the pipeline deploys the fix. The
-GitOps guarantee comes from Azure RBAC and tool policy, not from denying the
-agent GitHub access. Say this to the audience before the demo, not after they
-notice.
+**Set expectations up front.** Scenario C's agent holds **Reader on the demo
+resource group**, not Contributor. Both agent identities additionally receive
+**Monitoring Contributor at subscription scope** for the alert lifecycle; this
+includes monitoring writes, so the identity is not completely read-only.
+The reconciled tool policy denies direct workload changes such as restarts,
+scaling, and `terraform apply`. The agent investigates and opens a remediation
+pull request; a human reviews and merges it, and the pipeline deploys the fix.
+Do not authorize on-behalf-of Azure elevation during this GitOps scenario.
+The boundary combines workload RBAC and tool policy, not missing GitHub access.
 
 **Time budget.**
 
@@ -55,9 +57,9 @@ across demos.
 
 | Requirement | How to check |
 | --- | --- |
-| An Azure subscription where you can create resources **and role assignments** | Owner or User Access Administrator on the target scope |
+| An Azure subscription where you can create resources **and role assignments** | Owner, or Contributor plus User Access Administrator, at the required scopes |
 | An existing runner VNet you can peer to | You supply its resource group, VNet, and private-endpoint subnet |
-| A Linux x64 self-hosted runner you can register | Provisioned in phase 1 |
+| A pre-provisioned Linux x64 self-hosted runner you can register | Phase 1 registers it; this repository does not provision the host or runner VNet |
 | A GitHub OIDC deployment identity federated to this repository | See [deployment reference](deployment-reference.md#github-actions-oidc) |
 | Permission to create an Azure SRE Agent | The SRE Agent preview must be available in your tenant and region |
 | Permission to create and install a GitHub App | Only for the GitHub App Code Access path (steps 3-5); the OAuth path needs none |
@@ -88,6 +90,21 @@ needs a repository clone, the step says so.
 
 ## Phase 1 — Prepare the private runner and network
 
+### Clean-fork preflight
+
+A fork is an independent repository. Upstream Actions variables, secrets, OIDC
+trust, repository runners, and GitHub App installations do not transfer.
+Before proceeding, synchronize the fork, confirm its default branch is `main`,
+enable Actions, and verify the deployment and destroy workflows are available.
+Confirm you can manage repository variables, secrets, and runners, and that
+your organization permits the required App installation.
+
+Configure the fork's deployment identity using the
+[OIDC bootstrap reference](deployment-reference.md#github-actions-oidc).
+Dispatch production deployments from the trusted `main` branch. The separate
+`dev-test` workflow needs its own environment-scoped federated credential; a
+production branch credential does not authorize it.
+
 ### Step 1. Confirm the healthy baseline
 
 **Do.** Confirm `infra/leak.auto.tfvars` on `main` reads:
@@ -109,13 +126,27 @@ self-hosted, Linux, X64, azure-private, contosopay
 
 The runner needs:
 
-- Docker;
-- Azure CLI;
-- outbound HTTPS to GitHub and the Azure control plane;
+- Bash, Git, Azure CLI, Docker, `unzip`, `jq`, `curl`, `getent`, and the usual
+  GNU core utilities (`awk`, `sed`, `grep`, `cut`, `sha256sum`, `seq`, `tr`);
+- Docker daemon access for the **runner service account**: `docker info` must
+  succeed as that account, not merely `docker --version` as an administrator;
+- outbound HTTPS for GitHub Actions and tool downloads, Entra authentication,
+  the Azure control plane and SRE Agent APIs, the Terraform registry/provider
+  and release endpoints, Node.js downloads, npm, and Docker base-image pulls;
 - network reachability to the runner VNet and its private endpoints.
 
 Terraform and Node.js are installed by the workflow — you do not need to
-pre-install them.
+pre-install them. `hashicorp/setup-terraform` requires `unzip` on this Linux host.
+Use GitHub's [self-hosted runner network requirements](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#communication-requirements)
+when configuring an outbound firewall; the control-plane endpoint alone is
+not sufficient. Check these prerequisites before dispatching: the workflow
+does not currently provide a complete runner preflight.
+
+Use a dedicated runner for trusted workflows; restrict repository access with
+a runner group where supported, protect workflow changes, and prefer ephemeral
+runners when practical. Do not execute untrusted pull-request code on this
+private host. Stop or deallocate a dedicated VM when idle, and remove the runner
+registration and host when no longer needed. Do not delete a shared VNet.
 
 **Expect.** The runner appears **Idle** in **Settings → Actions → Runners** with
 all five labels. If any label is missing, the deploy job will queue forever.
@@ -124,7 +155,8 @@ all five labels. If any label is missing, the deploy job will queue forever.
 
 Code Access is how the agent correlates an incident to a commit, and how it
 opens the remediation pull request. Without it the demo still works, but it
-loses its most persuasive evidence and the agent cannot propose the fix itself.
+loses source correlation and the agent cannot create the remediation branch
+and pull request. It can still investigate telemetry and describe a fix in chat.
 
 **Do.** Pick one path now, before you deploy — the choice changes what you set
 in step 5.
@@ -168,6 +200,11 @@ push a branch and open the remediation pull request. No Issues, Actions,
 Administration, Secrets, or Workflows permissions. Install it on **this
 repository only**.
 
+Protect `main` with a human-review requirement and no bypass for this App.
+These App permissions allow GitHub writes; the agent's instruction not to
+merge is not a repository authorization boundary by itself. Verify the live
+App permissions and repository installation in the UI before deployment.
+
 **Expect.** An App with a client ID and a downloaded private key (PEM).
 
 Keep the PEM to hand for the next step, then remove it from your machine
@@ -198,6 +235,24 @@ Optional address-space overrides, if the defaults collide with your network:
 The application address space **must not overlap** the runner address space.
 Overlapping ranges break peering and are the most common phase-1 failure.
 
+Treat these overrides as one address plan: changing only the VNet CIDR does
+not relocate the default subnets. All three subnets must fit inside the app
+VNet, must not overlap each other, and must not overlap the runner VNet.
+For example, an app VNet of `10.110.0.0/16` can use `10.110.0.0/27` for private
+endpoints, `10.110.0.64/27` for Container Apps, and `10.110.0.96/27` for the
+agent, provided the runner network does not overlap that range. Container Apps
+requires `/27` or larger; this demo also uses `/27` for the agent. Inspect the
+existing runner private-endpoint subnet for delegation, policy, and capacity.
+
+**Current limitations.** The workflows still fall back to generic runner
+network names if these required variables are omitted. Terraform validates
+individual CIDRs, but not their combined containment or overlap. Set and
+verify every required variable yourself before dispatching. State bootstrap
+also assumes it can create or reuse the Blob private DNS zone in the runner
+network resource group; unlike ACR and Key Vault discovery, it does not yet
+reuse a centrally managed Blob zone in another resource group. Do not dispatch
+against such a network until that limitation is addressed.
+
 On the **GitHub App path only**, add these three variables as well:
 
 | Variable | Value |
@@ -217,8 +272,10 @@ Then, under **Secrets**, add one repository secret:
 | `SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM` | The **entire** contents of the App's `.pem` file, including the `-----BEGIN` and `-----END` lines |
 
 The deploy imports that PEM into Key Vault as a **key** and never writes it to
-the repository. GitHub masks it in workflow logs, and the workflow shreds its
-temporary copy on the runner whether the import succeeds or fails.
+the repository. GitHub masks it in workflow logs, and the workflow attempts to
+remove its temporary copy on the runner whether the import succeeds or fails.
+`shred` is best-effort cleanup, not guaranteed physical erasure on SSD or
+copy-on-write storage; a killed runner may also bypass the cleanup trap.
 
 **Expect.** Six required variables, plus three variables and one secret if you
 chose the App path.
@@ -232,6 +289,26 @@ handing a GitHub App key to the SRE Agent service.
 
 ## Phase 2 — Deploy
 
+### Choose a region for this run
+
+Do not treat an example or workflow default as a permanent region
+recommendation. Check Microsoft's current [SRE Agent supported regions](https://learn.microsoft.com/azure/sre-agent/supported-regions),
+then select your subscription in **Create agent** at <https://sre.azure.com>
+and inspect the **Region** dropdown. This is the subscription-specific view.
+Choose a listed region that meets your residency and organizational
+requirements and supports the other services in this profile. The agent's
+region determines where its compute runs, not which authorized cross-region
+resources it can investigate.
+
+A supported listing is eligibility, not reserved quota or capacity.
+If deployment returns `ManagedEnvironmentNoAvailableCapacityInRegion`, retry
+later in the same region or follow
+[capacity recovery](#capacity-recovery-before-changing-regions) before
+selecting another currently supported region.
+An agent's region cannot change after creation, and
+[Container Apps relocation](https://learn.microsoft.com/azure/container-apps/relocate-region)
+recreates the managed environment. Never convert partial state in place.
+
 ### Step 6. Run the deploy workflow
 
 **Do.** Go to **Actions → deploy → Run workflow** and set:
@@ -241,7 +318,7 @@ handing a GitHub App key to the SRE Agent service.
 | Scenario | `C` | Selects the private-network profile |
 | Resource name prefix | `contosopay` | Any short lowercase prefix works |
 | Environment label | `demo` | Appears in names and the state key |
-| Azure region | `swedencentral` | Any region where SRE Agent is available |
+| Azure region | `<chosen-supported-region>` | Choose for this run using the region guidance above |
 | Open incident PR | `false` | Leave this off; you arm the incident live in step 12 |
 
 **Expect.** The job is picked up by your labelled private runner and then:
@@ -258,14 +335,16 @@ handing a GitHub App key to the SRE Agent service.
    `agent/scenario-c/manifest.json`;
 7. **verifies** the resulting agent state.
 
-**This is the only deploy run you need.** Earlier revisions of this runbook
-required two — one to create the Key Vault, then a manual key import, then a
-second run to connect Code Access. The import now happens between the apply and
-the reconcile in the same job, so the chicken-and-egg is gone.
+**One successful deploy run configures the whole profile.** Earlier revisions
+required two planned runs: one to create the vault, then a manual key import,
+then another run to connect Code Access. Import now happens between apply and
+reconcile in the same job. Capacity or other provider failures can still
+require recovery and a fresh run.
 
 **Expect on success.** The workflow summary lists the resource group, ACR,
 frontend URL, the activation variables, and a Scenario C bootstrap note
-confirming that the agent holds Reader on Azure and remediates by pull request.
+describing workload Reader access, the Monitoring Contributor exception, and
+remediation by pull request.
 
 **If the job never starts**, your runner labels do not match step 2.
 
@@ -476,9 +555,9 @@ state, applies the flag, and rolls a new `payment-service` revision.
 
 - The rising working-set chart.
 - The alert rule's five-minute average.
-- The two-part boundary: Reader RBAC on Azure and the reconciled global deny
-  policy. The agent can read every signal in the subscription and change none
-  of it.
+- The two-part boundary: Reader on the demo workload and the reconciled global
+  deny policy for direct workload writes. Subscription-level Monitoring
+  Contributor remains an exception for monitoring and the alert lifecycle.
 - The scheduled health check that the reconciler configured.
 
 **Expect.** The Sev2 alert fires and reaches the agent as an incident.
@@ -497,14 +576,15 @@ enable_slow_leak = false
 
 **Optional, and the strongest moment in the demo.** Ask the agent in the
 incident thread to "just restart the container app". It declines: it holds
-Reader on the subscription and the tool policy denies Azure writes. It offers
+Reader on the demo workload and the tool policy denies Azure writes. It offers
 the pull request instead. The guardrail is demonstrated live rather than
 described.
 
 ### Step 15. Watch the agent open the remediation pull request
 
-**Say.** "The agent cannot touch Azure. What it *can* do is propose the fix the
-same way any engineer would — as a reviewable pull request."
+**Say.** "The agent cannot restart or scale this workload through the configured
+tools. It proposes the fix the same way any engineer would: as a reviewable
+pull request. Monitoring permissions are a separate, documented exception."
 
 **Expect.** A pull request against the default branch, opened by the Code Access
 GitHub App's `[bot]` account. The diff is one file and one line:
@@ -578,6 +658,38 @@ environment. Nothing reached Azure outside the pipeline."
 
 ## Phase 5 — Tear down
 
+### Capacity recovery before changing regions
+
+Keep the private runner available and retain the isolated state until cleanup
+is verified. Use the exact scenario, prefix, and environment from the failed
+dispatch, following the [verified destroy procedure](deployment-reference.md#destroying-one-profile).
+Do not guess resource names or delete the shared backend account.
+
+1. Run normal **destroy** with **Delete state blob after destroy** set to
+   `false`.
+2. Check that the exact application resource group recorded in state is
+   actually absent, not just that Terraform reports success. A failed Azure
+   creation can leave an environment that was never recorded in state.
+3. If normal destroy cannot finish, use **Recovery: force delete resource
+   group** only after reviewing its scope and the verified state. It deletes
+   the recorded application group, including resources absent from state, and
+   removes the verified runner-to-app peering. It resets the isolated blob as
+   part of recovery; do not delete that blob yourself first.
+4. If the group remains after either path, stop and retain any remaining state
+   and run logs. The recovery workflow can tolerate a known stopped SRE Agent
+   provider orphan; its success is not proof that the group disappeared.
+   Resolve the remaining provider resources before redeploying elsewhere.
+5. After confirming group removal and cleanup of this profile's links in
+   shared networking, delete only its isolated blob if it remains. Clear the
+   activation variables if set, then dispatch a clean deployment in the new
+   region.
+
+If the failure happened before a resource group was recorded, the destroy
+workflow intentionally refuses unverified deletion. Inventory the resources
+from the failed run with your Azure administrator; do not bypass the state
+verification by guessing names. Preserve shared DNS zones, runner resources,
+and state belonging to other profiles.
+
 ### Step 17. Destroy the environment
 
 **Do.** Go to **Actions → destroy → Run workflow** and set:
@@ -616,6 +728,7 @@ not own them.
 | The agent site will not load, or chat returns `unauthorized` | No SRE Agent data-plane role — subscription Owner is not enough | Grant a role at agent scope; see [operator access](sre-agent-setup.md#operator-access-to-the-agent) |
 | Terraform fails reaching the state account | The runner cannot reach the private endpoint, or peering is missing | Verify `RUNNER_NETWORK_RG`, `RUNNER_VNET_NAME`, `RUNNER_PE_SUBNET_NAME` and runner network reachability |
 | Peering or subnet creation fails | Application and runner address spaces overlap | Override `APP_VNET_ADDRESS_SPACE` and the subnet prefixes |
+| Container Apps environment fails with `ManagedEnvironmentNoAvailableCapacityInRegion` | No current capacity for a new managed environment in this region | Retry later, or follow [capacity recovery](#capacity-recovery-before-changing-regions) before a clean deployment elsewhere |
 | Code Access reconciliation fails | Partial configuration — App, key, or variables missing | Set all three variables together, or leave `SRE_CODE_ACCESS_ENABLED` unset |
 | Reconciliation fails with "Key Vault secret URIs are no longer supported" | The App credential was stored as a Key Vault *secret* | Import it as a **key** instead; see [step 6](#step-6-run-the-deploy-workflow) |
 | The Key Vault does not exist yet | The key was imported by hand before the first deploy | Run [step 6](#step-6-run-the-deploy-workflow) first; the vault name is generated during that run |
@@ -633,12 +746,13 @@ not own them.
 | --- | --- |
 | Terraform profile | `scenario = "C"` |
 | SRE Agent workload access | Reader on the demo resource group |
+| Monitoring exception | Both agent identities hold Monitoring Contributor at subscription scope for alert lifecycle and monitoring settings |
 | Run mode | Review |
 | Azure data plane | Private state Blob, ACR, and Key Vault endpoints |
 | SRE Agent networking | Dedicated delegated subnet, VNet egress |
 | Deployment runner | `self-hosted, Linux, X64, azure-private, contosopay` |
 | Code context | Bring-your-own GitHub App, or OAuth Code Access |
-| Azure mutation | None — Reader RBAC and the global deny policy forbid it |
+| Direct workload mutation | Denied by workload Reader access and the reconciled tool policy; do not authorize on-behalf-of elevation |
 | GitHub mutation | The agent opens a remediation pull request; it cannot approve or merge |
 | Incident trigger | Pull request setting `enable_slow_leak = true` |
 | Durable remediation | Agent-authored, human-merged pull request setting the flag to `false` |
@@ -714,6 +828,10 @@ complexity without removing the REST reconciliation phase.
 - [Deploy Azure SRE Agent with infrastructure as code](https://learn.microsoft.com/azure/sre-agent/deploy-iac)
 - [Azure SRE Agent API reference](https://learn.microsoft.com/azure/sre-agent/api-reference)
 - [Azure SRE Agent ARM template reference](https://learn.microsoft.com/azure/templates/microsoft.app/agents)
+- [Azure SRE Agent permissions and monitoring exception](https://learn.microsoft.com/azure/sre-agent/permissions)
+- [Azure SRE Agent supported regions](https://learn.microsoft.com/azure/sre-agent/supported-regions)
+- [Azure region selection and capacity guidance](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-setup-guide/regions)
+- [Relocate Azure Container Apps](https://learn.microsoft.com/azure/container-apps/relocate-region)
 - [Azure SRE Agent network integration](https://learn.microsoft.com/azure/sre-agent/network-integration)
 - [Azure SRE Agent MCP connectors](https://learn.microsoft.com/azure/sre-agent/mcp-connectors)
 - [Microsoft SRE Agent reference repository](https://github.com/microsoft/sre-agent)
