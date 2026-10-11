@@ -487,6 +487,11 @@ that proves the "configured from code, not clicked" claim — consider showing i
 live.
 
 To inspect the desired state without any Azure access, use `--mode render`.
+During apply and verify, the reconciler discovers the single enabled payment
+`WorkingSetBytes` alert in the agent's resource group and sets the response
+plan's `titleContains` to its full name. Missing or ambiguous matches fail
+closed. This prevents the Sev2 plan from investigating unrelated subscription
+alerts; offline render cannot resolve this deployed-resource selector.
 
 ### Step 9a. Verify autonomous Observability
 
@@ -517,6 +522,23 @@ the managed agents have private inbound endpoints or that every connector
 traverses the runner VNet. If policy or the preview service prevents topology,
 issue creation or investigation, record the limitation and stop the paired
 demo rather than broadening access or substituting a manual investigation.
+
+**Subscription prerequisite.** Microsoft also requires the investigated
+subscription to be associated with an Azure Monitor workspace for
+[issues and investigations](https://learn.microsoft.com/azure/azure-monitor/aiops/issues-how-to#associate-an-amw-with-a-subscription).
+Check `Microsoft.Monitor/settings/default` with API version
+`2025-06-03-preview`. The `properties.defaultAzureMonitorWorkspace` value
+must identify the intended issues workspace. Configuring the agent's
+`monitoringAccountId` alone does not verify this prerequisite.
+
+The association is a subscription-wide operator decision, not part of this
+deployment's Terraform or an implicit permission to replace another team's
+workspace. Record the existing setting and obtain explicit authorization
+before changing it using the documented REST operations. For an isolated
+rehearsal with an originally absent setting, remove only the temporary
+association during cleanup, after checking it still references the rehearsal
+workspace. Association and enabled operations are prerequisites, not proof of
+successful autonomous issue creation.
 
 **Rehearsal gate.** Prove a real fired alert, automatically created Azure
 Monitor issue, automatically started investigation, evidence handoff to the
