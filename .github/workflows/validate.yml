@@ -39,6 +39,9 @@ jobs:
       - name: Check SRE Agent reconciler
         run: node --test scripts/tests/sre-agent-reconciler.test.mjs
 
+      - name: Check Terraform state stream probes
+        run: python3 scripts/tests/terraform-state-stream.test.py
+
       - name: Check paired Observability configuration and recovery
         run: |
           terraform -chdir=infra init -backend=false -input=false
