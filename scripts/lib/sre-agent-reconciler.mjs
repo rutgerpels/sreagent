@@ -72,6 +72,40 @@ export function extendedResourceMatches(kind, actual, item) {
   return desiredSubsetMatches(actual, expected);
 }
 
+export function scopeMemoryIncidentFilters(desired, alertResources) {
+  if (!Array.isArray(alertResources)) {
+    throw new Error("Memory-alert discovery returned an invalid resource list.");
+  }
+  const alerts = alertResources.filter(
+    (alert) =>
+      typeof alert.name === "string" &&
+      alert.name.startsWith("alert-payment-memory-") &&
+      alert.properties?.enabled === true &&
+      alert.properties.criteria?.allOf?.some(
+        (criterion) => criterion.metricName === "WorkingSetBytes",
+      ),
+  );
+  if (alerts.length !== 1) {
+    throw new Error(
+      `Expected one enabled payment memory alert in the agent resource group; found ${alerts.length}.`,
+    );
+  }
+  return {
+    ...desired,
+    incidentFilters: desired.incidentFilters.map((filter) =>
+      filter.name === "contosopay-memory-leak"
+        ? {
+            ...filter,
+            properties: {
+              ...filter.properties,
+              titleContains: alerts[0].name,
+            },
+          }
+        : filter,
+    ),
+  };
+}
+
 export function knowledgeIndexingState(status, indexer) {
   const execution = indexer.lastExecution ?? {};
   const hasErrors =
@@ -570,6 +604,10 @@ function verifyConnectors(
 }
 
 export async function reconcileAgent(options, desired) {
+  const alerts = armGet(
+    `https://management.azure.com/subscriptions/${encodeURIComponent(options.subscription)}/resourceGroups/${encodeURIComponent(options.resourceGroup)}/providers/Microsoft.Insights/metricAlerts?api-version=2018-03-01`,
+  );
+  desired = scopeMemoryIncidentFilters(desired, alerts.value);
   const armUrl = agentArmUrl(
     options.subscription,
     options.resourceGroup,

@@ -10,6 +10,7 @@ import {
   normaliseInstructions,
   parseExplicitBoolean,
   renderDesiredState,
+  scopeMemoryIncidentFilters,
   stableJson,
 } from "../lib/sre-agent-reconciler.mjs";
 
@@ -17,6 +18,80 @@ const config = resolve("agent/scenario-c");
 const disabledEnvironment = {
   SRE_CODE_ACCESS_ENABLED: "false",
 };
+
+test("scopes the Review response plan to the deployed payment memory alert", () => {
+  const desired = loadDesiredState(config, disabledEnvironment);
+  const alert = {
+    name: "alert-payment-memory-c-fixture",
+    properties: {
+      enabled: true,
+      criteria: { allOf: [{ metricName: "WorkingSetBytes" }] },
+    },
+  };
+  const scoped = scopeMemoryIncidentFilters(desired, [
+    { name: "unrelated-sev2-alert", properties: { enabled: true } },
+    alert,
+  ]);
+  assert.equal(scoped.incidentFilters[0].properties.titleContains, alert.name);
+  assert.equal(scoped.incidentFilters[0].properties.agentMode, "Review");
+  assert.deepEqual(scoped.incidentFilters[0].properties, {
+    ...desired.incidentFilters[0].properties,
+    titleContains: alert.name,
+  });
+  const envelope = buildExtendedBody(
+    scoped.incidentFilters[0].name,
+    scoped.incidentFilters[0].type,
+    { ...scoped.incidentFilters[0].properties },
+  );
+  delete envelope.tags;
+  assert.equal(
+    extendedResourceMatches(
+      "incidentFilters",
+      envelope,
+      scoped.incidentFilters[0],
+    ),
+    true,
+  );
+  delete envelope.properties.titleContains;
+  assert.equal(
+    extendedResourceMatches(
+      "incidentFilters",
+      envelope,
+      scoped.incidentFilters[0],
+    ),
+    false,
+  );
+  assert.equal(desired.incidentFilters[0].properties.titleContains, undefined);
+  assert.throws(() => scopeMemoryIncidentFilters(desired, []), /found 0/);
+  assert.throws(
+    () => scopeMemoryIncidentFilters(desired, [alert, alert]),
+    /found 2/,
+  );
+  assert.throws(
+    () =>
+      scopeMemoryIncidentFilters(desired, [
+        { ...alert, properties: { ...alert.properties, enabled: false } },
+      ]),
+    /found 0/,
+  );
+  assert.throws(
+    () => scopeMemoryIncidentFilters(desired, null),
+    /invalid resource list/,
+  );
+  assert.throws(
+    () =>
+      scopeMemoryIncidentFilters(desired, [
+        {
+          ...alert,
+          properties: {
+            ...alert.properties,
+            criteria: { allOf: [{ metricName: "CpuUsage" }] },
+          },
+        },
+      ]),
+    /found 0/,
+  );
+});
 
 test("loads the supported Scenario C desired state", () => {
   const desired = loadDesiredState(config, disabledEnvironment);
