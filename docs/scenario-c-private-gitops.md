@@ -540,6 +540,16 @@ association during cleanup, after checking it still references the rehearsal
 workspace. Association and enabled operations are prerequisites, not proof of
 successful autonomous issue creation.
 
+**Topology prerequisite.** Verify Application Insights has dependency records
+from `frontend` to `checkout-api` and from `checkout-api` to `payment-service`,
+not just incoming requests and memory metrics. Node's built-in `fetch` uses
+Undici; the frontend and checkout telemetry bootstraps register
+[Undici instrumentation](https://github.com/open-telemetry/opentelemetry-js-contrib/tree/main/packages/instrumentation-undici)
+in addition to Azure Monitor's HTTP instrumentation. This preserves trace
+context across both hops and supplies the topology used in alert correlation.
+The offline dependency regression checks client spans, propagated trace
+headers, parent linkage and failed downstream responses.
+
 **Rehearsal gate.** Prove a real fired alert, automatically created Azure
 Monitor issue, automatically started investigation, evidence handoff to the
 Review-mode SRE incident, agent-authored remediation PR, human merge and

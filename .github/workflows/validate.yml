@@ -42,6 +42,14 @@ jobs:
       - name: Check Terraform state stream probes
         run: python3 scripts/tests/terraform-state-stream.test.py
 
+      - name: Check checkout dependency telemetry
+        run: |
+          npm ci --prefix src/frontend --ignore-scripts --no-fund --no-audit
+          npm ci --prefix src/checkout-api --ignore-scripts --no-fund --no-audit
+          npm run build --prefix src/frontend
+          npm run build --prefix src/checkout-api
+          node --test scripts/tests/telemetry-dependencies.test.mjs
+
       - name: Check paired Observability configuration and recovery
         run: |
           terraform -chdir=infra init -backend=false -input=false
