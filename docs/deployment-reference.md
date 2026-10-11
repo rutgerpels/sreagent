@@ -137,6 +137,13 @@ true**. This selects the `dev-test` OIDC environment and rejects the active
 repository profile, including when dispatched from a feature branch. The
 shared state account and runner network are retained.
 
+To recover a retained `dev-test` deployment without creating a second
+environment, dispatch `deploy` on the intended branch with that same exact
+prefix/scenario/environment and **Ephemeral = true**. It uses the `dev-test`
+OIDC credential and preserves the active profile marker. The reusable
+`dev-test` caller forwards only the Code Access App key secret, not every
+repository secret.
+
 The deploy workflow runs targeted mocked Terraform tests for A/C's workspace,
 identity and role scopes, C's autonomous settings, and B's exclusion. To run them locally
 without provisioning Azure:

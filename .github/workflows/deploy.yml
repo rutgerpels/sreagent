@@ -27,10 +27,19 @@ on:
         type: boolean
         required: false
         default: false
+      ephemeral:
+        description: "Recover a retained dev/test environment using dev-test OIDC; refuses the active profile"
+        type: boolean
+        required: false
+        default: false
 
   # Callable so the dev/test pipeline provisions ephemeral environments through the
   # same code path as production, leaving no room for the two pipelines to drift.
   workflow_call:
+    secrets:
+      SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM:
+        description: "GitHub App key imported into the new private Key Vault when Code Access is enabled"
+        required: false
     inputs:
       scenario:
         description: "Deployment scenario"
@@ -145,7 +154,7 @@ jobs:
     runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     # Empty means no environment, so production keeps requesting its branch-scoped
     # OIDC token exactly as before.
-    environment: ${{ inputs.environment_name }}
+    environment: ${{ inputs.environment_name || (inputs.ephemeral && 'dev-test' || '') }}
     timeout-minutes: 75
     permissions:
       contents: read
