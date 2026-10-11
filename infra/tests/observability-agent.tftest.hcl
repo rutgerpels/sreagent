@@ -1,4 +1,10 @@
 mock_provider "azurerm" {
+  mock_data "azurerm_virtual_network" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-runner-test/providers/Microsoft.Network/virtualNetworks/runner-test"
+    }
+  }
+
   mock_resource "azurerm_resource_group" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test"
