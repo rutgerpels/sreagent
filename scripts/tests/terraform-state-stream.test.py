@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import unittest
 
@@ -11,7 +12,7 @@ BASH = os.environ.get("BASH", "bash")
 
 class TerraformStateStreamTests(unittest.TestCase):
     def probe(self, predicate, target):
-        script = """
+        script = "TARGET=" + shlex.quote(target) + "\n" + """
 set -euo pipefail
 produce() {
   printf '%s\\n' "${TARGET}"
@@ -23,7 +24,6 @@ produce | """ + predicate
         return subprocess.run(
             [BASH, "--noprofile", "--norc", "-s"],
             input=script.encode(),
-            env={**os.environ, "TARGET": target},
             capture_output=True,
             timeout=15,
         )
