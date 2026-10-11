@@ -88,6 +88,14 @@ export ARM_SUBSCRIPTION_ID
 export ARM_USE_AZUREAD="true"   # AAD data-plane auth for the state backend (no keys)
 echo "    Subscription: $(az account show --query name -o tsv) (${ARM_SUBSCRIPTION_ID})"
 
+if [[ "${SCENARIO}" == "A" ]]; then
+    MONITOR_PROVIDER_STATE="$(az provider show --namespace Microsoft.Monitor --query registrationState -o tsv)"
+    if [[ "${MONITOR_PROVIDER_STATE}" != "Registered" ]]; then
+        echo "==> Registering Microsoft.Monitor for the Scenario A issue workspace"
+        az provider register --namespace Microsoft.Monitor --wait --output none
+    fi
+fi
+
 if ! docker info >/dev/null 2>&1; then
     echo "Docker daemon is not reachable. Start Docker and retry." >&2
     exit 1
@@ -211,7 +219,14 @@ echo " Next steps â€” connect the Azure SRE Agent (see docs/sre-agent-setup.md Â
 echo "  1. Go to https://sre.azure.com, create an SRE Agent, and point it at '${RESOURCE_GROUP}'."
 echo "  2. Connect this GitHub repo (Code Access) and Azure Monitor as the incident platform."
 if [[ "${SCENARIO}" == "A" ]]; then
-    echo "  3. Follow docs/scenario-a-direct.md and run scripts/trigger-incident-direct.sh."
+    OBSERVABILITY_ONBOARDING="$(terraform -chdir="${INFRA_DIR}" output -json observability_agent_onboarding)"
+    OBSERVABILITY_WORKSPACE="$(jq -er '.workspace_name' <<< "${OBSERVABILITY_ONBOARDING}")"
+    OBSERVABILITY_LOCATION="$(jq -er '.location' <<< "${OBSERVABILITY_ONBOARDING}")"
+    echo "  3. Follow docs/scenario-a-direct.md: onboard the Observability Agent in '${OBSERVABILITY_LOCATION}'"
+    echo "     using workspace '${OBSERVABILITY_WORKSPACE}' and the Terraform-managed identity."
+    echo "     Enable autonomous correlation + issue creation and Investigation."
+    echo "  4. Set the SRE memory-incident response plan to Review; approve Azure writes explicitly."
+    echo "  5. Rehearse automatic issue creation/investigation, then run scripts/trigger-incident-direct.sh."
 else
     echo "  3. Follow docs/scenario-b-gitops.md and run scripts/trigger-incident-gitops.sh."
 fi

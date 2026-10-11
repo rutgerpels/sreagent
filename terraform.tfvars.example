@@ -17,6 +17,11 @@ location    = "swedencentral"
 #     Reader on Azure and remediates by opening a pull request.
 scenario = "A"
 
+# Scenario A also provisions an Azure Monitor workspace in West Europe and a
+# managed identity for autonomous Observability Agent onboarding. The preview
+# agent is created separately in the portal; B/C provision none of these.
+# Set the SRE memory-incident response plan to Review for human-approved writes.
+
 # Scenario C only: existing private runner network plus non-overlapping address
 # space for the Terraform-managed regional VNet. A/B ignore these values and do
 # not evaluate the existing runner VNet data source.

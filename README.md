@@ -41,8 +41,17 @@ Three Node.js/TypeScript services on Azure Container Apps:
 
 Around them: Azure Container Registry, Key Vault, Application Insights, Log
 Analytics, Azure Monitor alerting, and optional Azure Managed Grafana. Terraform
-owns every Azure resource. GitHub Actions authenticates with OpenID Connect —
+owns the demo infrastructure. GitHub Actions authenticates with OpenID Connect —
 there are no stored Azure credentials.
+
+**Scenario A additionally pairs the Azure Copilot Observability Agent with SRE
+Agent.** Terraform prepares a dedicated Azure Monitor workspace in West Europe
+and a managed identity with monitoring-read and issue-creation roles. The
+Observability Agent is onboarded separately in the portal: it autonomously
+creates Azure Monitor issues and investigates the existing memory alert. An
+operator hands the findings to SRE, which remediates directly after approval.
+The workspace is separate from Log Analytics; application telemetry stays in
+its existing location. Scenarios B/C do not receive these extra resources.
 
 ```text
 Internet --TLS--> frontend (external ingress)
@@ -79,6 +88,9 @@ Every scenario shares the same five acts:
 3. Wait 8–12 minutes while memory climbs and the alert fires.
 4. Let the agent investigate and explain.
 5. Remediate through that scenario's boundary, then verify recovery.
+
+Scenario A adds autonomous Observability issue creation and investigation before
+the approved SRE fix. No automatic agent-to-agent handoff is assumed.
 
 ---
 
@@ -126,6 +138,11 @@ As a rough order of magnitude that lands around **$3–5 per day for A or B** an
 the SRE Agent itself. Check current SRE Agent pricing separately — it is in
 preview and not included above. Your negotiated rates and region will differ.
 
+Scenario A's autonomous Observability Agent investigations are also billable
+and excluded from these infrastructure estimates. Review the
+[Observability Agent billing guidance](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-billing)
+before enabling background runs, and delete the portal-owned agent at teardown.
+
 > **Grafana is the easiest saving.** `enable_grafana` defaults to `true` and is
 > the largest fixed line item after the registry. If you are not showing
 > dashboards, set it to `false` and drop roughly a third of the daily cost.
@@ -141,11 +158,19 @@ For most audiences the real choice is between two of them:
 
 ### [Scenario A — the agent fixes it](docs/scenario-a-direct.md)
 
-*Show capability.* ~35 min prep, ~20 min live.
+*Show paired-agent capability.* ~20 min live; allow preparation time for both
+agents and a full preview rehearsal.
 
-The agent holds Contributor on one resource group and remediates Azure
-**directly** after you approve. Shortest setup and the most dramatic moment.
-Use it when the question in the room is *"can it actually do anything?"*
+Observability Agent autonomously turns the individual memory alert into an
+Azure Monitor issue and investigation. SRE Agent holds Contributor on one
+resource group; its memory-incident response plan runs in **Review** mode and
+remediates Azure **directly** after you approve. Use it to show *"an incident
+prepared before the on-call engineer arrives, then an evidence-led fix."*
+
+Allow additional preparation for preview onboarding and rehearsal. The paired
+Observability flow is a new acceptance target, **not yet live-verified**; the
+walkthrough requires proving automatic issue creation and investigation before
+presenting it.
 
 ### [Scenario C — the agent proposes, a human approves, inside your network](docs/scenario-c-private-gitops.md)
 
@@ -179,8 +204,10 @@ of the same demo.
 
 | | Scenario A | Scenario B | Scenario C |
 | --- | --- | --- | --- |
-| Story | Autonomous direct recovery | Enterprise GitOps | Private-network enterprise GitOps |
+| Story | Autonomous investigation, approved direct recovery | Enterprise GitOps | Private-network enterprise GitOps |
 | Agent profile | High / Contributor / Autonomous | Low / Reader / Review | Low / Reader / Review |
+| Memory-incident response plan | Review, with approved direct Azure writes | Review, GitOps | Review, GitOps |
+| Observability Agent | Autonomous issue creation + investigation; separate portal onboarding | Not included | Not included |
 | Control endpoints | Public | Public, RBAC and TLS protected | Private state, ACR, and Key Vault |
 | Deployment runner | GitHub-hosted or local wrapper | GitHub-hosted or local wrapper | Private self-hosted runner |
 | Code context | Code Access | Code Access, signed in with your account (OAuth) | Code Access via a bring-your-own GitHub App |

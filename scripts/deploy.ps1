@@ -183,6 +183,17 @@ $env:ARM_SUBSCRIPTION_ID = $account.id
 $env:ARM_USE_AZUREAD = 'true'
 Write-Host "    Subscription: $($account.name) ($($account.id))"
 
+if ($Scenario -eq 'A') {
+    $monitorProviderState = az provider show --namespace Microsoft.Monitor --query registrationState --output tsv
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read Microsoft.Monitor resource provider registration.' }
+    if ($monitorProviderState -ne 'Registered' -and $PSCmdlet.ShouldProcess('Microsoft.Monitor', 'Register resource provider')) {
+        Write-Host '==> Registering Microsoft.Monitor for the Scenario A issue workspace' -ForegroundColor Cyan
+        Invoke-Checked -Name 'az provider register (Microsoft.Monitor)' {
+            az provider register --namespace Microsoft.Monitor --wait --output none
+        }
+    }
+}
+
 # Verify the Docker daemon is reachable before we get deep into the deploy.
 docker info 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -332,7 +343,17 @@ Write-Host ' Next steps — connect the Azure SRE Agent (see docs/sre-agent-setu
 Write-Host "  1. Go to https://sre.azure.com, create an SRE Agent, and point it at '$resourceGroup'."
 Write-Host '  2. Connect this GitHub repo (Code Access) and Azure Monitor as the incident platform.'
 if ($Scenario -eq 'A') {
-    Write-Host '  3. Follow docs/scenario-a-direct.md and run scripts/trigger-incident-direct.ps1.'
+    $observabilityOnboarding = terraform -chdir="$infraDir" output -json observability_agent_onboarding
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read Scenario A Observability Agent onboarding outputs.' }
+    $observabilityOnboarding = $observabilityOnboarding | ConvertFrom-Json
+    if (-not $observabilityOnboarding.workspace_name -or -not $observabilityOnboarding.location) {
+        throw 'Scenario A Observability Agent onboarding outputs are incomplete.'
+    }
+    Write-Host "  3. Follow docs/scenario-a-direct.md: onboard the Observability Agent in '$($observabilityOnboarding.location)'"
+    Write-Host "     using workspace '$($observabilityOnboarding.workspace_name)' and the Terraform-managed identity."
+    Write-Host '     Enable autonomous correlation + issue creation and Investigation.'
+    Write-Host '  4. Set the SRE memory-incident response plan to Review; approve Azure writes explicitly.'
+    Write-Host '  5. Rehearse automatic issue creation/investigation, then run scripts/trigger-incident-direct.ps1.'
 } else {
     Write-Host '  3. Follow docs/scenario-b-gitops.md and run scripts/trigger-incident-gitops.ps1.'
 }

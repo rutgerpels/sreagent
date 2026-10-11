@@ -246,6 +246,16 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Ensure Scenario A monitoring resource provider is registered
+        if: ${{ inputs.scenario == 'A' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MONITOR_PROVIDER_STATE="$(az provider show --namespace Microsoft.Monitor --query registrationState -o tsv)"
+          if [[ "${MONITOR_PROVIDER_STATE}" != "Registered" ]]; then
+            az provider register --namespace Microsoft.Monitor --wait --output none
+          fi
+
       # The runner VNet is shared, so a foreign deployment may already own the
       # privatelink namespaces. Reuse those zones rather than failing to link.
       - name: Discover shared private DNS zones
@@ -349,6 +359,12 @@ jobs:
             -backend-config="storage_account_name=${{ steps.backend.outputs.state_sa }}" \
             -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
+
+      - name: Validate Scenario A Observability prerequisites and isolation
+        if: ${{ inputs.scenario == 'A' }}
+        working-directory: infra
+        shell: bash
+        run: terraform test -no-color
 
       - name: Apply platform and enforce state profile
         working-directory: infra
@@ -606,9 +622,16 @@ jobs:
             echo "- \`DEPLOYMENT_SCENARIO=${DEPLOYMENT_SCENARIO}\` (set this activation marker last)"
             echo "Keep \`DEPLOYMENT_SCENARIO\` unset until all three values are configured; push-triggered infrastructure and application workflows remain safe no-ops while it is unset."
             if [[ "${DEPLOYMENT_SCENARIO}" == "A" ]]; then
+              OBSERVABILITY_ONBOARDING="$(terraform output -json observability_agent_onboarding)"
+              OBSERVABILITY_WORKSPACE="$(jq -er '.workspace_name' <<< "${OBSERVABILITY_ONBOARDING}")"
+              OBSERVABILITY_LOCATION="$(jq -er '.location' <<< "${OBSERVABILITY_ONBOARDING}")"
               echo ""
               echo "### Manual boundary"
-              echo "Configure the SRE portal for direct/autonomous Azure remediation. Scenario A has no GitOps write connector."
+              echo "Terraform created Observability Agent prerequisites, not the preview agent itself."
+              echo "Create the Observability Agent in \`${OBSERVABILITY_LOCATION}\` using workspace \`${OBSERVABILITY_WORKSPACE}\` and the Terraform-managed identity."
+              echo "Follow docs/scenario-a-direct.md; enable **Allow the agent to run autonomously**, **Correlation + issue creation**, and **Investigation**."
+              echo "Set the SRE memory-incident response plan to **Review** so direct Azure writes require human approval. Scenario A has no GitOps write connector."
+              echo "Rehearse automatic Azure Monitor issue creation and investigation before presenting the paired-agent demo."
             elif [[ "${DEPLOYMENT_SCENARIO}" == "B" ]]; then
               echo ""
               echo "### Manual boundary"

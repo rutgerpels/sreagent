@@ -46,6 +46,30 @@ Resource names and tags include the selected scenario. State is isolated too:
 - the state storage-account name hashes subscription, prefix, and scenario;
 - the blob key is `<prefix>-<scenario>-<environment>.tfstate`.
 
+**Scenario A Observability prerequisites.** Terraform additionally owns an Azure
+Monitor workspace in West Europe, a dedicated user-assigned identity, Issue
+Contributor on that workspace and Monitoring Reader on the subscription.
+`terraform -chdir=infra output -json observability_agent_onboarding` supplies the
+nonsecret portal setup values and exact single-alert promotion instructions.
+The Observability Agent preview resource remains portal-owned because
+Terraform provisioning is not supported. B/C create none of these prerequisites.
+Follow [Scenario A](scenario-a-direct.md#step-12-enable-autonomous-observability-agent-operations)
+to enable autonomous issue creation and Investigation and set the SRE
+memory-incident response plan to **Review**. Delete the portal-owned agent before
+destroying its Terraform-owned identity and issue workspace.
+
+The deploy workflow runs targeted mocked Terraform tests for Scenario A's
+workspace, identity, role scopes and exclusion from B/C. To run them locally
+without provisioning Azure:
+
+```bash
+terraform -chdir=infra init -backend=false -input=false
+terraform -chdir=infra test
+```
+
+These tests validate infrastructure wiring, not live preview availability or
+automatic alert promotion. The Scenario A rehearsal remains required.
+
 ### Never change `scenario` in an existing state
 
 In-place profile conversion is unsupported and is rejected by every deployment
