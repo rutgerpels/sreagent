@@ -9,6 +9,8 @@
  */
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
 import { metrics } from '@opentelemetry/api';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 
 const serviceName = process.env.SERVICE_NAME ?? 'frontend';
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
@@ -21,6 +23,8 @@ if (connectionString) {
   useAzureMonitor({
     azureMonitorExporterOptions: { connectionString },
   });
+  // Node's fetch uses Undici, not the distro's HTTP instrumentation.
+  registerInstrumentations({ instrumentations: [new UndiciInstrumentation()] });
   // eslint-disable-next-line no-console
   console.log(`[telemetry] Azure Monitor enabled for ${serviceName}`);
 } else {
