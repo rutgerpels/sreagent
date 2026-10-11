@@ -1,0 +1,43 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Offline regression checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Check networking fixtures
+        run: terraform fmt -check scripts/tests/fixtures/network
+
+      - name: Verify private DNS dependencies and profile matrix
+        run: python3 scripts/tests/terraform-network-dependencies.test.py
+
+      - name: Check SRE Agent reconciler
+        run: node --test scripts/tests/sre-agent-reconciler.test.mjs
+
+      - name: Check whitespace
+        run: git diff --check HEAD^ HEAD

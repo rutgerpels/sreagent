@@ -5,7 +5,8 @@ B's **OAuth Code Access** path. In the SRE Agent portal open
 **Builder → Agent Canvas → Create subagent**, name it
 `gitops-remediation`, and paste **only the fenced block below** into the
 **Instructions** field. Explicitly select Code Access and Azure read tools. Keep
-terminal and Azure write tools denied. Code Access is the agent's write path —
+the terminal available for Code Access, but direct Azure write tools and
+command patterns denied. Code Access is the agent's write path —
 there is no separate connector and no token.
 
 > The repository owner/name is read live from your GitHub connection — leave the

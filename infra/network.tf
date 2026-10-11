@@ -165,7 +165,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "key_vault_app" {
 
   name                  = "app-vnet-kv-${local.suffix}"
   resource_group_name   = local.key_vault_zone_resource_group
-  private_dns_zone_name = "privatelink.vaultcore.azure.net"
+  private_dns_zone_name = local.key_vault_zone_shared ? "privatelink.vaultcore.azure.net" : azurerm_private_dns_zone.key_vault[0].name
   virtual_network_id    = azurerm_virtual_network.app[0].id
   registration_enabled  = false
   tags                  = local.tags
@@ -222,7 +222,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "acr_app" {
 
   name                  = "app-vnet-acr-${local.suffix}"
   resource_group_name   = local.acr_zone_resource_group
-  private_dns_zone_name = "privatelink.azurecr.io"
+  private_dns_zone_name = local.acr_zone_shared ? "privatelink.azurecr.io" : azurerm_private_dns_zone.acr[0].name
   virtual_network_id    = azurerm_virtual_network.app[0].id
   registration_enabled  = false
   tags                  = local.tags

@@ -1,8 +1,9 @@
 # Scenario B: GitOps remediation by pull request
 
 **The story you tell.** The same memory leak — but this time the agent holds
-**Reader** on Azure and cannot change anything. It investigates, reaches the
-same conclusion, and then does what a good engineer does: it opens a pull
+**Reader on the demo workload**, with a separate subscription-level Monitoring
+Contributor grant. The tool policy denies direct workload changes.
+It investigates, reaches the same conclusion, and then opens a pull
 request containing exactly one line of change. A human reviews and merges it,
 and the existing CI/CD pipeline deploys the fix.
 
@@ -44,7 +45,7 @@ Phases 1–3 are preparation. Only phase 4 happens in front of the audience.
 
 | Requirement | How to check |
 | --- | --- |
-| An Azure subscription where you can create resources **and role assignments** | You need Owner or User Access Administrator on the target scope |
+| An Azure subscription where you can create resources **and role assignments** | Owner, or Contributor plus User Access Administrator, at the required scopes |
 | A GitHub OIDC deployment identity federated to this repository | See [deployment reference](deployment-reference.md#github-actions-oidc) |
 | Permission to create an Azure SRE Agent | The SRE Agent preview must be available in your tenant and region |
 | Permission to set repository Actions variables | Repository admin |
@@ -112,7 +113,7 @@ SRE Agent portal that no workflow ever sees.
 | Scenario | `B` | Selects the Low / Reader / Review profile |
 | Resource name prefix | `contosopay` | Any short lowercase prefix works |
 | Environment label | `demo` | Appears in names and the state key |
-| Azure region | `swedencentral` | Any region where SRE Agent is available |
+| Azure region | `<chosen-supported-region>` | Choose a region currently available to your subscription; see [supported regions](https://learn.microsoft.com/azure/sre-agent/supported-regions) |
 | Open incident PR | `false` | Leave this off; you will arm the incident live in step 13 |
 
 **Expect.** The run takes roughly 15–25 minutes and:
@@ -228,10 +229,12 @@ resource group, and check its settings.
 | Managed resource | Only the Scenario B demo resource group |
 | Incident platform | Azure Monitor |
 
-**Expect.** Reader — not Contributor. The managed service may additionally hold
-monitoring roles for the alert lifecycle; that is expected. Reader RBAC plus the
-tool policy in step 10 form the real enforcement boundary. Review mode alone is
-not an authorisation boundary.
+**Expect.** Reader on the workload, not Contributor. Terraform grants both
+agent identities Monitoring Contributor at subscription scope for the alert
+lifecycle and monitoring settings, so neither is entirely read-only. The
+tool policy in step 10 is required alongside workload Reader RBAC.
+Do not authorize on-behalf-of elevation during this GitOps scenario.
+Review mode alone is not an authorisation boundary.
 
 ### Step 8. Connect Code Access
 
@@ -515,9 +518,12 @@ state for another profile.
 
 Two independent controls, and one absence:
 
-1. **Reader RBAC** — the agent's Azure identity cannot mutate the workload.
-2. **The global tool policy** — write, terminal, shell, and Terraform tools are
-   denied outright.
+1. **Workload Reader RBAC** — the managed identities lack workload Contributor
+   permissions. Subscription-level Monitoring Contributor is a broader
+   monitoring-write exception, not a fully read-only identity.
+2. **The global tool policy** — direct Azure, Kubernetes, and Terraform write
+   tools and command patterns are denied. The terminal remains available for
+   Code Access's GitHub write path.
 3. **No secret exists in this scenario at all** — no token is minted, pasted,
    stored, rotated, or revoked, so none can leak or outlive the demo.
 
@@ -526,8 +532,8 @@ account gives the agent the signed-in user's GitHub reach, which is broader than
 a repository-scoped fine-grained PAT would be. Scenario B trades that narrower
 GitHub scope for the removal of an entire credential lifecycle. The guarantee
 that matters is not the GitHub credential's scope — it is that the agent holds
-Reader on Azure and every write tool is denied, so it cannot touch production no
-matter what its GitHub token could do. State the trade openly; a security
+workload Reader access and a verified policy denying direct workload writes.
+Do not authorize on-behalf-of Azure elevation. State the trade openly; a security
 audience will find it anyway, and it is defensible.
 
 Review mode makes the proposal visible, but it is not an authorisation boundary
