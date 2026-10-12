@@ -3,12 +3,16 @@ import './telemetry';
 
 import express, { Request, Response } from 'express';
 import { startBackgroundLeak, leakStats } from './leak';
+import { parseFailureMode, failureResponseFor } from './failure-mode';
 
 const app = express();
 app.use(express.json());
 
 const SERVICE_NAME = process.env.SERVICE_NAME ?? 'payment-service';
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10);
+// Read once at startup: changing the mode requires a new revision, and an
+// invalid value stops the container instead of silently running healthy.
+const FAILURE_MODE = parseFailureMode(process.env.PAYMENT_FAILURE_MODE);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: SERVICE_NAME });
@@ -20,6 +24,14 @@ app.get('/ready', (_req: Request, res: Response) => {
 });
 
 app.post('/pay', (req: Request, res: Response) => {
+  const failure = failureResponseFor(FAILURE_MODE);
+  if (failure) {
+    // eslint-disable-next-line no-console
+    console.error(`[${SERVICE_NAME}] payment authorization failed: ${failure.body.reason}`);
+    res.status(failure.statusCode).json(failure.body);
+    return;
+  }
+
   const amount = Number(req.body?.amount ?? 0);
   const currency = String(req.body?.currency ?? 'EUR');
 
@@ -40,7 +52,7 @@ const leakTimer = startBackgroundLeak();
 
 const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`[${SERVICE_NAME}] listening on :${PORT} (leak enabled: ${leakStats().enabled})`);
+  console.log(`[${SERVICE_NAME}] listening on :${PORT} (leak enabled: ${leakStats().enabled}, failure mode: ${FAILURE_MODE})`);
 });
 
 const shutdown = (signal: string): void => {

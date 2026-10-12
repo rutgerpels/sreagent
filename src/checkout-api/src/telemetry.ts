@@ -7,11 +7,13 @@
  * Apps injects from Azure Key Vault using the app's managed identity (no secret
  * is ever written to source).
  */
+import { ManagedIdentityCredential } from '@azure/identity';
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
 import { metrics } from '@opentelemetry/api';
 
 const serviceName = process.env.SERVICE_NAME ?? 'checkout-api';
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
+const telemetryIdentityClientId = process.env.TELEMETRY_MANAGED_IDENTITY_CLIENT_ID;
 
 if (connectionString) {
   // Set the cloud role name via the standard OpenTelemetry env var. Passing a
@@ -19,7 +21,14 @@ if (connectionString) {
   // immutable ResourceImpl (attributes is getter-only) and crashes on startup.
   process.env.OTEL_SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? serviceName;
   useAzureMonitor({
-    azureMonitorExporterOptions: { connectionString },
+    azureMonitorExporterOptions: {
+      connectionString,
+      // Opt-in Entra authentication for environments that disable local
+      // (instrumentation-key) ingestion. Unset keeps the default behavior.
+      ...(telemetryIdentityClientId
+        ? { credential: new ManagedIdentityCredential({ clientId: telemetryIdentityClientId }) }
+        : {}),
+    },
   });
   // eslint-disable-next-line no-console
   console.log(`[telemetry] Azure Monitor enabled for ${serviceName}`);
