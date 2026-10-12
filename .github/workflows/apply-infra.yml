@@ -12,7 +12,6 @@ on:
       - "agent/tool-access-policy.api.json"
       - "scripts/lib/sre-agent-reconciler.mjs"
       - "scripts/reconcile-sre-agent.*"
-      - ".github/workflows/apply-infra.yml"
   workflow_dispatch:
     inputs:
       scenario:
@@ -28,6 +27,10 @@ on:
         description: "Environment label"
         required: false
         default: "dev9"
+      abandoned_lock_id:
+        description: "Exact lock ID from a verified terminated rehearsal run; otherwise leave blank"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -250,6 +253,20 @@ jobs:
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match '${DEPLOYMENT_SCENARIO}'."; exit 1; }
           [[ "$(terraform output -raw resource_group_name)" == "rg-contosopay-dev9-c-oesst9" ]] || { echo "::error::The state does not own the verified temporary environment."; exit 1; }
           echo "TF_LOCATION=$(terraform output -raw location)" >> "${GITHUB_ENV}"
+
+      - name: Unlock verified abandoned rehearsal state
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.abandoned_lock_id != '' }}
+        working-directory: infra
+        shell: bash
+        env:
+          ABANDONED_LOCK_ID: ${{ inputs.abandoned_lock_id }}
+        run: |
+          set -euo pipefail
+          readonly LOCK_PATTERN='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          [[ "${ABANDONED_LOCK_ID}" =~ ${LOCK_PATTERN} ]] || { echo "::error::An exact Terraform lock ID is required."; exit 1; }
+          [[ "$(terraform output -raw scenario)" == "C" ]] || { echo "::error::Wrong scenario before unlock."; exit 1; }
+          [[ "$(terraform output -raw resource_group_name)" == "rg-contosopay-dev9-c-oesst9" ]] || { echo "::error::Wrong rehearsal state before unlock."; exit 1; }
+          terraform force-unlock -force "${ABANDONED_LOCK_ID}"
 
       - name: Build and push immutable images
         id: images
