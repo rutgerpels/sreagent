@@ -1,9 +1,9 @@
 name: apply-infra
 
-# Applies GitOps infrastructure changes to the explicitly selected scenario.
+# Temporary rehearsal only. Never merge this workflow into main.
 on:
   push:
-    branches: [main]
+    branches: [rehearsal/observability-c-dev9]
     paths:
       - "infra/leak.auto.tfvars"
       - "infra/**.tf"
@@ -19,7 +19,7 @@ on:
         description: "Deployment scenario"
         type: choice
         required: true
-        options: [A, B, C]
+        options: [C]
       prefix:
         description: "Resource name prefix"
         required: false
@@ -27,13 +27,13 @@ on:
       environment:
         description: "Environment label"
         required: false
-        default: "demo"
+        default: "dev9"
 
 permissions:
   contents: read
 
 concurrency:
-  group: deployment-${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO || 'unconfigured' }}-${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'contosopay' }}-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+  group: deployment-C-contosopay-dev9
   cancel-in-progress: false
 
 jobs:
@@ -51,6 +51,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
           DISPATCH_SCENARIO: ${{ inputs.scenario }}
           DISPATCH_PREFIX: ${{ inputs.prefix }}
           DISPATCH_ENVIRONMENT: ${{ inputs.environment }}
@@ -59,71 +60,29 @@ jobs:
           REPOSITORY_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT }}
         run: |
           set -euo pipefail
-          readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
-          readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
-          readonly SCENARIO_PATTERN='^(A|B|C)$'
-          SELECTED_SCENARIO=""
-          SELECTED_PREFIX=""
-          SELECTED_ENVIRONMENT=""
-          {
-            echo "proceed=false"
-            echo "scenario="
-            echo "prefix="
-            echo "environment="
-          } >> "${GITHUB_OUTPUT}"
-
-          case "${EVENT_NAME}" in
-            push)
-              if [[ -z "${REPOSITORY_SCENARIO}" ]]; then
-                echo "::notice title=Deployment profile not configured::Repository variable DEPLOYMENT_SCENARIO is unset; skipping push-triggered infrastructure deployment."
-                {
-                  echo "## Deployment skipped"
-                  echo ""
-                  echo 'Repository variable `DEPLOYMENT_SCENARIO` is unset, so push-triggered `apply-infra` deployment is a successful no-op.'
-                  echo 'Complete the manual `deploy` workflow, then configure its three profile variables. No Azure OIDC token or deployment runner was requested.'
-                } >> "${GITHUB_STEP_SUMMARY}"
-                exit 0
-              fi
-              SELECTED_SCENARIO="${REPOSITORY_SCENARIO}"
-              SELECTED_PREFIX="${REPOSITORY_PREFIX}"
-              SELECTED_ENVIRONMENT="${REPOSITORY_ENVIRONMENT}"
-              [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Nonempty repository variable DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
-              [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
-              [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
-              ;;
-            workflow_dispatch)
-              SELECTED_SCENARIO="${DISPATCH_SCENARIO}"
-              SELECTED_PREFIX="${DISPATCH_PREFIX}"
-              SELECTED_ENVIRONMENT="${DISPATCH_ENVIRONMENT}"
-              [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::The explicit scenario input must be exactly A, B, or C."; exit 1; }
-              if [[ -n "${REPOSITORY_SCENARIO}" ]]; then
-                [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Nonempty repository variable DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
-                [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
-                [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
-                [[ "${SELECTED_SCENARIO}" == "${REPOSITORY_SCENARIO}" ]] || { echo "::error::The explicit scenario does not match the active repository profile; destroy the active profile first. In-place conversion is forbidden."; exit 1; }
-                [[ "${SELECTED_PREFIX}" == "${REPOSITORY_PREFIX}" && "${SELECTED_ENVIRONMENT}" == "${REPOSITORY_ENVIRONMENT}" ]] || { echo "::error::The explicit prefix/environment does not match the active repository profile; destroy the active profile first."; exit 1; }
-              fi
-              ;;
-            *)
-              echo "::error::Unsupported workflow event."
-              exit 1
-              ;;
-          esac
-
-          [[ "${SELECTED_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::DEPLOYMENT_SCENARIO must be exactly A, B, or C."; exit 1; }
-          [[ "${SELECTED_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::The selected prefix is invalid."; exit 1; }
-          [[ "${SELECTED_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::The selected environment is invalid."; exit 1; }
+          [[ "${EVENT_REF}" == "refs/heads/rehearsal/observability-c-dev9" ]] || { echo "::error::This rehearsal workflow refuses every other branch."; exit 1; }
+          if [[ "${REPOSITORY_PREFIX}" == "contosopay" && "${REPOSITORY_ENVIRONMENT}" == "dev9" ]]; then
+            echo "::error::The rehearsal cannot target the active deployment."
+            exit 1
+          fi
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${DISPATCH_SCENARIO}" == "C" && "${DISPATCH_PREFIX}" == "contosopay" && "${DISPATCH_ENVIRONMENT}" == "dev9" ]] || { echo "::error::Only the retained C/contosopay/dev9 rehearsal is permitted."; exit 1; }
+          elif [[ "${EVENT_NAME}" != "push" ]]; then
+            echo "::error::Unsupported rehearsal event."
+            exit 1
+          fi
           {
             echo "proceed=true"
-            echo "scenario=${SELECTED_SCENARIO}"
-            echo "prefix=${SELECTED_PREFIX}"
-            echo "environment=${SELECTED_ENVIRONMENT}"
+            echo "scenario=C"
+            echo "prefix=contosopay"
+            echo "environment=dev9"
           } >> "${GITHUB_OUTPUT}"
 
   terraform-apply:
     needs: select-profile
     if: ${{ needs.select-profile.outputs.proceed == 'true' }}
     runs-on: ${{ needs.select-profile.outputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    environment: dev-test
     timeout-minutes: 60
     permissions:
       contents: read
@@ -167,10 +126,10 @@ jobs:
           RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
           RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
           RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-          APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
-          APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
-          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
-          SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
+          APP_VNET_ADDRESS_SPACE: ${{ vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16' }}
+          APP_PE_SUBNET_PREFIX: ${{ vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27' }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27' }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27' }}
         run: |
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
@@ -249,18 +208,8 @@ jobs:
         run: |
           set -euo pipefail
           not_deployed() {
-            if [[ "${EVENT_NAME}" != "push" ]]; then
-              echo "::error::$1"
-              exit 1
-            fi
-            echo "::notice title=Environment not deployed::$1"
-            {
-              echo "## Deployment skipped"
-              echo ""
-              echo "$1"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "skip=true" >> "${GITHUB_OUTPUT}"
-            exit 0
+            echo "::error::$1"
+            exit 1
           }
           STATE_HASH="$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${TF_PREFIX}" "${DEPLOYMENT_SCENARIO}" | sha256sum | cut -c1-16)"
           STATE_RG="rg-${TF_PREFIX}-tfstate"
@@ -287,18 +236,8 @@ jobs:
         run: |
           set -euo pipefail
           not_deployed() {
-            if [[ "${EVENT_NAME}" != "push" ]]; then
-              echo "::error::$1"
-              exit 1
-            fi
-            echo "::notice title=Environment not deployed::$1"
-            {
-              echo "## Deployment skipped"
-              echo ""
-              echo "$1"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "skip=true" >> "${GITHUB_OUTPUT}"
-            exit 0
+            echo "::error::$1"
+            exit 1
           }
           terraform init -input=false \
             -backend-config="resource_group_name=${{ steps.backend.outputs.state_rg }}" \
@@ -309,6 +248,7 @@ jobs:
             || not_deployed "State for Scenario ${DEPLOYMENT_SCENARIO} has no deployed environment. Run deploy first."
           ACTUAL_SCENARIO="$(terraform output -raw scenario 2>/dev/null)" || { echo "::error::State has no scenario output; in-place conversion is unsupported."; exit 1; }
           [[ "${ACTUAL_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::State scenario '${ACTUAL_SCENARIO}' does not match '${DEPLOYMENT_SCENARIO}'."; exit 1; }
+          [[ "$(terraform output -raw resource_group_name)" == "rg-contosopay-dev9-c-oesst9" ]] || { echo "::error::The state does not own the verified temporary environment."; exit 1; }
           echo "TF_LOCATION=$(terraform output -raw location)" >> "${GITHUB_ENV}"
 
       - name: Build and push immutable images
@@ -336,10 +276,46 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch before apply."; exit 1; }
-          terraform apply -input=false -auto-approve \
+          PLAN_FILE="${RUNNER_TEMP}/contosopay-dev9-rehearsal.tfplan"
+          PLAN_JSON="${RUNNER_TEMP}/contosopay-dev9-rehearsal-plan.json"
+          trap 'rm -f -- "${PLAN_FILE}" "${PLAN_JSON}"' EXIT
+          terraform plan -input=false -out="${PLAN_FILE}" \
             -var 'deploy_apps=true' -var "image_tag=${IMAGE_TAG}" \
             -var "scenario=${DEPLOYMENT_SCENARIO}" -var "prefix=${TF_PREFIX}" \
             -var "environment=${TF_ENVIRONMENT}" -var "location=${TF_LOCATION}"
+          terraform show -json "${PLAN_FILE}" > "${PLAN_JSON}"
+          node - "${PLAN_JSON}" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!process.env.ARM_SUBSCRIPTION_ID) throw new Error('Deployment subscription is missing.');
+          const allowed = new Set(['frontend', 'checkout-api', 'payment-service'].map(name => `azurerm_container_app.app["${name}"]`));
+          const expectedNames = {
+            'azurerm_container_app.app["frontend"]': 'ca-frontend-c-oesst9',
+            'azurerm_container_app.app["checkout-api"]': 'ca-checkout-c-oesst9',
+            'azurerm_container_app.app["payment-service"]': 'ca-payment-c-oesst9',
+          };
+          for (const resource of plan.resource_changes ?? []) {
+            const actions = resource.change.actions;
+            if (actions.length === 1 && ['no-op', 'read'].includes(actions[0])) continue;
+            if (!allowed.has(resource.address) || actions.length !== 1 || actions[0] !== 'update') {
+              throw new Error(`Rehearsal refuses ${resource.address}: ${actions.join(',')}`);
+            }
+            const before = resource.change.before;
+            const after = resource.change.after;
+            const expectedId = `/subscriptions/${process.env.ARM_SUBSCRIPTION_ID}/resourceGroups/rg-contosopay-dev9-c-oesst9/providers/Microsoft.App/containerApps/${expectedNames[resource.address]}`;
+            if (before.id?.toLowerCase() !== expectedId.toLowerCase() ||
+                after.id?.toLowerCase() !== expectedId.toLowerCase() ||
+                before.container_app_environment_id !== after.container_app_environment_id ||
+                before.resource_group_name !== 'rg-contosopay-dev9-c-oesst9' ||
+                after.resource_group_name !== before.resource_group_name ||
+                JSON.stringify(before.ingress) !== JSON.stringify(after.ingress) ||
+                JSON.stringify(before.identity) !== JSON.stringify(after.identity)) {
+              throw new Error(`Rehearsal refuses networking, identity or scope drift: ${resource.address}`);
+            }
+          }
+          console.log('Verified application-only update against the retained rehearsal state.');
+          NODE
+          terraform apply -input=false "${PLAN_FILE}"
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch after apply."; exit 1; }
 
       - name: Refresh Azure login for SRE Agent reconciliation
