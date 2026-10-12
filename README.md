@@ -9,6 +9,16 @@ gets deployed, what you need, what it costs, and how to choose a scenario. Then
 pick one walkthrough and follow it start to finish. You will not need any other
 document to run the demo.
 
+For the research and proposed shorter paired-agent demos, see the
+[Observability Agent and SRE Agent proposal](docs/agent-demo-proposal.md).
+It distinguishes current capabilities from proposed scenarios and timing targets;
+it is not a replacement for the runnable walkthroughs below.
+
+The selected follow-up is documented in the
+[Scenario D private payment-failure plan](docs/scenario-d-private-payments-plan.md):
+a separate deployment with both agents, policy-aware RBAC and its own private
+PaaS networking. **Plan only; not a runnable fourth scenario yet.**
+
 ---
 
 ## What the Azure SRE Agent is
