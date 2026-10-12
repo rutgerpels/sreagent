@@ -29,6 +29,14 @@ artifacts are applied and verified by `scripts/reconcile-sre-agent.*` (see
 | [`gitops-remediation-agent.md`](gitops-remediation-agent.md) | **Legacy Scenario C portal prompt.** Retained for compatibility and points to the reconciled instructions. | Do not use for new deployments. |
 | [`knowledge/gitops-runbook.md`](knowledge/gitops-runbook.md) | **Reference context.** A runbook the agent reads during investigations so it knows the exact GitOps fix for the planted leak. | Attach as knowledge/skill context to the `gitops-remediation` custom agent. |
 
+## Scenario D (portal-configured, no GitOps)
+
+Scenario D uses none of the GitOps artifacts above. Its SRE Agent runs in Review
+mode with no GitHub write path and is configured in the portal from
+[`scenario-d/`](scenario-d/): SRE instructions, Observability custom
+instructions, and the operator handoff prompt. The reconciler does not manage D.
+See [`../docs/scenario-d-private-payments.md`](../docs/scenario-d-private-payments.md).
+
 ## Why both a policy *and* a prompt?
 
 - The **system prompt** makes the agent *want* to open a PR — but an LLM
