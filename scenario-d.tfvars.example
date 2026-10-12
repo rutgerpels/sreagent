@@ -17,9 +17,11 @@ scenario = "D"
 # later terraform apply would re-arm the fault.
 payment_failure_mode = "off"
 
-# Short alert window keeps trigger-to-alert inside the demo budget. Use 5 if
-# the 1-minute window proves noisy during rehearsal.
-payment_alert_window_minutes = 1
+# Alert evaluation. Azure Monitor rejects 1-minute rules until the queried
+# table already holds data, so the first deploy uses 5. After traffic has
+# flowed, set frequency to 1 and re-apply to tighten trigger-to-alert latency.
+payment_alert_window_minutes    = 1
+payment_alert_frequency_minutes = 5
 
 # Existing private runner network dedicated to Scenario D. A VNet can link to
 # only one private DNS zone per namespace, so do not reuse Scenario C's runner

@@ -53,7 +53,9 @@ resource "azurerm_monitor_metric_alert" "payment_memory" {
 # short and static so the alert fires within minutes of the fault starting.
 locals {
   payment_alert_enabled = var.scenario == "D" && var.deploy_apps
-  payment_alert_window  = "PT${var.payment_alert_window_minutes}M"
+  payment_alert_freq    = "PT${var.payment_alert_frequency_minutes}M"
+  # The window must cover the evaluation interval or failures fall between runs.
+  payment_alert_window = "PT${max(var.payment_alert_window_minutes, var.payment_alert_frequency_minutes)}M"
 }
 
 # The only alert the SRE Agent response plan targets.
@@ -66,7 +68,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "payment_failures" {
   description             = "payment-service /pay requests are failing (payment processor unavailable)."
   severity                = 2
   enabled                 = true
-  evaluation_frequency    = "PT1M"
+  evaluation_frequency    = local.payment_alert_freq
   window_duration         = local.payment_alert_window
   scopes                  = [azurerm_application_insights.this.id]
   auto_mitigation_enabled = true
@@ -100,7 +102,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "checkout_failures" {
   description             = "checkout-api order requests are failing."
   severity                = 2
   enabled                 = true
-  evaluation_frequency    = "PT1M"
+  evaluation_frequency    = local.payment_alert_freq
   window_duration         = local.payment_alert_window
   scopes                  = [azurerm_application_insights.this.id]
   auto_mitigation_enabled = true

@@ -64,6 +64,17 @@ variable "payment_alert_window_minutes" {
   }
 }
 
+variable "payment_alert_frequency_minutes" {
+  description = "Scenario D: how often the failure alerts are evaluated. Azure Monitor rejects 1-minute rules until the queried table already holds data, so the first deploy needs 5; switch to 1 on a re-apply once traffic exists."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = contains([1, 5], var.payment_alert_frequency_minutes)
+    error_message = "payment_alert_frequency_minutes must be 1 or 5."
+  }
+}
+
 variable "runner_vnet_resource_group" {
   description = "Resource group containing the self-hosted runner VNet."
   type        = string
