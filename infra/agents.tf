@@ -1,10 +1,11 @@
 ###############################################################################
 # Optional Azure SRE Agent (Microsoft.App/agents): exactly one selected profile.
-# A is High/Contributor/Autonomous; B and C are Low/Reader/Review. Scenario B's
+# A is High/Contributor/Autonomous; B, C and D are Low/Reader/Review. Scenario B's
 # built-in GitHub MCP connector and short-lived fine-grained PAT are configured
 # manually. Scenario C automates Code Access when explicitly enabled, which is
 # how its agent authors remediation pull requests while holding only Reader on
-# Azure.
+# Azure. Scenario D has no GitHub write path; its agent is configured in the
+# portal from agent/scenario-d and recovers through an approved direct change.
 ###############################################################################
 
 locals {

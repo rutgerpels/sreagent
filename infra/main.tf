@@ -52,7 +52,24 @@ locals {
         mode   = "Review"
       }
     }
+    # D is a separate private deployment for the paired Observability Agent +
+    # SRE Agent payment-outage demo. Recovery is a direct, human-approved
+    # change to the live app; there is no GitHub write path.
+    D = {
+      private_network_enabled = true
+      control_endpoint_access = "Private ACR/Key Vault; public frontend only"
+      github_integration      = "No GitHub write path; direct approved recovery"
+      agent_key               = "d-private-payments"
+      agent = {
+        access = "Low"
+        role   = "Reader"
+        mode   = "Review"
+      }
+    }
   }
+
+  # Scenarios that provision the portal-onboarded Observability Agent prerequisites.
+  observability_agent_enabled = contains(["A", "D"], var.scenario)
 
   profile = local.scenario_profiles[var.scenario]
   suffix  = "${lower(var.scenario)}-${random_string.suffix.result}"

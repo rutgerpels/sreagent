@@ -27,13 +27,40 @@ variable "location" {
 }
 
 variable "scenario" {
-  description = "Deployment security profile: A (autonomous/public), B (review/public GitHub MCP), or C (review/private code-first GitOps)."
+  description = "Deployment security profile: A (autonomous/public), B (review/public GitHub MCP), C (review/private code-first GitOps), or D (review/private paired-agent payment outage)."
   type        = string
   default     = "A"
 
   validation {
-    condition     = contains(["A", "B", "C"], var.scenario)
-    error_message = "scenario must be exactly one of A, B, or C."
+    condition     = contains(["A", "B", "C", "D"], var.scenario)
+    error_message = "scenario must be exactly one of A, B, C, or D."
+  }
+}
+
+variable "payment_failure_mode" {
+  description = "Scenario D payment failure mode managed by Terraform. Keep 'off': the incident is triggered as a live deviation by scripts/trigger-incident-payments.* and any later apply restores the healthy state."
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "unavailable"], var.payment_failure_mode)
+    error_message = "payment_failure_mode must be 'off' or 'unavailable'."
+  }
+
+  validation {
+    condition     = var.payment_failure_mode == "off" || var.scenario == "D"
+    error_message = "payment_failure_mode other than 'off' is supported only for scenario D."
+  }
+}
+
+variable "payment_alert_window_minutes" {
+  description = "Scenario D: evaluation window in minutes for the payment and checkout failure alerts. Short so the incident fires within the demo budget."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([1, 5], var.payment_alert_window_minutes)
+    error_message = "payment_alert_window_minutes must be 1 or 5."
   }
 }
 
