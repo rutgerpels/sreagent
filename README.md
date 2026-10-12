@@ -228,8 +228,9 @@ human approves. D runs alongside A/B/C without touching them, and its
 
 ### Side by side
 
-Scenario D is described in its [walkthrough](docs/scenario-d-private-payments.md);
-the table compares A, B and C.
+Scenario D is described in its [walkthrough](docs/scenario-d-private-payments.md).
+For comparison with A, it is High / Contributor / Review (direct fix after
+approval, no GitOps), reconciled like C. The table compares A, B and C.
 
 | | Scenario A | Scenario B | Scenario C |
 | --- | --- | --- | --- |

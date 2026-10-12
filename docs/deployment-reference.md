@@ -100,6 +100,7 @@ profile**. It is not a set of independent toggles.
 | **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
 | **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Code Access, signed in with a user account (OAuth); no connector and no token |
 | **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
+| **D** | High access, Contributor, Review; Terraform plus API reconciliation | Private ACR and Key Vault endpoints in its own VNet; private self-hosted runner | None (no GitOps); direct change after human approval |
 
 Reader describes workload access, not the identities' entire permission set.
 Both agent identities also hold subscription-level Monitoring Contributor for

@@ -64,10 +64,14 @@ the frontend. Health and readiness probes stay green, so the app is still
    `checkout_failure_alert_name`, `observability_agent_onboarding`.
 3. **Onboard the Observability Agent** in the portal using the output values and
    [`agent/scenario-d/observability-agent.instructions.md`](../agent/scenario-d/observability-agent.instructions.md).
-4. **Create the SRE Agent configuration** in the portal: Review mode on every
-   response plan and the fallback, target only the D payment-failure alert, paste
-   [`agent/scenario-d/sre-agent.instructions.md`](../agent/scenario-d/sre-agent.instructions.md).
-   No GitHub connector. The reconciler does not manage D.
+4. **SRE Agent configuration is automatic.** The Deploy workflow reconciles
+   [`agent/scenario-d/`](../agent/scenario-d/) through the data plane (as Scenario C
+   does): the payment-recovery subagent with the SRE instructions, the
+   `contosopay-payment-failures` response plan (Review mode, D payment alert only),
+   the daily health task, and the D tool policy. No portal steps and no GitHub
+   connector. The agent is High / Contributor / Review: it may change the app
+   directly (Scenario A's model, no GitOps), but `az containerapp update` waits for
+   human approval.
 5. Confirm alert isolation both ways: A/B/C agents must not respond to D, and the
    D agent must not respond to A/B/C.
 

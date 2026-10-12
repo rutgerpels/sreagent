@@ -54,15 +54,17 @@ locals {
     }
     # D is a separate private deployment for the paired Observability Agent +
     # SRE Agent payment-outage demo. Recovery is a direct, human-approved
-    # change to the live app; there is no GitHub write path.
+    # change to the live app; there is no GitHub write path. Like A it holds
+    # resource-group Contributor so the approved `az containerapp update` can run,
+    # but it stays in Review mode so every write waits for a human.
     D = {
       private_network_enabled = true
       control_endpoint_access = "Private ACR/Key Vault; public frontend only"
       github_integration      = "No GitHub write path; direct approved recovery"
       agent_key               = "d-private-payments"
       agent = {
-        access = "Low"
-        role   = "Reader"
+        access = "High"
+        role   = "Contributor"
         mode   = "Review"
       }
     }

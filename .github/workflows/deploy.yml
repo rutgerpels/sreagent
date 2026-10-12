@@ -521,7 +521,7 @@ jobs:
           [[ "$(terraform output -raw scenario)" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Applied state scenario mismatch."; exit 1; }
 
       - name: Refresh Azure login for SRE Agent reconciliation
-        if: ${{ inputs.scenario == 'C' }}
+        if: ${{ inputs.scenario == 'C' || inputs.scenario == 'D' }}
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -582,8 +582,8 @@ jobs:
             --pem-file "${PEM_FILE}" \
             -o none
 
-      - name: Reconcile and verify Scenario C SRE Agent
-        if: ${{ inputs.scenario == 'C' }}
+      - name: Reconcile and verify Scenario C/D SRE Agent
+        if: ${{ inputs.scenario == 'C' || inputs.scenario == 'D' }}
         shell: bash
         env:
           SRE_CODE_ACCESS_ENABLED: ${{ vars.SRE_CODE_ACCESS_ENABLED || 'false' }}
@@ -602,14 +602,18 @@ jobs:
            # A key URI, not a secret URI — the service rejects secret URIs.
            export SRE_CODE_ACCESS_PRIVATE_KEY_URI="https://${KEY_VAULT_NAME}.vault.azure.net/keys/${SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_NAME}"
           fi
+          AGENT_CONFIG="agent/scenario-c"
+          [[ "${DEPLOYMENT_SCENARIO}" != "D" ]] || AGENT_CONFIG="agent/scenario-d"
           node --test scripts/tests/sre-agent-reconciler.test.mjs
           bash scripts/reconcile-sre-agent.sh \
            --mode apply \
+           --config "${AGENT_CONFIG}" \
            --subscription "${ARM_SUBSCRIPTION_ID}" \
            --resource-group "${RESOURCE_GROUP}" \
            --agent "${AGENT_NAME}"
           bash scripts/reconcile-sre-agent.sh \
            --mode verify \
+           --config "${AGENT_CONFIG}" \
            --subscription "${ARM_SUBSCRIPTION_ID}" \
            --resource-group "${RESOURCE_GROUP}" \
            --agent "${AGENT_NAME}"
@@ -649,7 +653,7 @@ jobs:
               echo "Scenario D is manual-only: do **not** set the push-activation variables for it. It is deployed healthy (\`PAYMENT_FAILURE_MODE=off\`)."
               echo "1. **Gate 0:** confirm in the portal that inherited Azure Policy does not block this deployment. Never add exemptions or re-enable key auth."
               echo "2. Create the Observability Agent in \`${OBSERVABILITY_LOCATION}\` using workspace \`${OBSERVABILITY_WORKSPACE}\` and the Terraform-managed identity (portal only)."
-              echo "3. In the SRE Agent, scope the response plan to the D payment-failure alert only and set it to **Review**. Use the files in \`agent/scenario-d/\`."
+              echo "3. This run reconciled the SRE Agent from \`agent/scenario-d/\` (no portal step): the \`payment-recovery\` agent, a Sev2 payment-failure response plan in **Review** mode, and a tool policy that routes Azure writes through approval."
               echo "4. Start bounded traffic with \`scripts/generate-checkout-traffic.sh\`, then arm the incident with \`scripts/trigger-incident-payments.sh\`."
               echo "Follow docs/scenario-d-private-payments.md. Rehearse three consecutive runs before presenting."
             elif [[ "${DEPLOYMENT_SCENARIO}" == "A" ]]; then

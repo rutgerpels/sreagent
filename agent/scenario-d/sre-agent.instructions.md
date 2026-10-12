@@ -1,7 +1,7 @@
 # Scenario D — SRE Agent instructions
 
-Paste this into the SRE Agent custom-agent **Instructions** field in the portal.
-The agent runs in **Review mode**: every write waits for human approval.
+The reconciler uploads this file as the custom agent's instructions.
+The agent runs in **Review mode**: every Azure write waits for human approval.
 
 ## Role
 

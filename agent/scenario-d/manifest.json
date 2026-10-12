@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "managedTag": "contosopay-scenario-d",
+  "expectedAgent": {
+    "accessLevel": "High",
+    "actionMode": "Review",
+    "incidentPlatform": "AzMonitor",
+    "requireVnet": true,
+    "connectors": [
+      "app-insights",
+      "azure-monitor",
+      "log-analytics"
+    ]
+  },
+  "toolPermissionsFile": "tool-access-policy.api.json",
+  "subagents": [
+    {
+      "name": "payment-recovery",
+      "instructionsFile": "sre-agent.instructions.md",
+      "properties": {
+        "handoffDescription": "Investigates ContosoPay payment failures, validates operator-supplied evidence, and proposes one minimal Container App change that runs only after human approval.",
+        "handoffs": [],
+        "tools": [
+          "QueryAppInsightsUsingAppId",
+          "RunAzCliReadCommands",
+          "RunAzCliWriteCommands",
+          "SearchMemory"
+        ],
+        "temperature": 0.2,
+        "enableSkills": false,
+        "allowedSkills": []
+      }
+    }
+  ],
+  "incidentFilters": [
+    {
+      "name": "contosopay-payment-failures",
+      "properties": {
+        "incidentPlatform": "AzMonitor",
+        "isEnabled": true,
+        "priorities": [
+          "Sev2"
+        ],
+        "handlingAgent": "payment-recovery",
+        "agentMode": "Review",
+        "maxAutomatedInvestigationAttempts": 3
+      }
+    }
+  ],
+  "scheduledTasks": [
+    {
+      "name": "daily-contosopay-payment-health",
+      "properties": {
+        "description": "Daily payment-path health summary for the Scenario D resource group",
+        "cronExpression": "0 8 * * *",
+        "agentPrompt": "Summarize the last 24 hours of Azure Monitor incidents, fired alerts, Container Apps health, and failed /pay and /checkout requests for the managed ContosoPay Scenario D resource group. Flag anything requiring human attention. Use read-only tools only.",
+        "agentMode": "Review"
+      }
+    }
+  ]
+}

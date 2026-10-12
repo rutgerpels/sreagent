@@ -35,6 +35,12 @@ class ScenarioDWorkflowTests(unittest.TestCase):
     def test_deploy_starts_fault_disarmed(self):
         self.assertRegex(read("deploy.yml"), r"TF_VAR_payment_failure_mode=off")
 
+    def test_deploy_reconciles_d_agent_with_scenario_d_config(self):
+        text = read("deploy.yml")
+        self.assertIn("agent/scenario-d", text)
+        self.assertIn("agent/scenario-c", text)
+        self.assertGreaterEqual(text.count("inputs.scenario == 'C' || inputs.scenario == 'D'"), 3)
+
     def test_d_destroy_rejects_ephemeral_mode(self):
         self.assertRegex(read("destroy.yml"), r"(?is)D.{0,200}ephemeral|ephemeral.{0,200}D")
 

@@ -28,8 +28,8 @@ export function parseExplicitBoolean(value, name) {
   throw new Error(`${name} must be explicitly set to true or false.`);
 }
 
-export function buildExtendedBody(name, type, properties) {
-  return { name, type, tags: [MANAGED_TAG], properties };
+export function buildExtendedBody(name, type, properties, tag = MANAGED_TAG) {
+  return { name, type, tags: [tag], properties };
 }
 
 export function stableJson(value) {
@@ -63,8 +63,8 @@ export function desiredSubsetMatches(actual, desired) {
   return actual === desired;
 }
 
-export function extendedResourceMatches(kind, actual, item) {
-  const expected = buildExtendedBody(item.name, item.type, item.properties);
+export function extendedResourceMatches(kind, actual, item, tag = MANAGED_TAG) {
+  const expected = buildExtendedBody(item.name, item.type, item.properties, tag);
   if (kind !== "agents") {
     // Incident filters and scheduled tasks currently discard envelope tags.
     delete expected.tags;
@@ -99,7 +99,7 @@ export function loadDesiredState(configDirectory, environment = process.env) {
   const manifest = readJson(resolve(directory, "manifest.json"));
   if (manifest.schemaVersion !== 1) {
     throw new Error(
-      `Unsupported Scenario C manifest schema: ${manifest.schemaVersion}`,
+      `Unsupported SRE Agent manifest schema: ${manifest.schemaVersion}`,
     );
   }
 
@@ -123,52 +123,56 @@ export function loadDesiredState(configDirectory, environment = process.env) {
     },
   }));
 
-  const knowledge = manifest.knowledge.map((item) => ({
+  const knowledge = (manifest.knowledge ?? []).map((item) => ({
     ...item,
     content: readFileSync(resolve(directory, item.path)),
   }));
 
-  const codeAccessEnabled = parseExplicitBoolean(
-    environment.SRE_CODE_ACCESS_ENABLED,
-    "SRE_CODE_ACCESS_ENABLED",
-  );
-  let codeAccess = {
-    enabled: false,
-    domain: manifest.codeAccess.domain,
-    repositoryName: manifest.codeAccess.repositoryName,
-  };
-  if (codeAccessEnabled) {
-    const required = {
-      clientId: environment.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID,
-      // The service rejects Key Vault secret URIs and requires a key URI
-      // (.../keys/<name>). The wire field below keeps its legacy name.
-      privateKeySecretUri: environment.SRE_CODE_ACCESS_PRIVATE_KEY_URI,
-      keyVaultManagedIdentityId:
-        environment.SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID,
-      repositoryUrl: environment.SRE_CODE_ACCESS_REPOSITORY_URL,
-    };
-    const missing = Object.entries(required)
-      .filter(([, value]) => !value)
-      .map(([key]) => key);
-    if (missing.length > 0) {
-      throw new Error(
-        `Code Access is enabled but missing: ${missing.join(", ")}.`,
-      );
-    }
+  let codeAccess = { enabled: false, absent: true };
+  if (manifest.codeAccess) {
+    const codeAccessEnabled = parseExplicitBoolean(
+      environment.SRE_CODE_ACCESS_ENABLED,
+      "SRE_CODE_ACCESS_ENABLED",
+    );
     codeAccess = {
-      enabled: true,
+      enabled: false,
       domain: manifest.codeAccess.domain,
       repositoryName: manifest.codeAccess.repositoryName,
-      ...required,
     };
+    if (codeAccessEnabled) {
+      const required = {
+        clientId: environment.SRE_CODE_ACCESS_GITHUB_APP_CLIENT_ID,
+        // The service rejects Key Vault secret URIs and requires a key URI
+        // (.../keys/<name>). The wire field below keeps its legacy name.
+        privateKeySecretUri: environment.SRE_CODE_ACCESS_PRIVATE_KEY_URI,
+        keyVaultManagedIdentityId:
+          environment.SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID,
+        repositoryUrl: environment.SRE_CODE_ACCESS_REPOSITORY_URL,
+      };
+      const missing = Object.entries(required)
+        .filter(([, value]) => !value)
+        .map(([key]) => key);
+      if (missing.length > 0) {
+        throw new Error(
+          `Code Access is enabled but missing: ${missing.join(", ")}.`,
+        );
+      }
+      codeAccess = {
+        enabled: true,
+        domain: manifest.codeAccess.domain,
+        repositoryName: manifest.codeAccess.repositoryName,
+        ...required,
+      };
+    }
   }
 
   return {
+    managedTag: manifest.managedTag ?? MANAGED_TAG,
     expectedAgent: manifest.expectedAgent,
     permissions: permissions.permissions,
     subagents,
-    incidentFilters: manifest.incidentFilters,
-    scheduledTasks: manifest.scheduledTasks,
+    incidentFilters: manifest.incidentFilters ?? [],
+    scheduledTasks: manifest.scheduledTasks ?? [],
     knowledge,
     codeAccess,
   };
@@ -303,13 +307,21 @@ function assertAgent(agent, expected) {
   }
 }
 
-async function putExtended(endpoint, token, kind, name, type, properties) {
+async function putExtended(
+  endpoint,
+  token,
+  kind,
+  name,
+  type,
+  properties,
+  tag,
+) {
   await request(
     `${endpoint}/api/v2/extendedAgent/${kind}/${encodeURIComponent(name)}`,
     token,
     {
       method: "PUT",
-      body: buildExtendedBody(name, type, properties),
+      body: buildExtendedBody(name, type, properties, tag),
     },
   );
 }
@@ -319,13 +331,13 @@ function collectionItems(payload) {
   return payload.value ?? payload.items ?? payload.resources ?? [];
 }
 
-async function reconcileExtended(endpoint, token, kind, type, items) {
+async function reconcileExtended(endpoint, token, kind, type, items, tag) {
   const collectionUrl = `${endpoint}/api/v2/extendedAgent/${kind}`;
   const currentResponse = await request(collectionUrl, token);
   const currentItems = collectionItems(await currentResponse.json());
   const desiredNames = new Set(items.map((item) => item.name));
   for (const item of currentItems) {
-    if (item.tags?.includes(MANAGED_TAG) && !desiredNames.has(item.name)) {
+    if (item.tags?.includes(tag) && !desiredNames.has(item.name)) {
       await request(
         `${collectionUrl}/${encodeURIComponent(item.name)}`,
         token,
@@ -337,7 +349,15 @@ async function reconcileExtended(endpoint, token, kind, type, items) {
     }
   }
   for (const item of items) {
-    await putExtended(endpoint, token, kind, item.name, type, item.properties);
+    await putExtended(
+      endpoint,
+      token,
+      kind,
+      item.name,
+      type,
+      item.properties,
+      tag,
+    );
   }
 }
 
@@ -448,13 +468,13 @@ async function configureCodeAccess(endpoint, token, codeAccess) {
   );
 }
 
-async function verifyExtended(endpoint, token, kind, item) {
+async function verifyExtended(endpoint, token, kind, item, tag) {
   const response = await request(
     `${endpoint}/api/v2/extendedAgent/${kind}/${encodeURIComponent(item.name)}`,
     token,
   );
   const actual = await response.json();
-  if (!extendedResourceMatches(kind, actual, item)) {
+  if (!extendedResourceMatches(kind, actual, item, tag)) {
     throw new Error(
       `${kind}/${item.name} differs from declared desired state.`,
     );
@@ -599,6 +619,7 @@ export async function reconcileAgent(options, desired) {
       "agents",
       "ExtendedAgent",
       desired.subagents,
+      desired.managedTag,
     );
     await reconcileExtended(
       endpoint,
@@ -606,6 +627,7 @@ export async function reconcileAgent(options, desired) {
       "incidentFilters",
       "IncidentFilter",
       desired.incidentFilters,
+      desired.managedTag,
     );
     await reconcileExtended(
       endpoint,
@@ -613,10 +635,13 @@ export async function reconcileAgent(options, desired) {
       "scheduledtasks",
       "ScheduledTask",
       desired.scheduledTasks,
+      desired.managedTag,
     );
     for (const item of desired.knowledge)
       await uploadKnowledge(endpoint, token, item);
-    await configureCodeAccess(endpoint, token, desired.codeAccess);
+    if (!desired.codeAccess.absent) {
+      await configureCodeAccess(endpoint, token, desired.codeAccess);
+    }
   }
 
   verifyConnectors(
@@ -627,29 +652,41 @@ export async function reconcileAgent(options, desired) {
   );
   await verifyPermissions(endpoint, token, desired.permissions);
   for (const item of desired.subagents) {
-    await verifyExtended(endpoint, token, "agents", {
-      ...item,
-      type: "ExtendedAgent",
-    });
+    await verifyExtended(
+      endpoint,
+      token,
+      "agents",
+      { ...item, type: "ExtendedAgent" },
+      desired.managedTag,
+    );
   }
   for (const item of desired.incidentFilters) {
-    await verifyExtended(endpoint, token, "incidentFilters", {
-      ...item,
-      type: "IncidentFilter",
-    });
+    await verifyExtended(
+      endpoint,
+      token,
+      "incidentFilters",
+      { ...item, type: "IncidentFilter" },
+      desired.managedTag,
+    );
   }
   for (const item of desired.scheduledTasks) {
-    await verifyExtended(endpoint, token, "scheduledtasks", {
-      ...item,
-      type: "ScheduledTask",
-    });
+    await verifyExtended(
+      endpoint,
+      token,
+      "scheduledtasks",
+      { ...item, type: "ScheduledTask" },
+      desired.managedTag,
+    );
   }
   await verifyKnowledge(endpoint, token, desired.knowledge);
-  await verifyCodeAccess(endpoint, token, desired.codeAccess);
+  if (!desired.codeAccess.absent) {
+    await verifyCodeAccess(endpoint, token, desired.codeAccess);
+  }
 
   return {
     endpoint,
     mode: options.mode,
+    codeAccessConfigured: !desired.codeAccess.absent,
     codeAccessEnabled: desired.codeAccess.enabled,
     remediationConnectorEnabled: false,
   };

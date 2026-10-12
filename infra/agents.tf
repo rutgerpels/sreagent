@@ -1,11 +1,13 @@
 ###############################################################################
 # Optional Azure SRE Agent (Microsoft.App/agents): exactly one selected profile.
-# A is High/Contributor/Autonomous; B, C and D are Low/Reader/Review. Scenario B's
-# built-in GitHub MCP connector and short-lived fine-grained PAT are configured
-# manually. Scenario C automates Code Access when explicitly enabled, which is
-# how its agent authors remediation pull requests while holding only Reader on
-# Azure. Scenario D has no GitHub write path; its agent is configured in the
-# portal from agent/scenario-d and recovers through an approved direct change.
+# A is High/Contributor/Autonomous; B and C are Low/Reader/Review; D is
+# High/Contributor/Review. Scenario B's built-in GitHub MCP connector and
+# short-lived fine-grained PAT are configured manually. Scenario C automates
+# Code Access when explicitly enabled, which is how its agent authors
+# remediation pull requests while holding only Reader on Azure. Scenario D has
+# no GitHub write path; its agent is provisioned here and configured by the
+# data-plane reconciler from agent/scenario-d. It recovers through a direct
+# change that waits for human approval (Review mode).
 ###############################################################################
 
 locals {
@@ -192,7 +194,8 @@ resource "azurerm_role_assignment" "agent_system" {
 
 # The Azure SRE Agent service requires Monitoring Contributor at subscription
 # scope for the Azure Monitor incident lifecycle. This is the documented broad
-# exception; workload access remains Reader at the demo resource group.
+# exception; workload access is bounded by the profile's role at the demo
+# resource group (Reader for B/C, Contributor for A/D).
 resource "azurerm_role_assignment" "agent_monitoring_contributor" {
   for_each                         = local.sre_agents
   scope                            = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
