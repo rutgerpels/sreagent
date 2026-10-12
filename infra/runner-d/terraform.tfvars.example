@@ -1,0 +1,6 @@
+# Placeholders only. scripts/deploy-runner-d.ps1 supplies admin_ssh_public_key.
+location            = "swedencentral"
+resource_group_name = "agentrg-d"
+vnet_name           = "agent-vnet-d"
+vnet_address_space  = "10.102.0.0/16"
+vm_size             = "Standard_D4s_v5"
