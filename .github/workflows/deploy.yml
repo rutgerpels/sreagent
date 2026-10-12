@@ -27,10 +27,19 @@ on:
         type: boolean
         required: false
         default: false
+      ephemeral:
+        description: "Recover a retained dev/test environment using dev-test OIDC; refuses the active profile"
+        type: boolean
+        required: false
+        default: false
 
   # Callable so the dev/test pipeline provisions ephemeral environments through the
   # same code path as production, leaving no room for the two pipelines to drift.
   workflow_call:
+    secrets:
+      SRE_CODE_ACCESS_GITHUB_APP_PRIVATE_KEY_PEM:
+        description: "GitHub App key imported into the new private Key Vault when Code Access is enabled"
+        required: false
     inputs:
       scenario:
         description: "Deployment scenario"
@@ -145,7 +154,7 @@ jobs:
     runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     # Empty means no environment, so production keeps requesting its branch-scoped
     # OIDC token exactly as before.
-    environment: ${{ inputs.environment_name }}
+    environment: ${{ inputs.environment_name || (inputs.ephemeral && 'dev-test' || '') }}
     timeout-minutes: 75
     permissions:
       contents: read
@@ -246,8 +255,8 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Ensure Scenario A monitoring resource provider is registered
-        if: ${{ inputs.scenario == 'A' }}
+      - name: Ensure paired-agent monitoring resource provider is registered
+        if: ${{ inputs.scenario == 'A' || inputs.scenario == 'C' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -360,8 +369,8 @@ jobs:
             -backend-config="container_name=${{ steps.backend.outputs.state_container }}" \
             -backend-config="key=${{ steps.backend.outputs.state_key }}"
 
-      - name: Validate Scenario A Observability prerequisites and isolation
-        if: ${{ inputs.scenario == 'A' }}
+      - name: Validate paired Observability configuration and isolation
+        if: ${{ inputs.scenario == 'A' || inputs.scenario == 'C' }}
         working-directory: infra
         shell: bash
         run: terraform test -no-color
@@ -637,8 +646,12 @@ jobs:
               echo "### Manual boundary"
               echo "Connect Code Access in the SRE portal using the 'Your account' sign-in method. That connection is both the source context and the GitHub write path; Scenario B creates no token, so this workflow has no credential to receive."
             else
+              OBSERVABILITY_ONBOARDING="$(terraform output -json observability_agent_onboarding)"
+              OBSERVABILITY_AGENT="$(jq -er '.agent_name' <<< "${OBSERVABILITY_ONBOARDING}")"
               echo "### Scenario C external bootstrap"
               echo "Terraform and the supported SRE Agent APIs configured networking, observability connectors, global policy, the custom agent, knowledge, response plan, and scheduled health check."
+              echo "Terraform also created Observability Agent \`${OBSERVABILITY_AGENT}\` with autonomous issue creation and Investigation enabled for this Application Insights resource."
+              echo "Follow docs/scenario-c-private-gitops.md: prove automatic issue creation and investigation, then explicitly hand the findings to the existing Review-mode SRE incident."
               echo "1. When Code Access is enabled, this run imports the GitHub App PEM as a Key Vault key (or reuses an existing key) and verifies the connection using its key URI."
               echo "2. The agent identities hold Reader on the workload and Monitoring Contributor at subscription scope for monitoring and the alert lifecycle. The reconciled tool policy denies direct workload changes; remediation is a human-reviewed pull request."
               echo "3. Do not authorize on-behalf-of Azure elevation during this GitOps scenario."
