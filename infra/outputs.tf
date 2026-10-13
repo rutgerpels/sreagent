@@ -56,7 +56,7 @@ output "app_insights_name" {
 }
 
 output "observability_agent_onboarding" {
-  description = "Scenarios A and D: nonsecret prerequisites for portal-owned Observability Agent onboarding; null for B/C. This does not provision the agent."
+  description = "Scenarios A and D: nonsecret Observability Agent details; null for B/C. Scenario D also provisions the agent resource (observability_agent_name); Scenario A is portal-onboarded."
   value = local.observability_agent_enabled ? {
     resource_group_name              = azurerm_resource_group.this.name
     location                         = azurerm_monitor_workspace.observability_agent[0].location
@@ -69,13 +69,8 @@ output "observability_agent_onboarding" {
     memory_alert_name                = var.scenario == "A" && var.deploy_apps ? azurerm_monitor_metric_alert.payment_memory[0].name : null
     payment_failure_alert_name       = local.payment_alert_enabled ? azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures[0].name : null
     checkout_failure_alert_name      = local.payment_alert_enabled ? azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures[0].name : null
-    custom_instructions = var.scenario == "D" ? join("\n", [
-      "Always create an issue for alert-payment-failures-${local.suffix} and alert-checkout-failures-${local.suffix}, even when only one has fired.",
-      "ContosoPay call chain: frontend calls checkout-api, which calls payment-service. Checkout failures that follow payment failures are a downstream symptom, not a separate root cause.",
-      "The checkout and payment paths are business-critical.",
-      "Do not correlate alerts from other demo resource groups with alerts from ${azurerm_resource_group.this.name}.",
-      "Include [OPS-REVIEW] in every issue title.",
-      ]) : join("\n", [
+    observability_agent_name         = local.observability_agent_d_enabled ? azapi_resource.observability_agent[0].name : null
+    custom_instructions = var.scenario == "D" ? local.observability_agent_d_instructions : join("\n", [
       "Always create an issue for alert-payment-memory-${local.suffix}, even when it is the only fired alert.",
       "The payment-service cloud role belongs to the ContosoPay checkout dependency chain: frontend calls checkout-api, which calls payment-service.",
       "The checkout and payment paths are business-critical.",

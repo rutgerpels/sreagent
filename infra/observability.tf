@@ -68,6 +68,80 @@ resource "azurerm_role_assignment" "observability_agent_monitoring" {
   skip_service_principal_aad_check = true
 }
 
+# Scenario D: provision the Observability Agent resource itself. The preview supports
+# ARM/Bicep (not the azurerm provider), so azapi creates it; Scenario A stays portal-onboarded.
+# Issue Contributor on the workspace and subscription Monitoring Reader are granted above.
+locals {
+  observability_agent_d_enabled = var.scenario == "D" && local.observability_agent_enabled
+
+  observability_agent_d_instructions = join("\n", [
+    "Always create an issue for alert-payment-failures-${local.suffix} and alert-checkout-failures-${local.suffix}, even when only one has fired.",
+    "ContosoPay call chain: frontend calls checkout-api, which calls payment-service. Checkout failures that follow payment failures are a downstream symptom, not a separate root cause.",
+    "The checkout and payment paths are business-critical.",
+    "Do not correlate alerts from other demo resource groups with alerts from ${azurerm_resource_group.this.name}.",
+    "Include [OPS-REVIEW] in every issue title.",
+  ])
+}
+
+resource "azapi_resource" "observability_agent" {
+  count = local.observability_agent_d_enabled ? 1 : 0
+
+  type      = "Microsoft.Monitor/observabilityAgents@2026-05-01-preview"
+  name      = "oba-${local.suffix}"
+  location  = azurerm_monitor_workspace.observability_agent[0].location
+  parent_id = azurerm_resource_group.this.id
+  tags      = local.tags
+
+  # Preview resource type; the bundled azapi schema may not know it yet.
+  schema_validation_enabled = false
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.observability_agent[0].id]
+  }
+
+  body = {
+    properties = {
+      monitoringAccountId = azurerm_monitor_workspace.observability_agent[0].id
+      enabled             = true
+      operations = [
+        {
+          type         = "IssueCreation"
+          mode         = "Auto"
+          instructions = local.observability_agent_d_instructions
+        },
+        {
+          type = "Investigation"
+          mode = "Auto"
+        },
+      ]
+    }
+  }
+
+  depends_on = [
+    azurerm_role_assignment.observability_agent_issues,
+    azurerm_role_assignment.observability_agent_monitoring,
+  ]
+}
+
+resource "azapi_resource" "observability_agent_monitored_app_insights" {
+  count = local.observability_agent_d_enabled ? 1 : 0
+
+  type      = "Microsoft.Monitor/observabilityAgents/monitoredResources@2026-05-01-preview"
+  name      = "appi-${local.suffix}"
+  parent_id = azapi_resource.observability_agent[0].id
+
+  schema_validation_enabled = false
+
+  body = {
+    properties = {
+      resourceId   = azurerm_application_insights.this.id
+      enabled      = true
+      isAutonomous = true
+    }
+  }
+}
+
 # --- Diagnostic settings to Log Analytics for auditability ---
 
 resource "azurerm_monitor_diagnostic_setting" "acr" {
