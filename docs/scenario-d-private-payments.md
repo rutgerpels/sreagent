@@ -75,14 +75,25 @@ are random per deploy.
 
 3. **Check both alerts exist** in the portal under the resource group
    (Alerts, Alert rules), or with `az resource list -g $rg`.
-4. **Open the SRE Agent thread** at <https://sre.azure.com>, select
+4. **Make sure you can open the SRE Agent.** The portal needs a data-plane role
+   that Owner and Contributor do not give. Terraform only grants it to the
+   deployer, so assign it to yourself after every deploy:
+
+   ```powershell
+   $me = az ad signed-in-user show --query id -o tsv
+   $scope = az resource list -g $rg --resource-type Microsoft.App/agents --query "[0].id" -o tsv
+   az role assignment create --assignee-object-id $me --assignee-principal-type User --role "SRE Agent Administrator" --scope $scope
+   ```
+
+   Sign out and back in, then wait a few minutes for the role to propagate.
+5. **Open the SRE Agent thread** at <https://sre.azure.com>, select
    `sre-payd-d-<suffix>`, and confirm Review mode. Start a new thread for this
    run so the evidence stays clean.
-5. **Open the Observability Agent** `oba-d-<suffix>` in the Azure portal
+6. **Open the Observability Agent** `oba-d-<suffix>` in the Azure portal
    (Azure Copilot, Observability Agent, preview). Deploy creates it; confirm it
    is enabled with Application Insights `appi-d-<suffix>` monitored (see
    [Observability Agent onboarding](#observability-agent-onboarding)).
-6. **Keep these tabs open:** Azure portal alert list, Application Insights Live
+7. **Keep these tabs open:** Azure portal alert list, Application Insights Live
    Metrics or Failures blade, the SRE Agent thread, the Observability Agent
    issue list.
 
@@ -95,6 +106,11 @@ Run this in the same terminal as Part 0, or set `$rg` and `$fe` again first. An
 empty `$fe` fails with "Frontend URL must use https."
 
 ```powershell
+$id = az account list --query "[?name=='ME-MngEnv224247-rutgerpels-1'].id | [0]" -o tsv
+az account set -s $id
+$rg = 'rg-payd-demo-d-<suffix>'
+$fe = az containerapp show -g $rg -n ca-frontend-d-<suffix> --query "properties.configuration.ingress.fqdn" -o tsv
+$fe   # must print the frontend host name, not blank
 pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -DurationSeconds 1200
 ```
 
