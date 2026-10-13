@@ -78,9 +78,9 @@ are random per deploy.
 4. **Open the SRE Agent thread** at <https://sre.azure.com>, select
    `sre-payd-d-<suffix>`, and confirm Review mode. Start a new thread for this
    run so the evidence stays clean.
-5. **Open the Observability Agent** in the Azure portal (Azure Copilot,
-   Observability Agent, preview) and confirm it is onboarded with the dedicated
-   identity and instructions (see
+5. **Open the Observability Agent** `oba-d-<suffix>` in the Azure portal
+   (Azure Copilot, Observability Agent, preview). Deploy creates it; confirm it
+   is enabled with Application Insights `appi-d-<suffix>` monitored (see
    [Observability Agent onboarding](#observability-agent-onboarding)).
 6. **Keep these tabs open:** Azure portal alert list, Application Insights Live
    Metrics or Failures blade, the SRE Agent thread, the Observability Agent
@@ -232,19 +232,25 @@ A later `terraform apply` does not rearm the fault because desired state is
 | --- | --- |
 | No payment alert after 6 minutes | Is traffic running? The alert needs 3 or more failed `/pay` calls in the window. Check `PAYMENT_FAILURE_MODE` really is `unavailable`. |
 | Alert fired but SRE Agent did nothing | Confirm the response plan `contosopay-payment-failures` is enabled in the D agent. You can still paste the handoff prompt, or ask the agent to investigate the alert. |
-| No Observability Agent issue | Preview feature, portal only. Confirm onboarding, the dedicated identity and its Monitoring Reader role. Fall back to describing the issue verbally and continue at Part 5. |
+| No Observability Agent issue | Preview feature. Confirm `oba-d-<suffix>` is enabled with App Insights monitored, plus the dedicated identity and its Monitoring Reader role. Fall back to describing the issue verbally and continue at Part 5. |
 | SRE thread shows no tool output | The SRE data plane cannot be read programmatically from here (403). Use <https://sre.azure.com> only. |
 | Frontend returns errors before the trigger | Wait for the latest revision to be ready; re-run Part 0. |
 
 ## Observability Agent onboarding
 
-The Observability Agent is a preview with portal-only onboarding; Terraform
-cannot create it. Use the Terraform output `observability_agent_onboarding`
-(dedicated identity, resource group, instructions with the real suffix) and the
-reference file
+The Observability Agent is a preview resource
+(`Microsoft.Monitor/observabilityAgents`, API `2026-05-01-preview`). The Deploy
+workflow creates it with the Terraform `azapi` provider (the `azurerm` provider
+does not support it yet): a user-assigned identity with Monitoring Reader on the
+subscription and Issue Contributor on the Monitor workspace, automatic issue
+creation and investigation, the D custom instructions, and Application
+Insights as the monitored resource. No portal onboarding is needed.
+
+The same instructions are in the Terraform output
+`observability_agent_onboarding` and in
 [`agent/scenario-d/observability-agent.instructions.md`](../agent/scenario-d/observability-agent.instructions.md).
-Terraform assigns the identity Monitoring Reader on the subscription and Issue
-Contributor.
+The agent runs in West Europe because Sweden Central is not a supported region
+for the preview.
 
 ## Deploy, restart and teardown
 

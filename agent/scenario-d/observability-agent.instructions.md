@@ -1,8 +1,8 @@
 # Scenario D — Observability Agent custom instructions
 
-Terraform emits these values in the `observability_agent_onboarding` output
-(`custom_instructions`). Paste that output value during portal onboarding so the
-names carry the real deployment suffix. This file is the readable reference.
+Terraform applies these instructions to the agent automatically and also emits
+them in the `observability_agent_onboarding` output (`custom_instructions`) with
+the real deployment suffix. This file is the readable reference.
 
 ```text
 Always create an issue for alert-payment-failures-<suffix> and alert-checkout-failures-<suffix>, even when only one has fired.
@@ -20,6 +20,7 @@ SRE Agent; see [`handoff-prompt.md`](handoff-prompt.md).
 
 ## Prerequisites
 
-- Portal-only onboarding (the preview has no Terraform support).
-- Use the dedicated identity from the `observability_agent_onboarding` output.
+- Terraform creates the agent through `azapi` (`Microsoft.Monitor/observabilityAgents`,
+  preview); no portal onboarding.
+- It uses the dedicated identity from the `observability_agent_onboarding` output.
 - Subscription Monitoring Reader and Issue Contributor are assigned by Terraform.
