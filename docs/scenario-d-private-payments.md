@@ -61,16 +61,17 @@ are random per deploy.
    ```powershell
    $id = az account list --query "[?name=='ME-MngEnv224247-rutgerpels-1'].id | [0]" -o tsv
    az account set -s $id
-   $rg = 'rg-payd-demo-d-<suffix>'
+   $suffix = '8nw9xc'   # change if the deployment suffix changed
+   $rg = "rg-payd-demo-d-$suffix"
    az containerapp list -g $rg --query "[].name" -o tsv
    ```
 
 2. **Check the frontend answers and the fault is off.**
 
    ```powershell
-   $fe = az containerapp show -g $rg -n ca-frontend-d-<suffix> --query "properties.configuration.ingress.fqdn" -o tsv
+   $fe = az containerapp show -g $rg -n "ca-frontend-d-$suffix" --query "properties.configuration.ingress.fqdn" -o tsv
    (Invoke-WebRequest "https://$fe" -UseBasicParsing).StatusCode   # expect 200
-   az containerapp show -g $rg -n ca-payment-d-<suffix> --query "properties.template.containers[0].env[?name=='PAYMENT_FAILURE_MODE']" -o json   # expect "off"
+   az containerapp show -g $rg -n "ca-payment-d-$suffix" --query "properties.template.containers[0].env[?name=='PAYMENT_FAILURE_MODE']" -o json   # expect "off"
    ```
 
 3. **Check both alerts exist** in the portal under the resource group
@@ -108,8 +109,9 @@ empty `$fe` fails with "Frontend URL must use https."
 ```powershell
 $id = az account list --query "[?name=='ME-MngEnv224247-rutgerpels-1'].id | [0]" -o tsv
 az account set -s $id
-$rg = 'rg-payd-demo-d-<suffix>'
-$fe = az containerapp show -g $rg -n ca-frontend-d-<suffix> --query "properties.configuration.ingress.fqdn" -o tsv
+$suffix = '8nw9xc'   # change if the deployment suffix changed
+$rg = "rg-payd-demo-d-$suffix"
+$fe = az containerapp show -g $rg -n "ca-frontend-d-$suffix" --query "properties.configuration.ingress.fqdn" -o tsv
 $fe   # must print the frontend host name, not blank
 pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -DurationSeconds 1200
 ```
@@ -129,7 +131,7 @@ checkout and payment are internal."
 Arm the fault on the live payment app. Note the time.
 
 ```powershell
-az containerapp update -g $rg -n ca-payment-d-<suffix> --set-env-vars PAYMENT_FAILURE_MODE=unavailable
+az containerapp update -g $rg -n "ca-payment-d-$suffix" --set-env-vars PAYMENT_FAILURE_MODE=unavailable
 Get-Date -Format "HH:mm:ss"   # write down as T0
 ```
 
@@ -224,7 +226,7 @@ production waits for a human."
    evaluation, up to about 5 minutes).
 
 ```powershell
-az containerapp show -g $rg -n ca-payment-d-<suffix> --query "properties.template.containers[0].env[?name=='PAYMENT_FAILURE_MODE']" -o json   # expect "off"
+az containerapp show -g $rg -n "ca-payment-d-$suffix" --query "properties.template.containers[0].env[?name=='PAYMENT_FAILURE_MODE']" -o json   # expect "off"
 ```
 
 **Say:** "From alert to approved fix, with the evidence from two agents and one
@@ -236,7 +238,7 @@ Recovery already sets the flag to `off`. To reset manually (for example if you
 stopped before approving):
 
 ```powershell
-az containerapp update -g $rg -n ca-payment-d-<suffix> --set-env-vars PAYMENT_FAILURE_MODE=off
+az containerapp update -g $rg -n "ca-payment-d-$suffix" --set-env-vars PAYMENT_FAILURE_MODE=off
 ```
 
 Stop the traffic script. Close the old SRE thread and start a new one for the
