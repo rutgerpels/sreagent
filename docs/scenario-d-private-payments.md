@@ -91,6 +91,9 @@ are random per deploy.
 Traffic must be flowing **before** the clock starts, so the alerts have data
 and the baseline is visible. The script needs the frontend URL.
 
+Run this in the same terminal as Part 0, or set `$rg` and `$fe` again first. An
+empty `$fe` fails with "Frontend URL must use https."
+
 ```powershell
 pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -DurationSeconds 1200
 ```
