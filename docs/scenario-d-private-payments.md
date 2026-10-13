@@ -120,8 +120,19 @@ pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -Duratio
 ./scripts/generate-checkout-traffic.sh --url "https://$FE" --duration 1200
 ```
 
-Leave it running in its own terminal. Wait about 2 minutes and show that the
-success rate is healthy (0 failures) in Application Insights.
+Leave it running in its own terminal. Wait about 2 minutes, then show the
+healthy baseline:
+
+- **Where:** Azure portal, resource group `rg-payd-demo-d-8nw9xc`, Application
+  Insights `appi-d-8nw9xc`, **Investigate, Failures** (or **Live metrics**).
+- **Which app:** the role `checkout-api` (container app `ca-checkout-d-8nw9xc`).
+  Set the **Roles** filter to `checkout-api`. It is the service the traffic
+  script ends up calling through the frontend, and its `/checkout` requests are
+  what the checkout alert watches.
+- **Healthy looks like:** requests are flowing and failed requests are 0. Later,
+  switch the filter to `payment-service` (container app `ca-payment-d-8nw9xc`),
+  whose `/pay` requests are what the payment alert watches.
+- **Not these:** the health and ready probes, which the alerts ignore.
 
 **Say:** "ContosoPay checkout is healthy. Frontend is the only public endpoint;
 checkout and payment are internal."
