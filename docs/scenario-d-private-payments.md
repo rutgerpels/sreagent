@@ -139,9 +139,14 @@ checkout and payment are internal."
 
 ## Part 2 — Trigger the incident (T0)
 
-Arm the fault on the live payment app. Note the time.
+Arm the fault on the live payment app. Note the time. Use a second terminal (the
+first one is running the traffic), so set the variables again.
 
 ```powershell
+$id = az account list --query "[?name=='ME-MngEnv224247-rutgerpels-1'].id | [0]" -o tsv
+az account set -s $id
+$suffix = '8nw9xc'   # change if the deployment suffix changed
+$rg = "rg-payd-demo-d-$suffix"
 az containerapp update -g $rg -n "ca-payment-d-$suffix" --set-env-vars PAYMENT_FAILURE_MODE=unavailable
 Get-Date -Format "HH:mm:ss"   # write down as T0
 ```
