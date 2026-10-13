@@ -113,14 +113,14 @@ $suffix = '8nw9xc'   # change if the deployment suffix changed
 $rg = "rg-payd-demo-d-$suffix"
 $fe = az containerapp show -g $rg -n "ca-frontend-d-$suffix" --query "properties.configuration.ingress.fqdn" -o tsv
 $fe   # must print the frontend host name, not blank
-pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -DurationSeconds 1200
+pwsh ./scripts/generate-checkout-traffic.ps1 -FrontendUrl "https://$fe" -DurationSeconds 2700
 ```
 
 ```bash
-./scripts/generate-checkout-traffic.sh --url "https://$FE" --duration 1200
+./scripts/generate-checkout-traffic.sh --url "https://$FE" --duration 2700
 ```
 
-Leave it running in its own terminal. Wait about 2 minutes, then show the
+Leave it running in its own terminal for the whole rehearsal. It stops by itself\nafter 2700 seconds (45 minutes); if it stops before you arm the fault, the\nalerts never fire, so restart it first. Wait about 2 minutes, then show the
 healthy baseline:
 
 - **Where:** Azure portal, resource group `rg-payd-demo-d-8nw9xc`, Application
