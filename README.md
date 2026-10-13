@@ -215,7 +215,22 @@ or when the audience cares about change management but not about private
 networking. If you can afford C's setup, prefer C — it is the stronger version
 of the same demo.
 
+### [Scenario D — payments fail, checkout fails with them](docs/scenario-d-private-payments.md)
+
+*Show the two agents side by side.* **Built, not yet live-verified.**
+
+A separate private-network deployment where the payment processor becomes
+unavailable and every checkout fails with it. The Observability Agent
+investigates the symptoms in parallel; the SRE Agent, in Review mode, proposes
+the flag-off fix once the operator hands it the Observability evidence. A
+human approves. D runs alongside A/B/C without touching them, and its
+10-minute target is a rehearsal goal that has not been measured.
+
 ### Side by side
+
+Scenario D is described in its [walkthrough](docs/scenario-d-private-payments.md).
+For comparison with A, it is High / Contributor / Review (direct fix after
+approval, no GitOps), reconciled like C. The table compares A, B and C.
 
 | | Scenario A | Scenario B | Scenario C |
 | --- | --- | --- | --- |
@@ -304,6 +319,7 @@ when something breaks, not to run the demo.
 | [Scenario A walkthrough](docs/scenario-a-direct.md) | Step-by-step, start to teardown |
 | [Scenario B walkthrough](docs/scenario-b-gitops.md) | Step-by-step, start to teardown |
 | [Scenario C walkthrough](docs/scenario-c-private-gitops.md) | Step-by-step, start to teardown |
+| [Scenario D walkthrough](docs/scenario-d-private-payments.md) | Operator setup, paired-agent run, teardown |
 | [Deployment and state reference](docs/deployment-reference.md) | OIDC setup, activation markers, state isolation, teardown, security invariants, repository map |
 | [SRE Agent setup reference](docs/sre-agent-setup.md) | Background on the shared agent model across all three scenarios |
 | [AKS variant](docs/aks-variant.md) | Notes for a Kubernetes-native deployment |

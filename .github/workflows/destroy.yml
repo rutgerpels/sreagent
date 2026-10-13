@@ -9,7 +9,7 @@ on:
         description: "Deployment scenario"
         type: choice
         required: true
-        options: [A, B, C]
+        options: [A, B, C, D]
       prefix:
         description: "Resource name prefix"
         required: false
@@ -76,8 +76,8 @@ concurrency:
 
 jobs:
   destroy:
-    runs-on: ${{ inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
-    environment: ${{ inputs.environment_name }}
+    runs-on: ${{ inputs.scenario == 'D' && fromJSON('["self-hosted","Linux","X64","azure-private-d","contosopay"]') || (inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest') }}
+    environment: ${{ inputs.scenario == 'D' && 'scenario-d' || inputs.environment_name }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -107,8 +107,9 @@ jobs:
           set -euo pipefail
           readonly PREFIX_PATTERN='^[a-z][a-z0-9]{1,16}$'
           readonly ENVIRONMENT_PATTERN='^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'
-          readonly SCENARIO_PATTERN='^(A|B|C)$'
-          [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, or C."; exit 1; }
+          readonly SCENARIO_PATTERN='^(A|B|C|D)$'
+          readonly ACTIVE_SCENARIO_PATTERN='^(A|B|C)$'
+          [[ "${DEPLOYMENT_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Scenario must be A, B, C, or D."; exit 1; }
           [[ "${TF_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Invalid prefix '${TF_PREFIX}'."; exit 1; }
           [[ "${TF_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Invalid environment '${TF_ENVIRONMENT}'."; exit 1; }
           for value in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
@@ -116,8 +117,16 @@ jobs:
           done
           if [[ "${FORCE_DELETE_RG}" != "true" ]]; then
             readonly SHA_PATTERN='^[0-9a-f]{40}$'
-            if [[ -n "${REPOSITORY_SCENARIO}${REPOSITORY_PREFIX}${REPOSITORY_ENVIRONMENT}" ]]; then
-              [[ "${REPOSITORY_SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
+            if [[ "${DEPLOYMENT_SCENARIO}" == "D" ]]; then
+              # Scenario D is a separate persistent deployment: it never bypasses the
+              # active-profile guard and must never share the active profile's prefix.
+              [[ "${EPHEMERAL}" != "true" ]] || { echo "::error::Scenario D does not support ephemeral teardown."; exit 1; }
+              if [[ -n "${REPOSITORY_PREFIX}" && "${TF_PREFIX}" == "${REPOSITORY_PREFIX}" ]]; then
+                echo "::error::Scenario D prefix must differ from the active repository profile prefix."
+                exit 1
+              fi
+            elif [[ -n "${REPOSITORY_SCENARIO}${REPOSITORY_PREFIX}${REPOSITORY_ENVIRONMENT}" ]]; then
+              [[ "${REPOSITORY_SCENARIO}" =~ ${ACTIVE_SCENARIO_PATTERN} ]] || { echo "::error::Repository variable DEPLOYMENT_SCENARIO must be A, B, or C."; exit 1; }
               [[ "${REPOSITORY_PREFIX}" =~ ${PREFIX_PATTERN} ]] || { echo "::error::Repository variable TF_PREFIX must be configured with the active scenario."; exit 1; }
               [[ "${REPOSITORY_ENVIRONMENT}" =~ ${ENVIRONMENT_PATTERN} ]] || { echo "::error::Repository variable TF_ENVIRONMENT must be configured with the active scenario."; exit 1; }
               if [[ "${EPHEMERAL}" == "true" ]]; then
@@ -144,17 +153,17 @@ jobs:
         if: ${{ inputs.force_delete_rg == false }}
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Configure Scenario C private networking
-        if: ${{ inputs.scenario == 'C' && inputs.force_delete_rg == false }}
+      - name: Configure Scenario C/D private networking
+        if: ${{ (inputs.scenario == 'C' || inputs.scenario == 'D') && inputs.force_delete_rg == false }}
         shell: bash
         env:
-          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
-          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
-          RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
-          APP_VNET_ADDRESS_SPACE: ${{ inputs.ephemeral && (vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16') }}
-          APP_PE_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27') }}
-          CONTAINER_APPS_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27') }}
-          SRE_AGENT_SUBNET_PREFIX: ${{ inputs.ephemeral && (vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27') }}
+          RUNNER_NETWORK_RG: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_NETWORK_RG || 'agentrg-d') || (vars.RUNNER_NETWORK_RG || 'agentrg') }}
+          RUNNER_VNET_NAME: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_VNET_NAME || 'agent-vnet-d') || (vars.RUNNER_VNET_NAME || 'agent-vnet') }}
+          RUNNER_PE_SUBNET_NAME: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_PE_SUBNET_NAME || 'private-endpoints') || (vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints') }}
+          APP_VNET_ADDRESS_SPACE: ${{ inputs.scenario == 'D' && (vars.D_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (inputs.ephemeral && (vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16')) }}
+          APP_PE_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (inputs.ephemeral && (vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27')) }}
+          CONTAINER_APPS_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (inputs.ephemeral && (vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27')) }}
+          SRE_AGENT_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (inputs.ephemeral && (vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27')) }}
         run: |
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
@@ -253,7 +262,7 @@ jobs:
           set -euo pipefail
           [[ "${STATE_SCENARIO}" == "${DEPLOYMENT_SCENARIO}" ]] || { echo "::error::Scenario mismatch immediately before destroy."; exit 1; }
           stop_sre_agents() {
-            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" && "${DEPLOYMENT_SCENARIO}" != "D" ]]; then
               return 0
             fi
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
@@ -340,7 +349,7 @@ jobs:
             fi
           done < <(jq -r '.[].id' <<< "${SHARED_PEERINGS}")
 
-          if [[ "${DEPLOYMENT_SCENARIO}" == "C" ]]; then
+          if [[ "${DEPLOYMENT_SCENARIO}" == "C" || "${DEPLOYMENT_SCENARIO}" == "D" ]]; then
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.App/agents --query '[].id' -o tsv 2>/dev/null || true); do
               echo "Stopping SRE Agent before force delete: ${id}"
               az rest --method post --url "https://management.azure.com${id}/stop?api-version=2025-05-01-preview" --only-show-errors >/dev/null || true
@@ -351,11 +360,11 @@ jobs:
               done
             done
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.ManagedIdentity/userAssignedIdentities --query '[].id' -o tsv 2>/dev/null || true); do
-              echo "Deleting orphaned Scenario C identity before force delete: ${id}"
+              echo "Deleting orphaned Scenario ${DEPLOYMENT_SCENARIO} identity before force delete: ${id}"
               az resource delete --ids "${id}" --api-version 2023-01-31 2>/dev/null || true
             done
             for id in $(az resource list -g "${APP_RESOURCE_GROUP}" --resource-type Microsoft.Network/virtualNetworks --query '[].id' -o tsv 2>/dev/null || true); do
-              echo "Deleting orphaned Scenario C virtual network before force delete: ${id}"
+              echo "Deleting orphaned Scenario ${DEPLOYMENT_SCENARIO} virtual network before force delete: ${id}"
               az resource delete --ids "${id}" --api-version 2024-05-01 2>/dev/null || true
             done
           fi
@@ -365,7 +374,7 @@ jobs:
             az storage blob delete --account-name "${{ steps.backend.outputs.state_sa }}" --container-name tfstate --name "${{ steps.backend.outputs.state_key }}" --auth-mode login
           }
           tolerate_stopped_sre_orphan() {
-            if [[ "${DEPLOYMENT_SCENARIO}" != "C" ]]; then
+            if [[ "${DEPLOYMENT_SCENARIO}" != "C" && "${DEPLOYMENT_SCENARIO}" != "D" ]]; then
               return 1
             fi
             REMAINING="$(az resource list -g "${APP_RESOURCE_GROUP}" --output json 2>/dev/null || echo '[]')"

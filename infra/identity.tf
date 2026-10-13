@@ -29,12 +29,23 @@ resource "azurerm_role_assignment" "kv_secrets" {
   skip_service_principal_aad_check = true
 }
 
+# Scenario D: apps publish telemetry with Entra ID only. Scope is the single
+# Application Insights component, the narrowest resource that accepts it.
+resource "azurerm_role_assignment" "appinsights_metrics_publisher" {
+  for_each                         = var.scenario == "D" ? azurerm_user_assigned_identity.app : {}
+  scope                            = azurerm_application_insights.this.id
+  role_definition_name             = "Monitoring Metrics Publisher"
+  principal_id                     = each.value.principal_id
+  skip_service_principal_aad_check = true
+}
+
 # Give private DNS/endpoint provisioning and app-identity RBAC time to converge
 # before the first Container App revision pulls an image and resolves secrets.
 resource "time_sleep" "wait_app_dependencies" {
   depends_on = [
     azurerm_role_assignment.acr_pull,
     azurerm_role_assignment.kv_secrets,
+    azurerm_role_assignment.appinsights_metrics_publisher,
     azurerm_private_dns_zone_virtual_network_link.acr,
     azurerm_private_dns_zone_virtual_network_link.acr_app,
     azurerm_private_dns_zone_virtual_network_link.key_vault,

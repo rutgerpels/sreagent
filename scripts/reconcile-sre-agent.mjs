@@ -44,8 +44,11 @@ try {
     process.stdout.write(`${JSON.stringify(renderDesiredState(desired), null, 2)}\n`);
   } else {
     const result = await reconcileAgent(options, desired);
+    const codeAccess = result.codeAccessConfigured
+      ? String(result.codeAccessEnabled)
+      : "not managed";
     process.stdout.write(
-      `SRE Agent ${result.mode} succeeded; Code Access=${result.codeAccessEnabled}, ` +
+      `SRE Agent ${result.mode} succeeded; Code Access=${codeAccess}, ` +
         `remediation connector=${result.remediationConnectorEnabled}.\n`,
     );
   }

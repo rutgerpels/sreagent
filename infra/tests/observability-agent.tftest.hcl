@@ -8,6 +8,13 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_data "azurerm_virtual_network" {
+    defaults = {
+      id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-runner/providers/Microsoft.Network/virtualNetworks/vnet-runner"
+      location = "swedencentral"
+    }
+  }
+
   mock_resource "azurerm_monitor_workspace" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-test/providers/Microsoft.Monitor/accounts/amw-test"
@@ -140,5 +147,83 @@ run "scenario_c_excludes_prerequisites" {
       length(azurerm_role_assignment.observability_agent_monitoring) == 0
     )
     error_message = "Scenario C must not provision Scenario A Observability prerequisites."
+  }
+}
+
+run "scenario_d_prerequisites_and_payment_alert" {
+  command = plan
+
+  variables {
+    scenario    = "D"
+    deploy_apps = true
+    image_tag   = "0123456789abcdef0123456789abcdef01234567"
+    image_digests = {
+      frontend        = "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+      checkout-api    = "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+      payment-service = "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+    }
+  }
+
+  plan_options {
+    target = [
+      azurerm_monitor_workspace.observability_agent,
+      azurerm_user_assigned_identity.observability_agent,
+      azurerm_role_assignment.observability_agent_issues,
+      azurerm_role_assignment.observability_agent_monitoring,
+      azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures,
+      azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures,
+      azurerm_monitor_metric_alert.payment_memory,
+    ]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_workspace.observability_agent) == 1 &&
+      length(azurerm_user_assigned_identity.observability_agent) == 1 &&
+      length(azurerm_role_assignment.observability_agent_issues) == 1 &&
+      length(azurerm_role_assignment.observability_agent_monitoring) == 1
+    )
+    error_message = "Scenario D must provision the Observability agent prerequisites."
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures) == 1 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures) == 1 &&
+      length(azurerm_monitor_metric_alert.payment_memory) == 0
+    )
+    error_message = "Scenario D must use payment/checkout failure alerts and not the memory alert."
+  }
+}
+
+run "scenario_a_has_no_failure_alerts" {
+  command = plan
+
+  variables {
+    scenario    = "A"
+    deploy_apps = true
+    image_tag   = "0123456789abcdef0123456789abcdef01234567"
+    image_digests = {
+      frontend        = "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+      checkout-api    = "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+      payment-service = "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+    }
+  }
+
+  plan_options {
+    target = [
+      azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures,
+      azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures,
+      azurerm_monitor_metric_alert.payment_memory,
+    ]
+  }
+
+  assert {
+    condition = (
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures) == 0 &&
+      length(azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures) == 0 &&
+      length(azurerm_monitor_metric_alert.payment_memory) == 1
+    )
+    error_message = "Scenario A must keep only the memory alert."
   }
 }

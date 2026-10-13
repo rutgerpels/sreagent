@@ -1,7 +1,9 @@
 ###############################################################################
-# Scenario C private deployment networking. A/B intentionally create none of
+# Scenario C and D private deployment networking. A/B intentionally create none of
 # these resources and therefore do not require access to a private runner VNet.
 # Global peering lets the existing private runner reach regional endpoints.
+# Scenario D must not share Scenario C's private DNS zones: a VNet can link to
+# only one private DNS zone per namespace, so D uses its own runner VNet.
 ###############################################################################
 
 data "azurerm_virtual_network" "runner" {
