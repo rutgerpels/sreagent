@@ -758,6 +758,46 @@ Native LAW/AI/environment declarations avoid the pinned AVM interfaces that
 output telemetry credentials or unconditionally call workspace `listKeys`.
 There are no Log Analytics shared-key settings and local auth stays disabled.
 
+### Verified healthy Bicep checkpoint (2026-10-15)
+
+[Deployment run 38703802396](https://github.com/rutgerpels/sreagent/actions/runs/38703802396)
+completed successfully from replacement-branch commit
+`0599771af87345ed54204ba0e07fa48073313437`. These are observed results, not a
+claim that the incident or full paired-agent recovery has been demonstrated.
+The coordinating session independently repeated the HTTP, configuration and
+distributed-trace checks after that run.
+
+| Surface | Verified result |
+| --- | --- |
+| Durable owner / app RG | `scenario-d-payd-demo-d-bicep1` / `rg-payd-demo-d-tzbvjafe`; foundation, apps, agents and connectors/alerts deployments succeeded. |
+| Public frontend | [ContosoPay](https://ca-frontend-d-tzbvjafe.graystone-6bda44e3.swedencentral.azurecontainerapps.io): `/` and `/health` returned HTTP 200. |
+| Real checkout | `POST /api/checkout`, amount 42 EUR, returned HTTP 200 with a confirmed order and approved payment. |
+| App readiness / ingress | All three apps were Running, with Healthy active revisions matching their latest-ready revisions and digest-pinned images. Only frontend had external ingress; insecure ingress was disabled throughout. |
+| Healthy payment flags | `PAYMENT_FAILURE_MODE=off`, `ENABLE_SLOW_LEAK=false`. No incident was triggered. |
+| Telemetry | One correlated checkout trace contained all three successful request spans and both successful dependency spans, with correct parent links. A separate coordinating-session trace reproduced the full chain. |
+| Private foundation | `acrpayddtzbvjafe` was Premium, admin-disabled, non-zone-redundant and public-network-disabled. `kv-d-tzbvjafe` was public-network-disabled, deny-by-default, RBAC-authorized and purge-protected. Runner DNS resolved both private endpoints to the app VNet. |
+| SRE | `sre-payd-d-tzbvjafe` was Running in Sweden Central, High access, Review mode, with all three connectors provisioned successfully and an explicit monthly limit of 500. |
+| Alert / filter | Both failure alerts were enabled, Sev2, with `PT5M` evaluation/window. The enabled SRE filter used only `alert-payment-failures-d-tzbvjafe`, handling agent `payment-recovery`, in Review mode. |
+| Approval / scheduling | Persisted global policy put `RunAzCliWriteCommands` in `ask`, not `allow`; the scheduled-task collection was empty. |
+| Observability | `oba-d-tzbvjafe` and `amw-observability-d-tzbvjafe` were in West Europe, bound to each other. OBA remained `enabled=false`, with its App Insights target `isAutonomous=false`. |
+| Operator access | The signed-in operator received SRE Agent Administrator at this exact new SRE resource only and successfully read its authenticated data-plane configuration. This explicit operator grant is inside the owned app RG; deleting that RG removes it. No operator identity is committed. |
+
+Earlier attempts exposed and corrected subscription-scope resource-ID
+construction, CLI-added ledger metadata, the service's minimum nonzero monthly
+agent-unit limit, and an expired initial OIDC assertion before requesting the
+SRE audience. They did not justify a public endpoint, stored credential,
+permission fallback, or disabling the ownership ledger. Retries used the same
+owned generation and preserved the private runner/support and shared-state
+resource groups.
+
+**Remaining manual gates:** trigger an incident only when authorized, invoke
+Observability on demand, explicitly save the issue to this AMW, carry the
+evidence into SRE, and approve the proposed recovery. Autonomous OBA operations,
+the full paired-agent incident/recovery flow and a ten-minute recovery target
+remain unproven. PR #86 stays open until the coordinating owner decides its
+disposition. Keep the apps and SRE running for that dry-run; do not test teardown
+against this live checkpoint.
+
 ### Discover outputs (safe to print)
 
 ```powershell
