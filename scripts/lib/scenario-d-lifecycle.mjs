@@ -82,6 +82,29 @@ export function validateOwnership(o, options) {
     o.auxiliaryDeployments.every((item, i) => same(item.id, expectedDeployments[i].id)), 'External deployment metadata ownership mismatch.');
   return o;
 }
+export async function refreshFederatedLogin(io, options, principalId, environment = process.env, request = fetch) {
+  if (environment.GITHUB_ACTIONS !== 'true') return;
+  requireThat(/^[0-9a-f-]{36}$/i.test(environment.AZURE_CLIENT_ID ?? ''), 'OIDC refresh requires the configured Azure client ID.');
+  requireThat(environment.ACTIONS_ID_TOKEN_REQUEST_URL && environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN, 'GitHub OIDC refresh credentials are unavailable.');
+  const url = new URL(environment.ACTIONS_ID_TOKEN_REQUEST_URL);
+  requireThat(url.protocol === 'https:', 'GitHub OIDC request must use HTTPS.');
+  url.searchParams.set('audience', 'api://AzureADTokenExchange');
+  const response = await request(url, {
+    headers: { Authorization: `Bearer ${environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+    signal: AbortSignal.timeout(30000), redirect: 'error',
+  });
+  requireThat(response.ok, `GitHub OIDC refresh failed with HTTP ${response.status}.`);
+  const { value: assertion } = await response.json();
+  requireThat(typeof assertion === 'string' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(assertion), 'GitHub OIDC refresh returned an invalid assertion.');
+  io.execute('az', ['login', '--service-principal', '--username', environment.AZURE_CLIENT_ID,
+    '--tenant', options.tenantId, '--federated-token', assertion, '--only-show-errors', '--output', 'none']);
+  io.az(['account', 'set', '--subscription', options.subscriptionId]);
+  const access = io.az(['account', 'get-access-token', '--resource', ARM]);
+  const claims = JSON.parse(Buffer.from(access.accessToken.split('.')[1], 'base64url').toString());
+  requireThat(same(claims.oid, principalId) && same(claims.tid, options.tenantId), 'OIDC refresh changed the deployment identity.');
+  // Acquire the new audience while the refreshed assertion is still valid.
+  io.az(['account', 'get-access-token', '--resource', 'https://azuresre.dev']);
+}
 export function createIO(executeCommand) {
   const execute = executeCommand ?? ((program, args, json = false) => {
     const r = spawnSync(program, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60 * 60 * 1000 });
@@ -103,6 +126,7 @@ export function createIO(executeCommand) {
   };
   return {
     az, execute, sleep: delay,
+    async refreshAuth(options, principalId) { await refreshFederatedLogin({ az, execute }, options, principalId); },
     async get(id, api) {
       try { return az(['rest', '--method', 'GET', '--url', `${ARM}${id}?api-version=${api}`]); }
       catch (e) { if (/\((ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|NotFound|DeploymentNotFound)\)|"code"\s*:\s*"(ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|NotFound|DeploymentNotFound)"/.test(e.stderr)) return null; throw e; }
@@ -309,6 +333,7 @@ export async function deploy(io, options, existing) {
   const alertOutputs = await io.deploy(o.resourceGroupName, 'scenario-d-connectors-alerts', 'infra/scenario-d/connectors-alerts.bicep', { ownership: o, foundations: f, sreName: agents.sreName });
   const paymentFailureAlertName = outputValue(alertOutputs, 'paymentFailureAlertName');
   requireThat(paymentFailureAlertName === `alert-payment-failures-${o.stem}`, 'Unexpected deployed payment alert name; refusing broad incident-filter reconciliation.');
+  await io.refreshAuth(options, deployerPrincipalId);
   const reconcileArgs = ['scripts/reconcile-sre-agent.mjs', '--payment-failure-alert-name', paymentFailureAlertName, '--subscription', options.subscriptionId, '--resource-group', o.resourceGroupName, '--agent', agents.sreName, '--config', 'agent/scenario-d'];
   await retry(io, 'SRE data-plane reconciliation', async () => io.execute('node', [...reconcileArgs, '--mode', 'apply']), 12, 30000);
   io.execute('node', [...reconcileArgs, '--mode', 'verify']);

@@ -731,6 +731,16 @@ are runner-wide.
    configured. Verify reconciliation and real checkout again. Deployment never
    triggers the incident; OBA remains disabled.
 
+Before SRE data-plane reconciliation, the GitHub job obtains a fresh OIDC
+assertion and signs in again as the **same** deployment principal, then acquires
+the SRE audience token. The initial assertion can expire during private
+foundation/image/agent provisioning even while ARM's cached access token is
+valid. This refresh uses GitHub's existing `id-token: write` permission and
+`api://AzureADTokenExchange` audience, never a stored credential; see
+[OpenID Connect reference](https://docs.github.com/en/actions/reference/security/oidc).
+Missing refresh credentials, failed authentication, or an identity change
+stops reconciliation.
+
 The replacement delivery branch supersedes the earlier Scenario D PR without
 closing it automatically. It preserves the original private-payments baseline
 and native-fetch dependency tracing fixes.

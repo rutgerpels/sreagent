@@ -80,6 +80,7 @@ jobs:
     timeout-minutes: 120
     env:
       SCENARIO_D_PRIVATE_RUNNER: 'true'
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       D_ACTION: ${{ inputs.action }}

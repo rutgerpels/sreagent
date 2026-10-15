@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { optionsFromEnv, validateOwnership, armGuid, destroy, run, deploy, retry, createIO, validateResumeDns, API } from '../lib/scenario-d-lifecycle.mjs';
+import { optionsFromEnv, validateOwnership, armGuid, destroy, run, deploy, retry, createIO, validateResumeDns, refreshFederatedLogin, API } from '../lib/scenario-d-lifecycle.mjs';
 import { loadDesiredState } from '../lib/sre-agent-reconciler.mjs';
 import { resolve } from 'node:path';
 
@@ -78,6 +78,37 @@ test('ARM guid uses deterministic UUIDv5 stable ownership, not identity lifetime
   assert.match(armGuid('scope', 'identity', 'role'), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(armGuid('scope', 'identity', 'role'), armGuid('scope', 'identity', 'role'));
   assert.notEqual(armGuid('scope', 'identity', 'role'), armGuid('other', 'identity', 'role'));
+});
+test('long GitHub deploy refreshes the same OIDC principal before acquiring the SRE audience', async () => {
+  const environment = { GITHUB_ACTIONS: 'true', AZURE_CLIENT_ID: subId,
+    ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.example/request?existing=value',
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'ephemeral-request-credential' };
+  const events = [];
+  const io = {
+    execute: (program, args) => { assert.equal(program, 'az'); events.push(['login', args]); },
+    az: args => {
+      events.push(['az', args]);
+      return { accessToken: `header.${Buffer.from(JSON.stringify({ oid: 'deployer', tid: tenantId })).toString('base64url')}.signature` };
+    },
+  };
+  const request = async (url, config) => {
+    assert.equal(url.searchParams.get('audience'), 'api://AzureADTokenExchange');
+    assert.equal(url.searchParams.get('existing'), 'value');
+    assert.equal(config.headers.Authorization, 'Bearer ephemeral-request-credential');
+    assert.equal(config.redirect, 'error');
+    return { ok: true, json: async () => ({ value: 'fresh.claims.assertion' }) };
+  };
+  await refreshFederatedLogin(io, options, 'deployer', environment, request);
+  assert.deepEqual(events.map(event => event[0]), ['login', 'az', 'az', 'az']);
+  assert(events[0][1].includes('fresh.claims.assertion'));
+  assert.equal(events.at(-1)[1].at(-1), 'https://azuresre.dev');
+  events.length = 0;
+  await refreshFederatedLogin(io, options, 'deployer', {}, request);
+  assert.equal(events.length, 0, 'local operator authentication is not replaced');
+  await assert.rejects(refreshFederatedLogin(io, options, 'other', environment, request), /changed the deployment identity/);
+  await assert.rejects(refreshFederatedLogin(io, options, 'deployer', environment,
+    async () => ({ ok: false, status: 403 })), /HTTP 403/);
+  await assert.rejects(refreshFederatedLogin(io, options, 'deployer', { ...environment, ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' }, request), /unavailable/);
 });
 test('durable ownership allows only exact D grants, retained runner peering and app links', () => {
   validateOwnership(ownership(), options); validateOwnership(ownership(true), options);
@@ -198,10 +229,13 @@ test('healthy staged deploy publishes digests before apps, grants before connect
     if (program === 'bash' && args[0] === 'scripts/publish-immutable-images.sh') writeFileSync(args[4],JSON.stringify(Object.fromEntries(['frontend','checkout-api','payment-service'].map(s => [s,'sha256:'+'b'.repeat(64)]))));
   };
   io.checkout = async () => stages.push('checkout');
+  io.refreshAuth = async () => stages.push('refresh-auth');
   await deploy(io,options,null);
   assert(stages.indexOf('publish') < stages.indexOf('smoke'));
   assert(stages.indexOf('smoke') < stages.indexOf('scenario-d-apps'));
   assert(stages.indexOf(options.deploymentName+'-roles') < stages.indexOf('scenario-d-connectors-alerts'));
+  assert(stages.indexOf('scenario-d-connectors-alerts') < stages.indexOf('refresh-auth'));
+  assert(stages.indexOf('refresh-auth') < stages.indexOf('reconcile'));
   assert(stages.indexOf('reconcile') < stages.indexOf('verify')); assert.equal(stages.at(-1),'checkout');
   assert(!existsSync(secretFile), 'ephemeral secret file removed only after awaited write');
   stages.length = 0;
