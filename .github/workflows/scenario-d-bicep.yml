@@ -20,6 +20,10 @@ on:
         description: 'Stable lifecycle generation; change only after complete destroy'
         type: string
         default: bicep1
+      observability_autonomous:
+        description: 'Opt in to bounded independent OBA acceptance (requires private recipient; no fault trigger)'
+        type: boolean
+        default: false
       confirm_destroy:
         description: 'Destroy: exact ownership deployment name, e.g. scenario-d-payd-demo-d-bicep1'
         type: string
@@ -46,6 +50,9 @@ on:
       generation:
         type: string
         default: bicep1
+      observability_autonomous:
+        type: boolean
+        default: false
       confirm_destroy:
         type: string
         default: ''
@@ -61,6 +68,11 @@ on:
       reject_legacy_flags:
         type: boolean
         default: false
+
+    secrets:
+      OBA_NOTIFICATION_EMAIL:
+        description: Private acceptance recipient; required only for autonomous deploy
+        required: false
 
 permissions:
   contents: read
@@ -84,6 +96,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       D_ACTION: ${{ inputs.action }}
+      D_OBSERVABILITY_AUTONOMOUS: ${{ inputs.observability_autonomous || false }}
       D_PREFIX: ${{ inputs.prefix }}
       D_ENVIRONMENT: ${{ inputs.environment }}
       D_GENERATION: ${{ inputs.generation }}
@@ -99,6 +112,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Validate D request before Azure login
         env:
+          D_NOTIFICATION_EMAIL: ${{ inputs.action == 'deploy' && inputs.observability_autonomous && secrets.OBA_NOTIFICATION_EMAIL || '' }}
           REJECT_LEGACY_FLAGS: ${{ inputs.reject_legacy_flags || false }}
         run: |
           set -euo pipefail
@@ -120,6 +134,8 @@ jobs:
             az bicep lint --file "$template"
           done
       - name: Run owned D lifecycle (no Terraform, no incident trigger)
+        env:
+          D_NOTIFICATION_EMAIL: ${{ inputs.action == 'deploy' && inputs.observability_autonomous && secrets.OBA_NOTIFICATION_EMAIL || '' }}
         run: bash scripts/scenario-d-bicep.sh
       - name: Deployment output locations
         if: success() && inputs.action == 'deploy'

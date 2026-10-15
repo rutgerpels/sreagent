@@ -49,6 +49,23 @@ class ScenarioDWorkflowTests(unittest.TestCase):
         self.assertIn("needs: validate-profile", read("deploy.yml"))
         self.assertIn("agent/scenario-c", read("deploy.yml"))
 
+    def test_opt_in_is_explicit_default_false_and_recipient_is_step_scoped(self):
+        text = read("scenario-d-bicep.yml")
+        self.assertEqual(len(re.findall(r"observability_autonomous:\s+(?:description: [^\n]+\s+)?type: boolean\s+default: false", text)), 2)
+        self.assertIn("OBA_NOTIFICATION_EMAIL:", text)
+        self.assertEqual(text.count("D_NOTIFICATION_EMAIL:"), 2)
+        self.assertEqual(text.count("inputs.action == 'deploy' && inputs.observability_autonomous && secrets.OBA_NOTIFICATION_EMAIL || ''"), 2)
+        job_env = text.split("    env:", 1)[1].split("    steps:", 1)[0]
+        self.assertNotIn("OBA_NOTIFICATION_EMAIL", job_env)
+        self.assertIn("D_OBSERVABILITY_AUTONOMOUS: ${{ inputs.observability_autonomous || false }}", job_env)
+        self.assertLess(text.index("optionsFromEnv(process.env)"), text.index("uses: azure/login@"))
+        self.assertNotIn("observability_autonomous", read("deploy.yml"))
+        self.assertNotIn("observability_autonomous", read("destroy.yml"))
+        for reference in re.findall(r"uses: ([^\n]+)", text):
+            self.assertRegex(reference, r"@[0-9a-f]{40}(?: |$)")
+        self.assertIn("environment: scenario-d", text)
+        self.assertIn("id-token: write", text)
+
     def test_d_destroy_rejects_ephemeral_mode(self):
         self.assertRegex(read("destroy.yml"), r"(?is)D.{0,200}ephemeral|ephemeral.{0,200}D")
 

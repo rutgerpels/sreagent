@@ -4,6 +4,7 @@ param deployerPrincipalId string
 param modelProvider string = 'MicrosoftFoundry'
 param modelName string = 'Automatic'
 var stem = ownership.stem
+var autonomous = ownership.?observabilityAutonomous ?? false
 var contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 var monitoringReader = '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
 var logsReader = '73c42c96-874c-492b-b04d-ab87d138a893'
@@ -46,11 +47,10 @@ resource oba 'Microsoft.Monitor/observabilityAgents@2026-05-01-preview' = {
   identity: { type: 'UserAssigned', userAssignedIdentities: { '${foundations.obaIdentityId}': {} } }
   properties: {
     monitoringAccountId: foundations.amwId
-    // Keep autonomous operations PAUSED. Auto is the documented schema value;
-    // do not invent a Manual enum. On-demand investigation is a separate UI flow.
-    enabled: false
+    // Default remains PAUSED. The lifecycle verifies opt-in prerequisites before this stage.
+    enabled: autonomous
     operations: [
-      { type: 'IssueCreation', mode: 'Auto', instructions: 'Group payment and downstream checkout failures from this resource group only. Include [OPS-REVIEW] in issue titles.' }
+      { type: 'IssueCreation', mode: 'Auto', instructions: autonomous ? 'Always create an issue for alert-payment-failures-${stem}. Correlate cascading alert-checkout-failures-${stem} into that single issue for this resource group only. Investigate the payment-to-checkout failure chain independently; do not change workloads or perform mitigations.' : 'Group payment and downstream checkout failures from this resource group only. Include [OPS-REVIEW] in issue titles.' }
       { type: 'Investigation', mode: 'Auto' }
     ]
   }
@@ -59,7 +59,7 @@ resource oba 'Microsoft.Monitor/observabilityAgents@2026-05-01-preview' = {
 resource target 'Microsoft.Monitor/observabilityAgents/monitoredResources@2026-05-01-preview' = {
   parent: oba
   name: 'appi-${stem}'
-  properties: { resourceId: foundations.appInsightsId, enabled: true, isAutonomous: false }
+  properties: { resourceId: foundations.appInsightsId, enabled: true, isAutonomous: autonomous }
 }
 resource amw 'Microsoft.Monitor/accounts@2023-04-03' existing = { name: 'amw-observability-${stem}' }
 // Match Microsoft's UAMI template: Monitoring Contributor on this AMW only.

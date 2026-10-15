@@ -1,5 +1,9 @@
 param ownership object
 param deployerPrincipalId string
+@secure()
+@description('Private acceptance recipient; empty for paused/default mode. Never output this value.')
+param notificationEmail string = ''
+var autonomous = ownership.?observabilityAutonomous ?? false
 var stem = ownership.stem
 var location = ownership.workloadLocation
 var tags = ownership.tags
@@ -53,13 +57,31 @@ resource ai 'Microsoft.Insights/components@2020-02-02' = {
   tags: tags
   properties: { Application_Type: 'web', WorkspaceResourceId: law.id, DisableLocalAuth: true, DisableIpMasking: false }
 }
-resource amw 'Microsoft.Monitor/accounts@2023-04-03' = {
+// Native exception: AVM action-group emailReceivers is not a secure parameter;
+// forwarding a recipient would persist it in nested deployment parameters.
+// One authoritative declaration: connectors-alerts references this group only.
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+  name: 'ag-sre-${stem}'
+  location: 'global'
+  tags: tags
+  properties: {
+    groupShortName: 'sreagent'
+    enabled: true
+    emailReceivers: autonomous ? [{ name: 'autonomous-acceptance', emailAddress: notificationEmail, useCommonAlertSchema: true }] : []
+  }
+}
+// The live provider supports 2026-04-03-preview, NOT 2026-09-03-preview.
+// actions.defaultActionGroups is confirmed by live GET and the published swagger;
+// the local compiler has no type for this supported preview API.
+#disable-next-line BCP081
+resource amw 'Microsoft.Monitor/accounts@2026-04-03-preview' = {
   name: 'amw-observability-${stem}'
   location: ownership.observabilityLocation
   tags: tags
-  // Public monitoring API is RBAC protected, not application ingress. The
-  // hosted OBA preview/operator cannot query it through the app private link.
-  properties: { publicNetworkAccess: 'Enabled' }
+  // Public monitoring API is RBAC protected, not application ingress.
+  properties: union({ publicNetworkAccess: 'Enabled' }, autonomous ? {
+    actions: { defaultActionGroups: [{ id: actionGroup.id }] }
+  } : {})
 }
 module vnet 'br/public:avm/res/network/virtual-network:0.9.0' = {
   name: 'network'
@@ -181,6 +203,7 @@ output foundations object = {
   appInsightsAppId: ai.properties.AppId
   workspaceId: law.id
   amwId: amw.id
+  actionGroupId: actionGroup.id
   environmentId: cae.id
   environmentDomain: cae.properties.defaultDomain
   actionIdentityId: actionIdentity.outputs.resourceId

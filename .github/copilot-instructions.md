@@ -216,7 +216,13 @@ remains required and supported for **A/B/C** and the **retained
 `infra/runner-d` runner foundation**. Never destroy `agentrg-d`, its
 VM/disk/VNet/NAT, or shared `rg-payd-tfstate` infrastructure as part of D
 workload teardown. All security rules above still apply to Bicep.
-Autonomous Observability issue creation is paused/unproven. Acceptance is an
+Autonomous Observability issue creation is paused/unproven **by default**. The
+explicit bounded opt-in is documented in
+`docs/scenario-d-observability-acceptance.md`: independent OBA issue creation
+and deep investigation, no OBA-to-SRE handoff, no workload mitigation, and
+no runtime/email success claim. It owns only an absence-checked subscription
+default AMW setting and one extra OBA Monitoring Reader grant; preserve v1
+cleanup and never adopt shared settings. The default manual acceptance is an
 on-demand investigation, saved issue, manual handoff, and SRE Review-mode
 recovery only after human approval. Preserve automatic SRE Review-mode diagnosis
 for only the exact deployed D payment-failure alert (`titleContains`); pausing
