@@ -68,13 +68,18 @@ export function validateOwnership(o, options) {
     requireThat(new RegExp(`^/subscriptions/${options.subscriptionId}/resourceGroups/[^/]+/providers/Microsoft.Network/privateDnsZones/${zone.replaceAll('.', '\\.')}$`, 'i').test(o[key]), 'Unexpected private DNS zone path.');
     if (!same(o[key].split('/')[4], o.resourceGroupName)) expectedLinks.push({ id: `${o[key]}/virtualNetworkLinks/app-${kind}-${o.stem}`, virtualNetworkId: o.appVnetId });
   }
-  requireThat(JSON.stringify(o.sharedDnsLinks) === JSON.stringify(expectedLinks), 'Shared DNS link ownership mismatch.');
+  // Azure CLI adds resourceGroup metadata to objects with resource IDs.
+  // Validate every owned path and array cardinality, not presentation metadata.
+  requireThat(Array.isArray(o.sharedDnsLinks) && o.sharedDnsLinks.length === expectedLinks.length &&
+    o.sharedDnsLinks.every((link, i) => same(link.id, expectedLinks[i].id) &&
+      same(link.virtualNetworkId, expectedLinks[i].virtualNetworkId)), 'Shared DNS link ownership mismatch.');
   const expectedDeployments = [
     { id: `${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}-roles` },
     { id: `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Resources/deployments/runner-peering-${o.stem}` },
     ...expectedLinks.map(l => ({ id: `${sub}/resourceGroups/${l.id.split('/')[4]}/providers/Microsoft.Resources/deployments/dns-${l.id.includes('/app-kv-') ? 'kv' : 'acr'}-${o.stem}` })),
   ];
-  requireThat(JSON.stringify(o.auxiliaryDeployments) === JSON.stringify(expectedDeployments), 'External deployment metadata ownership mismatch.');
+  requireThat(Array.isArray(o.auxiliaryDeployments) && o.auxiliaryDeployments.length === expectedDeployments.length &&
+    o.auxiliaryDeployments.every((item, i) => same(item.id, expectedDeployments[i].id)), 'External deployment metadata ownership mismatch.');
   return o;
 }
 export function createIO(executeCommand) {

@@ -85,6 +85,23 @@ test('durable ownership allows only exact D grants, retained runner peering and 
     const o = ownership(true); mutate(o); assert.throws(() => validateOwnership(o, options));
   }
 });
+test('ownership tolerates CLI resourceGroup metadata but still rejects changed or additional paths', () => {
+  const o = ownership(true);
+  for (const item of [...o.sharedDnsLinks, ...o.auxiliaryDeployments]) {
+    if (item.id.includes('/resourceGroups/')) item.resourceGroup = item.id.split('/')[4];
+  }
+  validateOwnership(o, options);
+  for (const mutate of [
+    value => value.sharedDnsLinks[0].virtualNetworkId = value.runnerVnetId,
+    value => value.sharedDnsLinks.push(value.sharedDnsLinks[0]),
+    value => value.auxiliaryDeployments[1].id = value.resourceGroupId,
+    value => value.auxiliaryDeployments.push(value.auxiliaryDeployments[0]),
+  ]) {
+    const changed = structuredClone(o);
+    mutate(changed);
+    assert.throws(() => validateOwnership(changed, options));
+  }
+});
 test('destroy reads fresh principals before deletion, persists snapshot and deletes ledger last', async () => {
   const o = ownership(true); const io = mock(o); await destroy(io, o);
   const firstDelete = io.events.findIndex(e => e[0] === 'delete');
