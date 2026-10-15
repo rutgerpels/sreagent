@@ -5,7 +5,10 @@
 > manual handoff → SRE Review-mode recovery after human approval. Autonomous
 > issue creation remains **PAUSED / UNPROVEN by default**. A separate
 > [bounded autonomous acceptance opt-in](scenario-d-observability-acceptance.md)
-> has no Observability-to-SRE handoff and does not claim runtime success.
+> has no Observability-to-SRE handoff. Its 2026-10-15 test verified fresh
+> deployment and ordinary alert email, but failed autonomous issue/investigation
+> acceptance. The fault was reset and OBA paused; hybrid work awaits
+> [a decision](https://github.com/rutgerpels/sreagent/issues/90).
 > Historical 2026-10-13 results
 > below describe the deleted legacy Terraform/portal deployment, not the new
 > Bicep environment. No successful new live rehearsal is claimed here.

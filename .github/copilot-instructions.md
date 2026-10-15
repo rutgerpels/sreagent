@@ -220,7 +220,10 @@ Autonomous Observability issue creation is paused/unproven **by default**. The
 explicit bounded opt-in is documented in
 `docs/scenario-d-observability-acceptance.md`: independent OBA issue creation
 and deep investigation, no OBA-to-SRE handoff, no workload mitigation, and
-no runtime/email success claim. It owns only an absence-checked subscription
+no inference of runtime/email success from configuration. The first opt-in
+test verified ordinary alert email but produced no autonomous issue or
+investigation; preserve that failed gate and the decision tracked in #90.
+It owns only an absence-checked subscription
 default AMW setting and one extra OBA Monitoring Reader grant; preserve v1
 cleanup and never adopt shared settings. The default manual acceptance is an
 on-demand investigation, saved issue, manual handoff, and SRE Review-mode

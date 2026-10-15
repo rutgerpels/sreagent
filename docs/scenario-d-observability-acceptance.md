@@ -1,12 +1,14 @@
 # Scenario D — opt-in autonomous Observability acceptance
 
-This is a **configuration-only, default-off** addition to the healthy Bicep
-baseline. It is not hybrid/country functionality. Legacy D deployment entry
+This is an **opt-in, default-off** addition to the healthy Bicep baseline.
+The first live test verified deployment and ordinary alert email, but failed
+autonomous issue/investigation acceptance; see the dated evidence below.
+It is not hybrid/country functionality. Legacy D deployment entry
 points keep OBA paused; A/B/C, the retained runner, SRE Review mode, global
 write-tool `ask`, exact payment-alert filter and no schedules are unchanged.
 
-In this separate test OBA independently correlates alerts, creates an issue,
-and automatically deep-investigates **its own agent-created issue**. There is
+In this separate test OBA is expected to independently correlate alerts, create
+an issue, and automatically deep-investigate **its own agent-created issue**. There is
 **no Observability-to-SRE handoff**, no handoff title marker and no OBA workload
 mitigation. SRE remains a genuinely human-approved repair agent, not an
 automatically approved fallback. Stop SRE separately for isolated OBA acceptance.
@@ -126,7 +128,9 @@ investigation completion or email delivery.**
 2. Produce **one** payment incident with synthetic checkout traffic and retain
    the new exact payment/checkout alert IDs and timestamps. Do not replay faults
    or invoke a manual investigation to turn a failed autonomous gate green.
-3. Observe for **at most 20 minutes after the new alerts**. Require an
+3. Observe until an **absolute deadline 20 minutes after the first new alert**.
+   Subtract elapsed time when switching observers; do not start another full
+   twenty-minute timer after discovering the alerts. Require an
    **agent-created** issue correlating payment cause and cascading checkout,
    followed by its automatic deep investigation. Record source evidence,
    issue/investigation IDs and times using private operator tooling.
@@ -139,9 +143,65 @@ investigation completion or email delivery.**
 
 **Historical evidence is unchanged:** previous automated issue attempts failed
 even after the AMW notification action-group association was verified. See the
-[historical Scenario D evidence](scenario-d-private-payments.md). This change
-claims no new runtime or email success. Parent/operator tooling owns the live
-reads, fault/reset controls and bounded observation; none is executed here.
+[historical Scenario D evidence](scenario-d-private-payments.md). Configuration
+alone establishes neither autonomous execution nor email delivery.
+Parent/operator tooling owns the live reads, fault/reset controls and bounded
+observation; deployment does not execute them.
+
+## Live acceptance evidence: 2026-10-15
+
+**Result: the autonomous gate failed; hybrid implementation remains deferred.**
+This is an observed bounded failure, not a confirmed product defect or proof
+that autonomous Observability never works. The action-required escalation or
+fallback decision is tracked in [#90](https://github.com/rutgerpels/sreagent/issues/90).
+
+The fresh Bicep baseline deployed successfully from
+`6b95dabed97920adab50a0ea6be6bd009089f5af` in
+[workflow run 38743885660](https://github.com/rutgerpels/sreagent/actions/runs/38743885660).
+The newly deployed SRE Agent was stopped for isolation. Independent reads
+confirmed the enabled OBA parent, both Auto operations, autonomous App Insights
+target, exact three OBA grants, subscription default workspace binding, AMW
+notification group and requested private recipient.
+
+All times below are UTC. Resource IDs, identities, recipient, mailbox content
+and raw observations remain in private operator evidence, not this repository.
+
+| Gate | Observed result |
+| --- | --- |
+| Healthy preparation | 106 successful synthetic checkouts, zero failures/unexpected responses, no initial alerts or issues. Dependency/request joins proved both frontend-to-checkout and checkout-to-payment hops. |
+| One deliberate fault | Requested at 14:10:07. Payment alert fired at 14:14:41; cascading checkout alert at 14:15:39. Both were New/Fired and unsuppressed. |
+| Ordinary alert email | Actual mailbox receipt at 14:14:52 and 14:15:56, independently confirmed through a narrowly scoped read. |
+| Autonomous issue/deep investigation | Observer ran 14:16:38-14:36:41. All 18 snapshots contained **zero issues and zero investigation results**, while 213 checkouts failed and none returned an unexpected response. |
+| Failure telemetry | 269 failing joined operations on each dependency hop; telemetry connected the payment failure and downstream checkout symptom. This is operator evidence, not an OBA diagnosis. |
+| OBA issue-notification email | **Not exercised or verified**: no agent-created issue existed. Ordinary alert email does not satisfy this gate. |
+| Operator recovery | One explicit flag-off reset requested at 14:37:29. The reset revision settled; the subsequent ten-minute observation confirmed 109 successful checkouts and zero failures/unexpected responses. Fresh request telemetry from all three roles showed no failures. |
+| Alert recovery | Both alerts still showed Fired in the 14:48:40 snapshot. Healthy application recovery is verified; natural alert resolution was not yet verified at that observation. |
+
+These stateful log alerts evaluate every five minutes. Azure Monitor documents
+resolution after three clear frequency periods for this cadence, so a healthy
+reset does not immediately clear the alert. Keep the [alert state and health
+checks separate](https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-overview#stateful-alerts);
+do not manually close an alert to manufacture monitor-condition recovery.
+
+The runtime observer used a twenty-minute relative timer after launch, ending
+about **22 minutes after the first alert**, rather than the intended absolute
+alert-anchored deadline. The invocation procedure above now makes that boundary
+explicit. No additional incident or sliding retry window was started.
+
+OBA was paused after the test using the documented partial-update operation
+with `properties.enabled=false`; an independent GET confirmed it, with the
+workspace and operation configuration preserved. SRE remained stopped.
+Synthetic test traffic stopped. The healthy test infrastructure and retained
+private runner were retained, not destroyed. This operational pause is recorded
+separately from the immutable version-2 ownership mode; redeploying that owner
+with `observability_autonomous=false` is not the pause/reset mechanism.
+
+No manual issue, manual deep investigation, SRE repair approval, broad extra
+permissions or repeat fault was used to manufacture autonomous success. The
+private record preserves the fault/reset intents, healthy/fault/recovery traces,
+issue/alert snapshots, identity grants and configuration before pausing.
+Recommended next action is provider-side diagnosis using that evidence, or
+explicit approval of an on-demand Observability fallback before hybrid work.
 
 ## Official references
 
@@ -149,5 +209,6 @@ reads, fault/reset controls and bounded observation; none is executed here.
 - [Bicep resource creation and identity requirements](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource-create-template)
 - [Issue creation and subscription association](https://learn.microsoft.com/azure/azure-monitor/aiops/issues-how-to)
 - [Portal notifications](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-resource-create-portal)
+- [Published OBA partial-update contract](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/monitoringservice/resource-manager/Microsoft.Monitor/Agents/preview/2026-05-01-preview/agents.json)
 - [Published AMW action shape](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/monitoringservice/resource-manager/Microsoft.Monitor/Accounts/preview/2026-09-03-preview/examples/AzureMonitorWorkspaces_CreateOrUpdate_MaximumSet_Gen.json)
   (shape reference only; the implementation uses live-supported 2026-04-03-preview).
