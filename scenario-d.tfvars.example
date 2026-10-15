@@ -1,0 +1,53 @@
+# LEGACY REFERENCE ONLY: Scenario D workload now uses infra/scenario-d Bicep.
+# Deploy/destroy via deploy.yml/destroy.yml D routes, never terraform apply.
+###############################################################################
+# ContosoPay Scenario D - EXAMPLE variables (private "payments fail" demo).
+# Copy to `scenario-d.tfvars` (git-ignored). Placeholders only - no real IDs.
+#
+# Scenario D is a SEPARATE deployment from A/B/C: own prefix, resource groups,
+# state, telemetry, alerts, identities, DNS and runner network.
+###############################################################################
+
+prefix      = "payd"
+environment = "demo"
+location    = "swedencentral"
+
+scenario = "D"
+
+# Desired state is healthy. The incident is a live deviation set by
+# scripts/trigger-incident-payments.* - never commit "unavailable" here, or a
+# later terraform apply would re-arm the fault.
+payment_failure_mode = "off"
+
+# Alert evaluation. Azure Monitor rejects 1-minute rules until the queried
+# table already holds data, so the first deploy uses 5. After traffic has
+# flowed, set frequency to 1 and re-apply to tighten trigger-to-alert latency.
+payment_alert_window_minutes    = 1
+payment_alert_frequency_minutes = 5
+
+# Existing private runner network dedicated to Scenario D. A VNet can link to
+# only one private DNS zone per namespace, so do not reuse Scenario C's runner
+# VNet unless you also pass the shared zone IDs below.
+runner_vnet_resource_group          = "agentrg-d"
+runner_vnet_name                    = "agent-vnet-d"
+runner_private_endpoint_subnet_name = "private-endpoints"
+
+# Non-overlapping with Scenario C defaults (10.100.0.0/16).
+app_vnet_address_space                     = "10.101.0.0/16"
+app_private_endpoint_subnet_address_prefix = "10.101.0.0/27"
+container_apps_subnet_address_prefix       = "10.101.0.64/27"
+sre_agent_subnet_address_prefix            = "10.101.0.96/27"
+
+# Leave empty to create and link dedicated private DNS zones.
+key_vault_private_dns_zone_id = ""
+acr_private_dns_zone_id       = ""
+
+enable_grafana = false
+
+# Owned by the deployment workflow: SHA tag + immutable ACR manifest digests.
+image_tag = "0000000000000000000000000000000000000000"
+image_digests = {
+  frontend        = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  checkout-api    = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  payment-service = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

@@ -18,8 +18,9 @@ resource "azurerm_monitor_action_group" "this" {
 }
 
 # Working-set memory alert on payment-service. Only created once the apps exist.
+# Scenario D uses request-failure alerts instead, so it is skipped there.
 resource "azurerm_monitor_metric_alert" "payment_memory" {
-  count = var.deploy_apps ? 1 : 0
+  count = var.deploy_apps && var.scenario != "D" ? 1 : 0
 
   name                = "alert-payment-memory-${local.suffix}"
   resource_group_name = azurerm_resource_group.this.name
@@ -42,6 +43,84 @@ resource "azurerm_monitor_metric_alert" "payment_memory" {
 
   action {
     action_group_id = azurerm_monitor_action_group.this.id
+  }
+
+  tags = local.tags
+}
+
+# Scenario D: request-failure alerts on Application Insights. Probes
+# (/health, /ready) are excluded so only real order traffic counts. Windows are
+# short and static so the alert fires within minutes of the fault starting.
+locals {
+  payment_alert_enabled = var.scenario == "D" && var.deploy_apps
+  payment_alert_freq    = "PT${var.payment_alert_frequency_minutes}M"
+  # The window must cover the evaluation interval or failures fall between runs.
+  payment_alert_window = "PT${max(var.payment_alert_window_minutes, var.payment_alert_frequency_minutes)}M"
+}
+
+# The only alert the SRE Agent response plan targets.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "payment_failures" {
+  count = local.payment_alert_enabled ? 1 : 0
+
+  name                    = "alert-payment-failures-${local.suffix}"
+  resource_group_name     = azurerm_resource_group.this.name
+  location                = azurerm_resource_group.this.location
+  description             = "payment-service /pay requests are failing (payment processor unavailable)."
+  severity                = 2
+  enabled                 = true
+  evaluation_frequency    = local.payment_alert_freq
+  window_duration         = local.payment_alert_window
+  scopes                  = [azurerm_application_insights.this.id]
+  auto_mitigation_enabled = true
+
+  criteria {
+    query                   = <<-KQL
+      requests
+      | where cloud_RoleName == "payment-service"
+      | where name has "/pay" and name !has "health" and name !has "ready"
+      | where success == false
+    KQL
+    time_aggregation_method = "Count"
+    operator                = "GreaterThanOrEqual"
+    threshold               = 3
+  }
+
+  action {
+    action_groups = [azurerm_monitor_action_group.this.id]
+  }
+
+  tags = local.tags
+}
+
+# Customer-impact evidence for the investigation. Not an SRE Agent trigger.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "checkout_failures" {
+  count = local.payment_alert_enabled ? 1 : 0
+
+  name                    = "alert-checkout-failures-${local.suffix}"
+  resource_group_name     = azurerm_resource_group.this.name
+  location                = azurerm_resource_group.this.location
+  description             = "checkout-api order requests are failing."
+  severity                = 2
+  enabled                 = true
+  evaluation_frequency    = local.payment_alert_freq
+  window_duration         = local.payment_alert_window
+  scopes                  = [azurerm_application_insights.this.id]
+  auto_mitigation_enabled = true
+
+  criteria {
+    query                   = <<-KQL
+      requests
+      | where cloud_RoleName == "checkout-api"
+      | where name has "/checkout" and name !has "health" and name !has "ready"
+      | where success == false
+    KQL
+    time_aggregation_method = "Count"
+    operator                = "GreaterThanOrEqual"
+    threshold               = 3
+  }
+
+  action {
+    action_groups = [azurerm_monitor_action_group.this.id]
   }
 
   tags = local.tags

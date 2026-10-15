@@ -56,8 +56,8 @@ output "app_insights_name" {
 }
 
 output "observability_agent_onboarding" {
-  description = "Scenario A only: nonsecret prerequisites for portal-owned autonomous Observability Agent onboarding; null for B/C. This does not provision the agent."
-  value = var.scenario == "A" ? {
+  description = "Scenarios A and D: nonsecret Observability Agent details; null for B/C. Scenario D also provisions the agent resource (observability_agent_name); Scenario A is portal-onboarded."
+  value = local.observability_agent_enabled ? {
     resource_group_name              = azurerm_resource_group.this.name
     location                         = azurerm_monitor_workspace.observability_agent[0].location
     workspace_name                   = azurerm_monitor_workspace.observability_agent[0].name
@@ -66,8 +66,11 @@ output "observability_agent_onboarding" {
     managed_identity_resource_id     = azurerm_user_assigned_identity.observability_agent[0].id
     application_insights_name        = azurerm_application_insights.this.name
     application_insights_resource_id = azurerm_application_insights.this.id
-    memory_alert_name                = var.deploy_apps ? azurerm_monitor_metric_alert.payment_memory[0].name : null
-    custom_instructions = join("\n", [
+    memory_alert_name                = var.scenario == "A" && var.deploy_apps ? azurerm_monitor_metric_alert.payment_memory[0].name : null
+    payment_failure_alert_name       = local.payment_alert_enabled ? azurerm_monitor_scheduled_query_rules_alert_v2.payment_failures[0].name : null
+    checkout_failure_alert_name      = local.payment_alert_enabled ? azurerm_monitor_scheduled_query_rules_alert_v2.checkout_failures[0].name : null
+    observability_agent_name         = local.observability_agent_d_enabled ? azapi_resource.observability_agent[0].name : null
+    custom_instructions = var.scenario == "D" ? local.observability_agent_d_instructions : join("\n", [
       "Always create an issue for alert-payment-memory-${local.suffix}, even when it is the only fired alert.",
       "The payment-service cloud role belongs to the ContosoPay checkout dependency chain: frontend calls checkout-api, which calls payment-service.",
       "The checkout and payment paths are business-critical.",
@@ -83,17 +86,17 @@ output "container_app_environment" {
 }
 
 output "app_vnet_name" {
-  description = "Scenario C application VNet name; null for public scenarios A/B."
+  description = "Private-network application VNet name (scenarios C and D); null for public scenarios A/B."
   value       = local.profile.private_network_enabled ? azurerm_virtual_network.app[0].name : null
 }
 
 output "sre_agent_subnet_name" {
-  description = "Scenario C dedicated delegated SRE Agent subnet name; null for A/B."
+  description = "Scenarios C and D dedicated delegated SRE Agent subnet name; null for A/B."
   value       = local.profile.private_network_enabled ? azurerm_subnet.sre_agent[0].name : null
 }
 
 output "sre_agent_subnet_id" {
-  description = "Scenario C dedicated delegated SRE Agent subnet ID; null for A/B."
+  description = "Scenarios C and D dedicated delegated SRE Agent subnet ID; null for A/B."
   value       = local.profile.private_network_enabled ? azurerm_subnet.sre_agent[0].id : null
 }
 

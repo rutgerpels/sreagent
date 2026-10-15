@@ -1,0 +1,129 @@
+name: Scenario D Bicep
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Deploy healthy baseline or completely destroy the owned workload'
+        type: choice
+        options: [deploy, destroy]
+        default: deploy
+      prefix:
+        description: 'D-only prefix (2-8 lowercase characters)'
+        type: string
+        default: payd
+      environment:
+        description: 'D environment label'
+        type: string
+        default: demo
+      generation:
+        description: 'Stable lifecycle generation; change only after complete destroy'
+        type: string
+        default: bicep1
+      confirm_destroy:
+        description: 'Destroy: exact ownership deployment name, e.g. scenario-d-payd-demo-d-bicep1'
+        type: string
+        default: ''
+      key_vault_zone_id:
+        description: 'Optional existing zone already linked to retained runner (auto-discovered otherwise)'
+        type: string
+        default: ''
+      acr_zone_id:
+        description: 'Optional existing zone already linked to retained runner (auto-discovered otherwise)'
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      action:
+        type: string
+        required: true
+      prefix:
+        type: string
+        default: payd
+      environment:
+        type: string
+        default: demo
+      generation:
+        type: string
+        default: bicep1
+      confirm_destroy:
+        type: string
+        default: ''
+      workload_location:
+        type: string
+        default: swedencentral
+      key_vault_zone_id:
+        type: string
+        default: ''
+      acr_zone_id:
+        type: string
+        default: ''
+      reject_legacy_flags:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# All D deploy/destroy profiles share the retained runner/VNet boundary and fixed CIDR.
+# One global lock includes calls from legacy dispatch; no per-prefix overlap.
+# Do not use the caller's concurrency group (a recursive lock would deadlock).
+concurrency:
+  group: scenario-d-private-runner-agentrg-d-agent-vnet-d
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    runs-on: [self-hosted, Linux, X64, azure-private-d, contosopay]
+    environment: scenario-d
+    timeout-minutes: 120
+    env:
+      SCENARIO_D_PRIVATE_RUNNER: 'true'
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      D_ACTION: ${{ inputs.action }}
+      D_PREFIX: ${{ inputs.prefix }}
+      D_ENVIRONMENT: ${{ inputs.environment }}
+      D_GENERATION: ${{ inputs.generation }}
+      D_CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+      D_WORKLOAD_LOCATION: ${{ inputs.workload_location || 'swedencentral' }}
+      D_OBSERVABILITY_LOCATION: westeurope
+      D_KEY_VAULT_ZONE_ID: ${{ inputs.key_vault_zone_id }}
+      D_ACR_ZONE_ID: ${{ inputs.acr_zone_id }}
+      SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
+      SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
+    steps:
+      - name: Checkout requested feature ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Validate D request before Azure login
+        env:
+          REJECT_LEGACY_FLAGS: ${{ inputs.reject_legacy_flags || false }}
+        run: |
+          set -euo pipefail
+          [[ "$REJECT_LEGACY_FLAGS" == false ]] || { echo 'Scenario D rejects Terraform force/state deletion, ephemeral and incident-PR flags.' >&2; exit 1; }
+          node --input-type=module -e "import { optionsFromEnv } from './scripts/lib/scenario-d-lifecycle.mjs'; optionsFromEnv(process.env);"
+          node --test scripts/tests/scenario-d-lifecycle.test.mjs
+      - name: Azure OIDC login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Pin Bicep and validate templates
+        run: |
+          set -euo pipefail
+          az bicep install --version v0.48.1
+          for template in infra/scenario-d/*.bicep; do
+            az bicep build --file "$template" --stdout >/dev/null
+            az bicep lint --file "$template"
+          done
+      - name: Run owned D lifecycle (no Terraform, no incident trigger)
+        run: bash scripts/scenario-d-bicep.sh
+      - name: Deployment output locations
+        if: success() && inputs.action == 'deploy'
+        run: |
+          printf 'Frontend URL: scenario-d-apps group-deployment output frontendUrl.\n'
+          printf 'Agents: scenario-d-agents group-deployment output agents.\n'
+          printf 'Ownership: subscription deployment scenario-d-%s-%s-d-%s.\n' "$D_PREFIX" "$D_ENVIRONMENT" "$D_GENERATION"

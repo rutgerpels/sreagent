@@ -17,7 +17,7 @@ it is not a replacement for the runnable walkthroughs below.
 The selected follow-up is documented in the
 [Scenario D private payment-failure plan](docs/scenario-d-private-payments-plan.md):
 a separate deployment with both agents, policy-aware RBAC and its own private
-PaaS networking. **Plan only; not a runnable fourth scenario yet.**
+PaaS networking. **Scenario D now has a dedicated Bicep lifecycle; see the [active walkthrough](docs/scenario-d-private-payments.md). New live validation is pending.**
 
 ---
 
@@ -53,7 +53,8 @@ Three Node.js/TypeScript services on Azure Container Apps:
 
 Around them: Azure Container Registry, Key Vault, Application Insights, Log
 Analytics, Azure Monitor alerting, and optional Azure Managed Grafana. Terraform
-owns the demo infrastructure. GitHub Actions authenticates with OpenID Connect —
+owns A/B/C and the retained private-runner foundation; Bicep owns the
+separate Scenario D workload. GitHub Actions authenticates with OpenID Connect —
 there are no stored Azure credentials.
 
 **Scenario A additionally pairs the Azure Copilot Observability Agent with SRE
@@ -215,7 +216,29 @@ or when the audience cares about change management but not about private
 networking. If you can afford C's setup, prefer C — it is the stronger version
 of the same demo.
 
+### [Scenario D — payments fail, checkout fails with them](docs/scenario-d-private-payments.md)
+
+*Show the two agents side by side.* **Bicep redesign implemented; new live dry-run pending.**
+
+A separate private-network deployment where the payment processor becomes
+unavailable and every checkout fails with it. The Observability Agent
+investigates on demand, and the operator saves an issue; the SRE Agent, in Review mode, proposes
+the flag-off fix once the operator hands it the Observability evidence. A
+human approves. D runs alongside A/B/C without touching them, and its
+10-minute target is a rehearsal goal that has not been measured. D uses
+`infra/scenario-d` Bicep through the existing manual `deploy.yml` / `destroy.yml`
+D routes (reusable `scenario-d-bicep.yml`), never Terraform for the workload.
+Only the retained runner foundation remains Terraform. Autonomous Observability
+issue creation is paused; SRE automatic diagnosis remains enabled in Review mode
+for only the exact deployed payment-failure alert. The paired dry-run still uses
+an on-demand Observability investigation and manual evidence handoff; recovery
+requires human approval.
+
 ### Side by side
+
+Scenario D is described in its [walkthrough](docs/scenario-d-private-payments.md).
+For comparison with A, it is High / Contributor / Review (direct fix after
+approval, no GitOps), reconciled like C. The table compares A, B and C.
 
 | | Scenario A | Scenario B | Scenario C |
 | --- | --- | --- | --- |
@@ -265,12 +288,14 @@ See [the permission model](https://learn.microsoft.com/azure/sre-agent/permissio
 
 ---
 
-## One scenario at a time
+## One active A/B/C scenario at a time
 
 Terraform takes a single `scenario` value (`A`, `B`, or `C`) and derives the
 entire profile — networking, agent permissions, runner, and remediation path —
 from it. Resource names, the state storage account, and the state blob key all
-include the scenario, so each profile is fully isolated.
+include the scenario, so each profile is fully isolated. Scenario D is an
+independent manual Bicep side deployment with its own Azure ownership ledger;
+it does not change A/B/C activation variables or migrate their state.
 
 **In-place conversion between scenarios is unsupported** and is rejected by
 every deployment path. To switch: destroy the active profile, delete the
@@ -304,6 +329,7 @@ when something breaks, not to run the demo.
 | [Scenario A walkthrough](docs/scenario-a-direct.md) | Step-by-step, start to teardown |
 | [Scenario B walkthrough](docs/scenario-b-gitops.md) | Step-by-step, start to teardown |
 | [Scenario C walkthrough](docs/scenario-c-private-gitops.md) | Step-by-step, start to teardown |
+| [Scenario D walkthrough](docs/scenario-d-private-payments.md) | Operator setup, paired-agent run, teardown |
 | [Deployment and state reference](docs/deployment-reference.md) | OIDC setup, activation markers, state isolation, teardown, security invariants, repository map |
 | [SRE Agent setup reference](docs/sre-agent-setup.md) | Background on the shared agent model across all three scenarios |
 | [AKS variant](docs/aks-variant.md) | Notes for a Kubernetes-native deployment |

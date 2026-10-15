@@ -1,5 +1,14 @@
 # Deployment and state reference
 
+> **Scenario D exception:** the user-approved D workload is Bicep-only in
+> `infra/scenario-d`. Existing `deploy.yml` and `destroy.yml` D selections call
+> reusable `scenario-d-bicep.yml` from the requested feature ref, with all
+> Terraform jobs skipped. Follow the [Scenario D lifecycle](scenario-d-private-payments.md#deploy-restart-and-teardown),
+> not the Terraform state/deployment commands below. A/B/C and the retained
+> `infra/runner-d` foundation remain Terraform. D teardown retains `agentrg-d`
+> and `rg-payd-tfstate` and never deallocates its own runner.
+
+
 Operational detail shared by all three scenario walkthroughs. Read the
 [README](../README.md) first; come here when a walkthrough links to
 a specific section.
@@ -100,6 +109,7 @@ profile**. It is not a set of independent toggles.
 | **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
 | **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Code Access, signed in with a user account (OAuth); no connector and no token |
 | **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
+| **D** | High access, Contributor, Review; Terraform plus API reconciliation | Private ACR and Key Vault endpoints in its own VNet; private self-hosted runner | None (no GitOps); direct change after human approval |
 
 Reader describes workload access, not the identities' entire permission set.
 Both agent identities also hold subscription-level Monitoring Contributor for

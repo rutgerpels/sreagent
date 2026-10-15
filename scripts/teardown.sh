@@ -33,7 +33,7 @@ done
 
 readonly SCENARIO_PATTERN='^(A|B|C)$'
 [[ "${SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || {
-    echo "--scenario A, B, or C is required." >&2
+    echo "--scenario A, B, or C is required. Scenario D uses Bicep destroy via destroy.yml/scenario-d-bicep.yml, never Terraform." >&2
     exit 1
 }
 

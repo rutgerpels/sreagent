@@ -5,10 +5,13 @@
 ###############################################################################
 
 resource "azurerm_container_app_environment" "this" {
-  name                       = "cae-${local.suffix}"
-  resource_group_name        = azurerm_resource_group.this.name
-  location                   = azurerm_resource_group.this.location
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+  name                = "cae-${local.suffix}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  # Scenario D uses the Azure Monitor logs destination (routed by the
+  # diag-aca-env diagnostic setting), avoiding Log Analytics shared keys.
+  logs_destination           = var.scenario == "D" ? "azure-monitor" : null
+  log_analytics_workspace_id = var.scenario == "D" ? null : azurerm_log_analytics_workspace.this.id
   infrastructure_subnet_id   = local.profile.private_network_enabled ? azurerm_subnet.container_apps[0].id : null
   public_network_access      = "Enabled"
   tags                       = local.tags
@@ -53,15 +56,20 @@ locals {
       max_replicas = var.payment_max_replicas
       cpu          = var.payment_container_cpu
       memory       = var.payment_container_memory
-      env = [
+      env = concat([
         { name = "SERVICE_NAME", value = "payment-service" },
         { name = "PORT", value = "8080" },
-        { name = "ENABLE_SLOW_LEAK", value = tostring(var.enable_slow_leak) },
+        # Scenario D proves the payment outage in isolation; never leak there.
+        { name = "ENABLE_SLOW_LEAK", value = var.scenario == "D" ? "false" : tostring(var.enable_slow_leak) },
         { name = "LEAK_INTERVAL_MS", value = tostring(var.leak_interval_ms) },
         { name = "LEAK_CHUNK_KB", value = tostring(var.leak_chunk_kb) },
         { name = "LEAK_TARGET_CROSSING_SECONDS", value = tostring(var.leak_target_crossing_seconds) },
         { name = "MEMORY_ALERT_THRESHOLD_BYTES", value = tostring(var.memory_alert_threshold_bytes) },
-      ]
+        ],
+        # Terraform desired state is healthy ("off"). The trigger script sets the
+        # live value to "unavailable"; any later apply restores "off".
+        var.scenario == "D" ? [{ name = "PAYMENT_FAILURE_MODE", value = var.payment_failure_mode }] : []
+      )
     }
   }
 }
@@ -137,6 +145,15 @@ resource "azurerm_container_app" "app" {
       env {
         name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         secret_name = "appinsights-connection-string"
+      }
+
+      # Scenario D telemetry authenticates with the app's managed identity only.
+      dynamic "env" {
+        for_each = var.scenario == "D" ? [1] : []
+        content {
+          name  = "TELEMETRY_MANAGED_IDENTITY_CLIENT_ID"
+          value = azurerm_user_assigned_identity.app[each.key].client_id
+        }
       }
 
       liveness_probe {

@@ -80,6 +80,53 @@ test("renders no Code Access credential values", () => {
   assert.match(rendered, /Key Vault references from environment/);
 });
 
+test("loads Scenario D without Code Access or knowledge", () => {
+  const desired = loadDesiredState(resolve("agent/scenario-d"), { SRE_PAYMENT_FAILURE_ALERT_NAME: "alert-payment-failures-d-abcdefgh" });
+  assert.equal(desired.managedTag, "contosopay-scenario-d");
+  assert.equal(desired.codeAccess.absent, true);
+  assert.equal(desired.codeAccess.enabled, false);
+  assert.deepEqual(desired.knowledge, []);
+  assert.equal(desired.expectedAgent.accessLevel, "High");
+  assert.equal(desired.expectedAgent.actionMode, "Review");
+  assert.equal(desired.subagents[0].name, "payment-recovery");
+  assert.equal(desired.incidentFilters[0].properties.handlingAgent, "payment-recovery");
+  assert.equal(renderDesiredState(desired).codeAccess.enabled, false);
+});
+
+test("Scenario D permits writes only through the approval prompt", () => {
+  const { permissions } = loadDesiredState(resolve("agent/scenario-d"), { SRE_PAYMENT_FAILURE_ALERT_NAME: "alert-payment-failures-d-abcdefgh" });
+  const rendered = JSON.stringify(permissions);
+  assert.match(rendered, /RunAzCliWriteCommands/);
+  assert.equal(permissions.allow.includes("RunAzCliWriteCommands"), false);
+  assert.equal(permissions.ask.includes("RunAzCliWriteCommands"), true);
+  assert.equal(permissions.deny.includes("RunKubectlWriteCommand"), true);
+});
+
+test("tags extended resources with the scenario managed tag", () => {
+  assert.deepEqual(
+    buildExtendedBody("x", "ScheduledTask", {}, "contosopay-scenario-d").tags,
+    ["contosopay-scenario-d"],
+  );
+  assert.equal(
+    extendedResourceMatches(
+      "agents",
+      { name: "x", type: "ExtendedAgent", tags: ["contosopay-scenario-c"], properties: {} },
+      { name: "x", type: "ExtendedAgent", properties: {} },
+      "contosopay-scenario-d",
+    ),
+    false,
+  );
+  assert.equal(
+    extendedResourceMatches(
+      "agents",
+      { name: "x", type: "ExtendedAgent", tags: ["contosopay-scenario-d"], properties: {} },
+      { name: "x", type: "ExtendedAgent", properties: {} },
+      "contosopay-scenario-d",
+    ),
+    true,
+  );
+});
+
 test("builds the documented extended-agent envelope", () => {
   assert.deepEqual(
     buildExtendedBody("health", "ScheduledTask", { isEnabled: true }),

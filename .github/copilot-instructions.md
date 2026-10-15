@@ -30,7 +30,7 @@ These constraints come directly from the project owner. Treat them as acceptance
 
 | # | Requirement | Implication for generated code |
 |---|-------------|--------------------------------|
-| R1 | **Infrastructure as Code = Terraform** | No Bicep/ARM for infra. Terraform `azurerm` provider only. |
+| R1 | **Infrastructure as Code = Terraform for A/B/C and retained runner** | Scenario D workload has the explicitly approved Bicep exception below; no A/B/C migration. |
 | R2 | **Single-command deployment** | One `deploy.sh` / `deploy.ps1` wrapper that runs `terraform init/plan/apply` + app build/push + seed data. |
 | R3 | **Local redundancy is acceptable** | Use **LRS** storage, **non-zone-redundant** SKUs. Do not pay for ZRS/GRS. |
 | R4 | **Minimize public endpoints** | Only the `frontend` app is publicly reachable. Everything else uses internal ingress / private networking. |
@@ -206,6 +206,24 @@ Copilot must follow these without exception:
 
 ---
 
+## Scenario D — explicitly approved Bicep exception
+
+The user explicitly approved the Scenario D Bicep redesign on 2026-10-15.
+**Scenario D workload infrastructure uses `infra/scenario-d` Bicep only**;
+`deploy.yml` / `destroy.yml` route D to reusable `scenario-d-bicep.yml` on the
+private runner. Do not revert D to Terraform or run two owners. Terraform
+remains required and supported for **A/B/C** and the **retained
+`infra/runner-d` runner foundation**. Never destroy `agentrg-d`, its
+VM/disk/VNet/NAT, or shared `rg-payd-tfstate` infrastructure as part of D
+workload teardown. All security rules above still apply to Bicep.
+Autonomous Observability issue creation is paused/unproven. Acceptance is an
+on-demand investigation, saved issue, manual handoff, and SRE Review-mode
+recovery only after human approval. Preserve automatic SRE Review-mode diagnosis
+for only the exact deployed D payment-failure alert (`titleContains`); pausing
+Observability does not disable SRE or permit broad subscription-wide Sev2 pickup.
+Every Bicep create requires a successful matching what-if preview first,
+including safe ledger updates. Deployment must not arm an incident.
+
 ## 7. Terraform conventions
 
 - Pin provider versions in `versions.tf` (e.g., `azurerm ~> 4.x`, `azuread ~> 3.x`). Pin Terraform
@@ -268,7 +286,7 @@ the root `README.md` for the chooser, and `docs/scenario-a-direct.md` /
 
 ## 10. What NOT to do
 
-- ❌ Do not generate Bicep or ARM templates for infrastructure.
+- ❌ Do not generate Bicep or ARM infrastructure for A/B/C or the retained runner; Scenario D workload is the approved exception.
 - ❌ Do not store any secret, key, or credential in source, tfvars, or workflow YAML.
 - ❌ Do not expose `checkout-api` or `payment-service` publicly.
 - ❌ Do not use ACR admin user, Key Vault access policies, or storage account keys.

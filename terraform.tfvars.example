@@ -15,6 +15,9 @@ location    = "swedencentral"
 # C = private endpoints/runner peering, Low/Reader/Review agent, Terraform-owned
 #     VNet sandbox egress, and API-managed agent configuration. The agent holds
 #     Reader on Azure and remediates by opening a pull request.
+# D = separate private-network deployment (see scenario-d.tfvars.example): healthy
+#     payment service, Low/Reader/Review agent, approved direct recovery, and a
+#     paired Observability Agent. Use scenario-d.tfvars.example, not this file.
 scenario = "A"
 
 # Scenario A also provisions an Azure Monitor workspace in West Europe and a

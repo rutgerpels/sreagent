@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "RunAzCliReadCommands",
+      "RunKubectlReadCommand(kubectl get *)"
+    ],
+    "ask": [
+      "RunAzCliWriteCommands"
+    ],
+    "deny": [
+      "RunKubectlWriteCommand",
+      "bash(az * create *)",
+      "bash(az * delete *)",
+      "bash(az keyvault secret show *)",
+      "bash(az keyvault secret download *)",
+      "bash(az rest *vault.azure.net/secrets*)",
+      "bash(terraform * apply *)",
+      "bash(terraform * destroy *)"
+    ]
+  }
+}
