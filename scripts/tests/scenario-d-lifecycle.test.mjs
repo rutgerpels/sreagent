@@ -189,6 +189,26 @@ test('bounded propagation retries fail visibly, never switch security policy', a
   let count = 0; const io = { sleep: async () => {} };
   await assert.rejects(retry(io,'RBAC',async () => { count++; throw new Error('403'); },3,0), /3 bounded attempts/); assert.equal(count,3);
 });
+test('deleted role assignments are absent while authorization and transport failures remain errors', async () => {
+  const roleId = `${sub}/providers/Microsoft.Authorization/roleAssignments/${subId}`;
+  for (const stderr of [
+    'ERROR: Not Found({"error":{"code":"RoleAssignmentNotFound","message":"The role assignment is not found."}})',
+    'ERROR: (RoleAssignmentNotFound) The role assignment is not found.',
+    'ERROR: (RoleAssignmentDoesNotExist) The role assignment does not exist.',
+  ]) {
+    const io = createIO(() => { throw Object.assign(new Error('Azure read failed'), { stderr }); });
+    assert.equal(await io.get(roleId, API.roles), null);
+  }
+  for (const stderr of [
+    'ERROR: (AuthorizationFailed) The client does not have authorization.',
+    'ERROR: Connection reset while reading a role assignment.',
+    'ERROR: (InvalidApiVersionParameter) Invalid API version.',
+  ]) {
+    const error = Object.assign(new Error('Azure read failed'), { stderr });
+    const io = createIO(() => { throw error; });
+    await assert.rejects(io.get(roleId, API.roles), candidate => candidate === error);
+  }
+});
 test('checkout verification requires POST amount42 EUR and full confirmed payment chain', async () => {
   const original = globalThis.fetch;
   try {

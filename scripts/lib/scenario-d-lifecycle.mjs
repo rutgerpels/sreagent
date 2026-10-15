@@ -129,7 +129,7 @@ export function createIO(executeCommand) {
     async refreshAuth(options, principalId) { await refreshFederatedLogin({ az, execute }, options, principalId); },
     async get(id, api) {
       try { return az(['rest', '--method', 'GET', '--url', `${ARM}${id}?api-version=${api}`]); }
-      catch (e) { if (/\((ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|NotFound|DeploymentNotFound)\)|"code"\s*:\s*"(ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|NotFound|DeploymentNotFound)"/.test(e.stderr)) return null; throw e; }
+      catch (e) { if (/\((ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|RoleAssignmentNotFound|NotFound|DeploymentNotFound)\)|"code"\s*:\s*"(ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|RoleAssignmentNotFound|NotFound|DeploymentNotFound)"/.test(e.stderr)) return null; throw e; }
     },
     async remove(id, api) { az(['rest', '--method', 'DELETE', '--url', `${ARM}${id}?api-version=${api}`]); },
     async deploy(scope, name, template, parameters, location) {
