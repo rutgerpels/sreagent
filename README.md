@@ -229,7 +229,12 @@ human approves. D runs alongside A/B/C without touching them, and its
 `infra/scenario-d` Bicep through the existing manual `deploy.yml` / `destroy.yml`
 D routes (reusable `scenario-d-bicep.yml`), never Terraform for the workload.
 Only the retained runner foundation remains Terraform. Autonomous Observability
-issue creation is paused; SRE automatic diagnosis remains enabled in Review mode
+issue creation is paused **by default**; a separate
+[bounded autonomous OBA acceptance opt-in](docs/scenario-d-observability-acceptance.md)
+has no handoff. Its first live test verified fresh Bicep deployment and ordinary
+alert email, but produced no autonomous issue or investigation; hybrid work is
+deferred pending [the decision in #90](https://github.com/rutgerpels/sreagent/issues/90).
+SRE automatic diagnosis remains enabled in Review mode
 for only the exact deployed payment-failure alert. The paired dry-run still uses
 an on-demand Observability investigation and manual evidence handoff; recovery
 requires human approval.

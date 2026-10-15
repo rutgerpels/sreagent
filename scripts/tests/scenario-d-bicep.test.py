@@ -29,7 +29,11 @@ def nested_templates(template):
 class ScenarioDBicepTests(unittest.TestCase):
     def test_compiled_stages_never_output_credentials_or_use_workspace_shared_keys(self):
         paths = sorted((ROOT / "infra" / "scenario-d").glob("*.bicep"))
-        self.assertEqual(len(paths), 8)
+        self.assertEqual({p.name for p in paths}, {
+            "main.bicep", "foundations.bicep", "agents.bicep", "apps.bicep",
+            "connectors-alerts.bicep", "external-roles.bicep", "dns.bicep",
+            "runner-peering.bicep", "observability-role.bicep", "observability-settings.bicep",
+        })
         for path in paths:
             with self.subTest(stage=path.name):
                 command = (["az", "bicep", "build", "--file", str(path), "--stdout"]
@@ -42,7 +46,39 @@ class ScenarioDBicepTests(unittest.TestCase):
                               if resource["type"] == "Microsoft.App/agents"]
                     self.assertEqual(len(agents), 1)
                     self.assertEqual(agents[0]["properties"]["monthlyAgentUnitLimit"], 500)
+                    self.assertEqual(agents[0]["properties"]["actionConfiguration"]["mode"], "Review")
+                    oba = next(r for r in template["resources"] if r["type"] == "Microsoft.Monitor/observabilityAgents")
+                    target = next(r for r in template["resources"] if r["type"].endswith("/monitoredResources"))
+                    self.assertEqual(oba["properties"]["enabled"], "[variables('autonomous')]")
+                    self.assertEqual(target["properties"]["isAutonomous"], "[variables('autonomous')]")
+                    self.assertIn("false", template["variables"]["autonomous"])
+                    self.assertEqual([op["mode"] for op in oba["properties"]["operations"]], ["Auto", "Auto"])
+                    self.assertIn("alert-payment-failures-", oba["properties"]["operations"][0]["instructions"])
+                    self.assertIn("alert-checkout-failures-", oba["properties"]["operations"][0]["instructions"])
+                if path.name == "foundations.bicep":
+                    self.assertEqual(template["parameters"]["notificationEmail"]["type"].lower(), "securestring")
+                    groups = [r for r in template["resources"] if r["type"] == "Microsoft.Insights/actionGroups"]
+                    self.assertEqual(len(groups), 1)
+                    self.assertIn("parameters('notificationEmail')", groups[0]["properties"]["emailReceivers"])
+                    amw = next(r for r in template["resources"] if r["type"] == "Microsoft.Monitor/accounts")
+                    self.assertEqual(amw["apiVersion"], "2026-04-03-preview")
+                    self.assertIn("defaultActionGroups", amw["properties"])
+                    self.assertIn("publicNetworkAccess", amw["properties"])
+                if path.name == "connectors-alerts.bicep":
+                    self.assertFalse(any(r["type"] == "Microsoft.Insights/actionGroups" for r in template["resources"]))
+                    self.assertEqual(len([r for r in template["resources"] if r["type"] == "Microsoft.Insights/scheduledQueryRules"]), 1)
+                if path.name == "observability-settings.bicep":
+                    settings = template["resources"][0]
+                    self.assertEqual(settings["apiVersion"], "2025-06-03-preview")
+                    self.assertEqual(settings["name"], "default")
+                    self.assertEqual(settings["properties"]["defaultAzureMonitorWorkspace"], "[parameters('amwId')]")
+                if path.name == "observability-role.bicep":
+                    grant = template["resources"][0]
+                    self.assertEqual(grant["properties"]["principalId"], "[parameters('obaPrincipalId')]")
+                    self.assertEqual(template["variables"]["monitoringReader"], "43d0d8ad-25c7-4714-9337-8ba259a9fe05")
                 if path.name == "main.bicep":
+                    self.assertFalse(template["parameters"]["observabilityAutonomous"]["defaultValue"])
+                    self.assertNotIn("notificationEmail", template["parameters"])
                     compiled = json.dumps(template)
                     self.assertNotIn("subscriptionResourceId(variables('rgName')", compiled)
                     self.assertNotIn("subscriptionResourceId(parameters('runnerResourceGroup')", compiled)
@@ -55,7 +91,7 @@ class ScenarioDBicepTests(unittest.TestCase):
                 for nested in nested_templates(template):
                     for name, output in nested.get("outputs", {}).items():
                         self.assertFalse(any(marker in name.lower() for marker in (
-                            "secret", "connectionstring", "instrumentationkey", "sharedkey", "accesstoken"
+                            "secret", "connectionstring", "instrumentationkey", "sharedkey", "accesstoken", "email", "recipient"
                         )), f"Credential-bearing output: {path.name}:{name}")
                         self.assertNotIn("listkeys(", json.dumps(output).lower())
                 lint = (["az", "bicep", "lint", "--file", str(path)]

@@ -3,13 +3,19 @@
 > **Current setup: Scenario D uses Bicep; live redesign validation is pending.**
 > The approved target is manual Observability investigation → save issue →
 > manual handoff → SRE Review-mode recovery after human approval. Autonomous
-> issue creation remains **PAUSED / UNPROVEN**. Historical 2026-10-13 results
+> issue creation remains **PAUSED / UNPROVEN by default**. A separate
+> [bounded autonomous acceptance opt-in](scenario-d-observability-acceptance.md)
+> has no Observability-to-SRE handoff. Its 2026-10-15 test verified fresh
+> deployment and ordinary alert email, but failed autonomous issue/investigation
+> acceptance. The fault was reset and OBA paused; hybrid work awaits
+> [a decision](https://github.com/rutgerpels/sreagent/issues/90).
+> Historical 2026-10-13 results
 > below describe the deleted legacy Terraform/portal deployment, not the new
 > Bicep environment. No successful new live rehearsal is claimed here.
 
 Scenario D pairs the Azure Copilot Observability Agent with the Azure SRE Agent
 on a private-network deployment, separate from Scenarios A, B and C. This page
-is the operator script: follow it top to bottom during a rehearsal or a demo.
+is the operator script for the **default manual path**, not the separate autonomous acceptance.
 For the next demo, use the **manually initiated Observability investigation**
 below. Autonomous troubleshooting is paused; do not wait for automatic issue
 creation.
@@ -108,7 +114,7 @@ Use the deployment outputs, not names from a historical rehearsal.
    investigation. Do not create a competing portal-owned agent or enable Auto
    for this dry-run.
 7. **Choose the issue workspace explicitly.** Use the deployment output
-   `amwId` when saving the on-demand investigation. The lifecycle does **not**
+   `amwId` when saving the on-demand investigation. The **default paused** lifecycle does **not**
    change `Microsoft.Monitor/settings/default` or overwrite a pre-existing
    subscription association. If the preview UI demonstrably requires a default
    association, stop and document that blocker with the operator; do not

@@ -8,9 +8,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 export const API = {
   groups: '2025-04-01', deployments: '2025-04-01', network: '2024-05-01',
   dns: '2024-06-01', roles: '2022-04-01', agents: '2025-05-01-preview',
+  oba: '2026-05-01-preview', amw: '2026-04-03-preview', settings: '2025-06-03-preview',
+  identities: '2023-01-31', actionGroups: '2023-01-01', appInsights: '2020-02-02',
 };
 const ARM = 'https://management.azure.com';
 const MC = '749f88d5-cbae-40b8-bcfc-e573ddc772fa';
+const MR = '43d0d8ad-25c7-4714-9337-8ba259a9fe05';
 const services = ['frontend', 'checkout-api', 'payment-service'];
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 function requireThat(value, message) { if (!value) throw new Error(message); }
@@ -22,7 +25,9 @@ export function armGuid(...parts) {
   return `${s.slice(0,8)}-${s.slice(8,12)}-${s.slice(12,16)}-${s.slice(16,20)}-${s.slice(20)}`;
 }
 export function optionsFromEnv(env) {
+  requireThat(['true', 'false'].includes(env.D_OBSERVABILITY_AUTONOMOUS === undefined ? 'false' : env.D_OBSERVABILITY_AUTONOMOUS), 'D_OBSERVABILITY_AUTONOMOUS must be true or false.');
   const options = {
+    observabilityAutonomous: env.D_OBSERVABILITY_AUTONOMOUS === 'true',
     action: env.D_ACTION ?? 'deploy', prefix: env.D_PREFIX ?? 'payd',
     environment: env.D_ENVIRONMENT ?? 'demo', generation: env.D_GENERATION ?? 'bicep1',
     subscriptionId: env.AZURE_SUBSCRIPTION_ID, tenantId: env.AZURE_TENANT_ID,
@@ -40,11 +45,31 @@ export function optionsFromEnv(env) {
   options.deploymentName = `scenario-d-${options.profile}-${options.generation}`;
   if (options.action === 'destroy') requireThat(options.confirmation === options.deploymentName, `Destroy requires confirmation ${options.deploymentName}.`);
   else requireThat(/^[0-9a-f]{40}$/.test(options.sha ?? ''), 'Deploy requires full checkout commit SHA.');
+  // Ignore unused recipient input on default deploy and Down; never persist it in ownership.
+  options.notificationEmail = options.action === 'deploy' && options.observabilityAutonomous ? env.D_NOTIFICATION_EMAIL : '';
+  validateAutonomousOptions(options);
   return options;
+}
+function validateAutonomousOptions(options) {
+  requireThat(typeof options.observabilityAutonomous === 'boolean', 'Autonomous option must be Boolean.');
+  if (options.action === 'deploy' && options.observabilityAutonomous) {
+    // ARM deployment names are limited to 64 characters. Check every derived
+    // subscription deployment before any IO; never restrict legacy deploy/Down.
+    requireThat(typeof options.deploymentName === 'string' &&
+      ['', '-roles', '-oba-role', '-oba-settings'].every(suffix => `${options.deploymentName}${suffix}`.length <= 64),
+      'Autonomous deploy requires an ownership deployment name of at most 51 characters; derived ARM deployment names must not exceed 64.');
+    const email = options.notificationEmail;
+    requireThat(typeof email === 'string' && email.length <= 254 && !/\s/.test(email) &&
+      /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(email) &&
+      email.split('@')[0].length <= 64, 'Autonomous deploy requires a valid single D_NOTIFICATION_EMAIL recipient.');
+  }
 }
 export function validateOwnership(o, options) {
   const sub = `/subscriptions/${options.subscriptionId}`;
-  requireThat(o?.version === 1 && same(o.subscriptionId, options.subscriptionId), 'Ownership subscription/version mismatch.');
+  requireThat([1, 2].includes(o?.version) && same(o.subscriptionId, options.subscriptionId), 'Ownership subscription/version mismatch.');
+  const autonomous = o.version === 2;
+  requireThat(autonomous ? o.observabilityAutonomous === true : (o.observabilityAutonomous === undefined || o.observabilityAutonomous === false), 'Invalid ownership autonomous mode.');
+  if (options.action === 'deploy') requireThat(autonomous === options.observabilityAutonomous, 'Ownership mode is immutable; finish destroy before changing autonomous mode.');
   requireThat(o.deploymentName === options.deploymentName && o.profile === options.profile && o.generation === options.generation, 'Ownership profile mismatch.');
   requireThat(/^d-[a-z0-9]{8}$/.test(o.stem), 'Invalid ownership stem.');
   const suffix = o.stem.slice(2);
@@ -57,12 +82,16 @@ export function validateOwnership(o, options) {
   requireThat(o.tags?.scenario === 'D' && o.tags?.managed_by === 'bicep' && o.tags?.lifecycle_owner === o.deploymentName && o.tags?.lifecycle_generation === o.generation, 'Ownership tags mismatch.');
   requireThat(o.workloadLocation === options.workloadLocation && o.observabilityLocation === options.observabilityLocation, 'Ownership location mismatch.');
   const identityIds = [`${rg}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-sre-${o.stem}`, `${rg}/providers/Microsoft.App/agents/sre-${options.prefix}-${o.stem}`];
-  const roleDef = `${sub}/providers/Microsoft.Authorization/roleDefinitions/${MC}`;
-  requireThat(o.externalRoles?.length === 2, 'Unexpected external grant count.');
+  if (autonomous) identityIds.push(`${rg}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-oba-${o.stem}`);
+  requireThat(Array.isArray(o.externalRoles) && o.externalRoles.length === identityIds.length, 'Unexpected external grant count.');
   o.externalRoles.forEach((r, i) => requireThat(
-    same(r.identityResourceId, identityIds[i]) && same(r.roleDefinitionId, roleDef) && same(r.scope, sub) &&
-    same(r.id, `${sub}/providers/Microsoft.Authorization/roleAssignments/${armGuid(sub, identityIds[i], MC)}`) &&
-    r.identityApiVersion === (i === 0 ? '2023-01-31' : API.agents), 'Unexpected external role assignment.'));
+    same(r.identityResourceId, identityIds[i]) && same(r.roleDefinitionId, `${sub}/providers/Microsoft.Authorization/roleDefinitions/${i === 2 ? MR : MC}`) && same(r.scope, sub) &&
+    same(r.id, `${sub}/providers/Microsoft.Authorization/roleAssignments/${armGuid(sub, identityIds[i], i === 2 ? MR : MC)}`) &&
+    r.identityApiVersion === (i === 1 ? API.agents : API.identities), 'Unexpected external role assignment.'));
+  if (autonomous) {
+    requireThat(same(o.defaultSettings?.id, `${sub}/providers/Microsoft.Monitor/settings/default`) &&
+      same(o.defaultSettings?.defaultAzureMonitorWorkspace, `${rg}/providers/Microsoft.Monitor/accounts/amw-observability-${o.stem}`), 'Unexpected owned default settings binding.');
+  } else requireThat(o.defaultSettings === undefined, 'Version 1 cannot own shared default settings.');
   const expectedLinks = [];
   for (const [key, zone, kind] of [['keyVaultZoneId', 'privatelink.vaultcore.azure.net', 'kv'], ['acrZoneId', 'privatelink.azurecr.io', 'acr']]) {
     requireThat(new RegExp(`^/subscriptions/${options.subscriptionId}/resourceGroups/[^/]+/providers/Microsoft.Network/privateDnsZones/${zone.replaceAll('.', '\\.')}$`, 'i').test(o[key]), 'Unexpected private DNS zone path.');
@@ -76,6 +105,7 @@ export function validateOwnership(o, options) {
   const expectedDeployments = [
     { id: `${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}-roles` },
     { id: `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Resources/deployments/runner-peering-${o.stem}` },
+    ...(autonomous ? ['oba-role', 'oba-settings'].map(stage => ({ id: `${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}-${stage}` })) : []),
     ...expectedLinks.map(l => ({ id: `${sub}/resourceGroups/${l.id.split('/')[4]}/providers/Microsoft.Resources/deployments/dns-${l.id.includes('/app-kv-') ? 'kv' : 'acr'}-${o.stem}` })),
   ];
   requireThat(Array.isArray(o.auxiliaryDeployments) && o.auxiliaryDeployments.length === expectedDeployments.length &&
@@ -105,9 +135,10 @@ export async function refreshFederatedLogin(io, options, principalId, environmen
   // Acquire the new audience while the refreshed assertion is still valid.
   io.az(['account', 'get-access-token', '--resource', 'https://azuresre.dev']);
 }
-export function createIO(executeCommand) {
-  const execute = executeCommand ?? ((program, args, json = false) => {
-    const r = spawnSync(program, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60 * 60 * 1000 });
+export function createIO(executeCommand, privateValues = [process.env.D_NOTIFICATION_EMAIL]) {
+  const command = executeCommand ?? ((program, args, json = false) => {
+    const childEnv = { ...process.env }; delete childEnv.D_NOTIFICATION_EMAIL; delete childEnv.OBA_NOTIFICATION_EMAIL;
+    const r = spawnSync(program, args, { env: childEnv, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60 * 60 * 1000 });
     if (r.status !== 0 || r.error) {
       // Never log full CLI argv or stdout: they can contain telemetry credentials.
       const error = new Error(`${program} ${args[0]} ${args[1] ?? ''} failed: ${r.error?.message ?? r.stderr?.trim() ?? r.status}`);
@@ -115,13 +146,24 @@ export function createIO(executeCommand) {
     }
     return json ? JSON.parse(r.stdout || 'null') : r.stdout.trim();
   });
+  const execute = (...args) => {
+    try { return command(...args); } catch (e) {
+      for (const value of privateValues.filter(v => typeof v === 'string' && v)) {
+        e.message = e.message.replaceAll(value, '[private recipient]');
+        if (e.stderr) e.stderr = e.stderr.replaceAll(value, '[private recipient]');
+      }
+      throw e;
+    }
+  };
   const az = (args) => execute('az', [...args, '--only-show-errors', '--output', 'json'], true);
-  const previewThenCreate = (scope, args) => {
+  const previewThenCreate = async (scope, args, beforeCreate) => {
     const preview = az(['deployment', scope, 'what-if', ...args, '--no-pretty-print']);
     requireThat(preview && preview.status === 'Succeeded' && !preview.error && !(preview.errors?.length), 'Deployment what-if did not succeed; create is forbidden.');
     // Print only resource IDs and change types, never resource properties or
     // values (even previews must not leak credentials into workflow logs).
     console.log(JSON.stringify({ preview: args[args.indexOf('--name') + 1], changes: (preview.changes ?? []).map(({ resourceId, changeType }) => ({ resourceId, changeType })) }));
+    // Recheck absence after what-if, immediately before a guarded singleton create.
+    if (beforeCreate) await beforeCreate();
     return az(['deployment', scope, 'create', ...args]);
   };
   return {
@@ -132,20 +174,20 @@ export function createIO(executeCommand) {
       catch (e) { if (/\((ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|RoleAssignmentNotFound|NotFound|DeploymentNotFound)\)|"code"\s*:\s*"(ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|RoleAssignmentDoesNotExist|RoleAssignmentNotFound|NotFound|DeploymentNotFound)"/.test(e.stderr)) return null; throw e; }
     },
     async remove(id, api) { az(['rest', '--method', 'DELETE', '--url', `${ARM}${id}?api-version=${api}`]); },
-    async deploy(scope, name, template, parameters, location) {
-      return withTemp((dir) => {
+    async deploy(scope, name, template, parameters, location, beforeCreate) {
+      return withTemp(async (dir) => {
         const file = join(dir, 'parameters.json');
         writeFileSync(file, JSON.stringify({ parameters: Object.fromEntries(Object.entries(parameters).map(([k,v]) => [k, { value: v }])) }), { mode: 0o600 });
-        return previewThenCreate(scope === 'subscription' ? 'sub' : 'group', ['--name', name,
+        return (await previewThenCreate(scope === 'subscription' ? 'sub' : 'group', ['--name', name,
           ...(scope === 'subscription' ? ['--location', location] : ['--resource-group', scope]),
-          '--template-file', resolve(template), '--parameters', `@${file}`]).properties.outputs;
+          '--template-file', resolve(template), '--parameters', `@${file}`], beforeCreate)).properties.outputs;
       });
     },
     async ledger(o, cleanup) {
-      return withTemp((dir) => {
+      return withTemp(async (dir) => {
         const file = join(dir, 'ledger.json');
         writeFileSync(file, JSON.stringify({ '$schema': 'https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#', contentVersion: '1.0.0.0', resources: [], outputs: { ownership: { type: 'object', value: o }, cleanup: { type: 'object', value: cleanup } } }), { mode: 0o600 });
-        return previewThenCreate('sub', ['--name', o.deploymentName, '--location', o.workloadLocation, '--template-file', file]).properties.outputs;
+        return (await previewThenCreate('sub', ['--name', o.deploymentName, '--location', o.workloadLocation, '--template-file', file])).properties.outputs;
       });
     },
     async checkout(url) {
@@ -221,6 +263,7 @@ async function verifyTags(io, o) {
 }
 export async function destroy(io, o, priorCleanup = null) {
   const group = await verifyTags(io, o);
+  if (o.version === 2) await readOwnedSettings(io, o);
   const principals = {};
   // Read all fresh principals and external resources before making ANY delete.
   for (const r of o.externalRoles) {
@@ -248,6 +291,10 @@ export async function destroy(io, o, priorCleanup = null) {
   // Save a verified snapshot in Azure deployment history, not runner-local state.
   // Restart after identities/RG disappear can still validate exact stale grants.
   await io.ledger(o, { principals });
+  if (o.version === 2) {
+    if (await readOwnedSettings(io, o)) await io.remove(o.defaultSettings.id, API.settings);
+    await waitAbsent(io, o.defaultSettings.id, API.settings);
+  }
   for (const r of o.externalRoles) await deleteAndVerify(io, r.id, API.roles);
   if (peering) await deleteAndVerify(io, o.runnerPeeringId, API.network);
   // Delete workload RG first; private endpoint zone groups clean their A records.
@@ -259,6 +306,7 @@ export async function destroy(io, o, priorCleanup = null) {
   for (const r of o.externalRoles) requireThat(!(await io.get(r.id, API.roles)), 'Grant still present after destroy.');
   requireThat(!(await io.get(o.runnerPeeringId, API.network)), 'Runner peering still present.');
   for (const l of o.sharedDnsLinks) requireThat(!(await io.get(l.id, API.dns)), 'Shared DNS app link still present.');
+  if (o.version === 2) requireThat(!(await io.get(o.defaultSettings.id, API.settings)), 'Default settings still present after destroy.');
   for (const d of o.auxiliaryDeployments) await deleteAndVerify(io, d.id, API.deployments);
   // Ledger is removed LAST, only after verified actual absence, never on timeout.
   await deleteAndVerify(io, `/subscriptions/${o.subscriptionId}/providers/Microsoft.Resources/deployments/${o.deploymentName}`, API.deployments);
@@ -268,7 +316,95 @@ async function waitAbsent(io, id, api, attempts = 20) {
   await retry(io, 'Deletion verification', async () => requireThat(!(await io.get(id, api)), `Resource still exists: ${id}`), attempts);
 }
 async function deleteAndVerify(io, id, api) { if (await io.get(id, api)) await io.remove(id, api); await waitAbsent(io, id, api); }
+// These reads never mutate shared subscription state or trust deployment outputs.
+export async function readOwnedSettings(io, o) {
+  const setting = await io.get(o.defaultSettings.id, API.settings);
+  if (setting) requireThat(same(setting.properties?.defaultAzureMonitorWorkspace, o.defaultSettings.defaultAzureMonitorWorkspace),
+    'Subscription default settings binding changed; refusing overwrite or cleanup.');
+  return setting;
+}
+function requireRole(role, expected, principalId) {
+  requireThat(role && same(role.properties?.principalId, principalId) &&
+    same(role.properties?.roleDefinitionId, expected.roleDefinitionId) && same(role.properties?.scope, expected.scope) &&
+    role.properties?.principalType === 'ServicePrincipal', 'OBA role identity, scope or definition mismatch.');
+}
+export async function prepareObservability(io, o, f) {
+  const expected = o.externalRoles.find(r => same(r.roleDefinitionId, `${r.scope}/providers/Microsoft.Authorization/roleDefinitions/${MR}`));
+  requireThat(expected && same(f.obaIdentityId, expected.identityResourceId) &&
+    same(f.amwId, o.defaultSettings.defaultAzureMonitorWorkspace), 'Unexpected OBA foundations binding.');
+  const identity = await io.get(expected.identityResourceId, API.identities);
+  const principalId = identity?.properties?.principalId;
+  requireThat(principalId && same(principalId, f.obaPrincipalId), 'Fresh OBA identity does not match foundations.');
+  const priorRole = await io.get(expected.id, API.roles);
+  if (priorRole) requireRole(priorRole, expected, principalId);
+  else await io.deploy('subscription', `${o.deploymentName}-oba-role`, 'infra/scenario-d/observability-role.bicep',
+    { obaIdentityId: expected.identityResourceId, obaPrincipalId: principalId }, o.workloadLocation);
+  requireRole(await io.get(expected.id, API.roles), expected, principalId);
+  // A resumable ledger-owned binding is verified, never rewritten. A fresh
+  // association requires absence before preview and again immediately before PUT.
+  if (!(await readOwnedSettings(io, o))) {
+    await io.deploy('subscription', `${o.deploymentName}-oba-settings`, 'infra/scenario-d/observability-settings.bicep',
+      { amwId: o.defaultSettings.defaultAzureMonitorWorkspace }, o.workloadLocation, async () => {
+        requireThat(!(await io.get(o.defaultSettings.id, API.settings)), 'Default settings appeared during preview; create forbidden.');
+      });
+  }
+  requireThat(await readOwnedSettings(io, o), 'Subscription-to-AMW prerequisite is absent after deployment.');
+}
+export async function verifyObservability(io, o, notificationEmail) {
+  requireThat(o.version === 2 && o.observabilityAutonomous === true, 'Autonomous verification requires a validated opt-in owner.');
+  const rg = o.resourceGroupId;
+  const obaId = `${rg}/providers/Microsoft.Monitor/observabilityAgents/oba-${o.stem}`;
+  const identityId = `${rg}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-oba-${o.stem}`;
+  const amwId = `${rg}/providers/Microsoft.Monitor/accounts/amw-observability-${o.stem}`;
+  const aiId = `${rg}/providers/Microsoft.Insights/components/appi-${o.stem}`;
+  const actionGroupId = `${rg}/providers/Microsoft.Insights/actionGroups/ag-sre-${o.stem}`;
+  const targetId = `${obaId}/monitoredResources/appi-${o.stem}`;
+  const [oba, identity, amw, ai, group, target, targets] = await Promise.all([
+    io.get(obaId, API.oba), io.get(identityId, API.identities), io.get(amwId, API.amw), io.get(aiId, API.appInsights),
+    io.get(actionGroupId, API.actionGroups), io.get(targetId, API.oba), io.get(`${obaId}/monitoredResources`, API.oba),
+  ]);
+  requireThat(oba?.properties?.enabled === true && same(oba.properties.monitoringAccountId, amwId) &&
+    oba.location === o.observabilityLocation && amw?.location === o.observabilityLocation &&
+    identity?.location === o.observabilityLocation, 'OBA enabled state, workspace binding or region mismatch.');
+  const identities = Object.keys(oba.identity?.userAssignedIdentities ?? {});
+  requireThat(oba.identity?.type === 'UserAssigned' && identities.length === 1 && same(identities[0], identityId) &&
+    identity.properties?.principalId, 'OBA must use only its exact owned UAMI.');
+  for (const resource of [oba, identity, amw, ai, group]) {
+    for (const key of ['scenario', 'managed_by', 'lifecycle_owner', 'lifecycle_generation'])
+      requireThat(resource?.tags?.[key] === o.tags[key], 'OBA configuration resource ownership tags mismatch.');
+  }
+  const operations = oba.properties.operations;
+  const instructions = `Always create an issue for alert-payment-failures-${o.stem}. Correlate cascading alert-checkout-failures-${o.stem} into that single issue for this resource group only. Investigate the payment-to-checkout failure chain independently; do not change workloads or perform mitigations.`;
+  requireThat(Array.isArray(operations) && operations.length === 2 &&
+    operations.filter(op => op.type === 'IssueCreation' && op.mode === 'Auto' && op.instructions === instructions).length === 1 &&
+    operations.filter(op => op.type === 'Investigation' && op.mode === 'Auto').length === 1,
+    'OBA autonomous operations or exact payment/checkout instructions mismatch.');
+  requireThat(target?.properties?.enabled === true && target.properties.isAutonomous === true &&
+    same(target.properties.resourceId, aiId) && targets?.value?.length === 1 && !targets.nextLink && same(targets.value[0].id, targetId),
+    'OBA monitored target must be the single enabled autonomous owned App Insights resource.');
+  requireThat(ai?.location === o.workloadLocation && ai.properties?.DisableLocalAuth === true &&
+    same(ai.properties?.WorkspaceResourceId, `${rg}/providers/Microsoft.OperationalInsights/workspaces/law-${o.stem}`), 'OBA telemetry workspace/region binding mismatch.');
+  requireThat(amw.properties?.publicNetworkAccess === 'Enabled' && amw.properties?.actions?.defaultActionGroups?.length === 1 &&
+    same(amw.properties.actions.defaultActionGroups[0].id, actionGroupId), 'AMW issue-notification default action group mismatch.');
+  const receivers = group?.properties?.emailReceivers;
+  requireThat(group?.properties?.enabled === true && Array.isArray(receivers) && receivers.length === 1 &&
+    receivers[0].name === 'autonomous-acceptance' && receivers[0].emailAddress === notificationEmail &&
+    receivers[0].useCommonAlertSchema === true && (receivers[0].status === undefined || receivers[0].status === 'Enabled'),
+    'Private notification receiver configuration mismatch.');
+  const sub = `/subscriptions/${o.subscriptionId}`;
+  const roles = [[sub, MR], [amwId, MC], [aiId, MR]];
+  await Promise.all(roles.map(async ([scope, role]) => {
+    const expected = { id: `${scope}/providers/Microsoft.Authorization/roleAssignments/${armGuid(scope, identityId, role)}`,
+      scope, roleDefinitionId: `${sub}/providers/Microsoft.Authorization/roleDefinitions/${role}` };
+    requireRole(await io.get(expected.id, API.roles), expected, identity.properties.principalId);
+  }));
+  requireThat(await readOwnedSettings(io, o), 'Subscription-to-AMW prerequisite is absent.');
+  // Return no service properties/recipient; ready is configuration, not runtime evidence.
+  return { configurationVerified: true, runtimeProven: false, emailReceiptProven: false };
+}
 export async function deploy(io, options, existing) {
+  validateAutonomousOptions(options);
+  if (existing) validateOwnership(outputValue(existing.properties.outputs, 'ownership'), options);
   requireThat(io.execute('git', ['rev-parse', 'HEAD']) === options.sha, 'Checkout HEAD does not match immutable image SHA.');
   requireThat(io.execute('git', ['status', '--porcelain']).length === 0, 'Dirty checkout cannot be published under a commit SHA.');
   const sub = `/subscriptions/${options.subscriptionId}`;
@@ -282,13 +418,17 @@ export async function deploy(io, options, existing) {
     requireThat(await verifyTags(io, o), 'Owned RG is absent; complete destroy ledger cleanup first.');
     await validateResumeDns(io, o, 'keyVaultZoneId', 'kv', kvZone);
     await validateResumeDns(io, o, 'acrZoneId', 'acr', acrZone);
+    if (o.version === 2) await readOwnedSettings(io, o);
   } else {
     const groups = io.az(['group', 'list']);
     requireThat(!groups.some(g => (g.tags?.scenario === 'D' && g.name !== 'agentrg-d') || g.name.startsWith(`rg-${options.profile}-`)), 'Another Scenario D workload exists; finish its owner lifecycle first.');
+    if (options.observabilityAutonomous) {
+      requireThat(!(await io.get(`${sub}/providers/Microsoft.Monitor/settings/default`, API.settings)), 'Subscription default settings already exist; do not adopt or overwrite a preexisting association.');
+    }
     const outputs = await io.deploy('subscription', options.deploymentName, 'infra/scenario-d/main.bicep', {
       prefix: options.prefix, environment: options.environment, generation: options.generation,
       workloadLocation: options.workloadLocation, observabilityLocation: options.observabilityLocation,
-      keyVaultZoneId: kvZone, acrZoneId: acrZone,
+      keyVaultZoneId: kvZone, acrZoneId: acrZone, observabilityAutonomous: options.observabilityAutonomous,
     }, options.workloadLocation);
     o = validateOwnership(outputValue(outputs, 'ownership'), options);
   }
@@ -297,7 +437,8 @@ export async function deploy(io, options, existing) {
   requireThat(claims.oid && same(claims.tid, options.tenantId), 'Cannot identify deployment service principal.');
   const deployerPrincipalId = claims.oid;
   console.log('Deploying private foundations.');
-  const f = outputValue(await io.deploy(o.resourceGroupName, 'scenario-d-foundations', 'infra/scenario-d/foundations.bicep', { ownership: o, deployerPrincipalId }), 'foundations');
+  const f = outputValue(await io.deploy(o.resourceGroupName, 'scenario-d-foundations', 'infra/scenario-d/foundations.bicep', { ownership: o, deployerPrincipalId, notificationEmail: options.notificationEmail }), 'foundations');
+  if (o.version === 2) await prepareObservability(io, o, f);
   // RBAC and private DNS may converge independently. Probe the actual endpoints;
   // no public-network toggles or authentication fallbacks are permitted.
   await retry(io, 'Private ACR login', async () => { io.execute('az', ['acr', 'login', '--name', f.acrName, '--only-show-errors']); });
@@ -325,7 +466,7 @@ export async function deploy(io, options, existing) {
   const appOutputs = await io.deploy(o.resourceGroupName, 'scenario-d-apps', 'infra/scenario-d/apps.bicep', { ownership: o, foundations: f, imageDigests: digests });
   const frontendUrl = outputValue(appOutputs, 'frontendUrl');
   await retry(io, 'Real checkout health', async () => io.checkout(frontendUrl));
-  console.log('Deploying Review-mode SRE and paused Observability Agent.');
+  console.log(o.version === 2 ? 'Deploying Review-mode SRE and opt-in autonomous Observability Agent.' : 'Deploying Review-mode SRE and paused Observability Agent.');
   const agents = outputValue(await io.deploy(o.resourceGroupName, 'scenario-d-agents', 'infra/scenario-d/agents.bicep', { ownership: o, foundations: f, deployerPrincipalId,
     modelProvider: process.env.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry', modelName: process.env.SRE_AGENT_MODEL_NAME || 'Automatic' }), 'agents');
   await io.deploy('subscription', `${o.deploymentName}-roles`, 'infra/scenario-d/external-roles.bicep', { ownership: o, actionPrincipalId: f.actionPrincipalId, systemPrincipalId: agents.systemPrincipalId }, o.workloadLocation);
@@ -338,10 +479,12 @@ export async function deploy(io, options, existing) {
   await retry(io, 'SRE data-plane reconciliation', async () => io.execute('node', [...reconcileArgs, '--mode', 'apply']), 12, 30000);
   io.execute('node', [...reconcileArgs, '--mode', 'verify']);
   await io.checkout(frontendUrl);
-  console.log(JSON.stringify({ ownershipDeployment: o.deploymentName, resourceGroup: o.resourceGroupName, frontendUrl, ...agents, status: 'Healthy checkout; manual paired-agent dry-run ready. Autonomous OBA remains paused/unproven.' }, null, 2));
+  if (o.version === 2) await verifyObservability(io, o, options.notificationEmail);
+  console.log(JSON.stringify({ ownershipDeployment: o.deploymentName, resourceGroup: o.resourceGroupName, frontendUrl, ...agents, status: o.version === 2 ? 'Healthy checkout; autonomous OBA configuration verified. Runtime issue, deep investigation and email receipt are NOT proven; isolated bounded acceptance remains required.' : 'Healthy checkout; manual paired-agent dry-run ready. Autonomous OBA remains paused/unproven.' }, null, 2));
   return { ownership: o, frontendUrl, agents };
 }
-export async function run(options, io = createIO()) {
+export async function run(options, io = createIO(undefined, [options.notificationEmail])) {
+  validateAutonomousOptions(options);
   const account = io.az(['account', 'show']);
   requireThat(same(account.id, options.subscriptionId) && same(account.tenantId, options.tenantId), 'Logged-in Azure account subscription/tenant mismatch.');
   const id = `/subscriptions/${options.subscriptionId}/providers/Microsoft.Resources/deployments/${options.deploymentName}`;

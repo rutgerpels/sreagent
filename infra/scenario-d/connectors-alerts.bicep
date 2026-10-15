@@ -13,12 +13,8 @@ resource connectors 'Microsoft.App/agents/connectors@2025-05-01-preview' = [for 
   name: connector.name
   properties: connector.properties
 }]
-resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
-  name: 'ag-sre-${stem}'
-  location: 'global'
-  tags: ownership.tags
-  properties: { groupShortName: 'sreagent', enabled: true }
-}
+// Receiver ownership stays exclusively in foundations; redeploying alerts cannot wipe it.
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' existing = { name: 'ag-sre-${stem}' }
 var queries = [
   { name: 'payment', role: 'payment-service', path: '/pay' }
   { name: 'checkout', role: 'checkout-api', path: '/checkout' }
