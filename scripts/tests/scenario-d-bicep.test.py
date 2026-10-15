@@ -37,6 +37,15 @@ class ScenarioDBicepTests(unittest.TestCase):
                 result = subprocess.run(command, capture_output=True, text=True, timeout=180, cwd=ROOT)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 template = json.loads(result.stdout)
+                if path.name == "main.bicep":
+                    compiled = json.dumps(template)
+                    self.assertNotIn("subscriptionResourceId(variables('rgName')", compiled)
+                    self.assertNotIn("subscriptionResourceId(parameters('runnerResourceGroup')", compiled)
+                    self.assertEqual(
+                        (path.read_text().count("resourceId(")),
+                        (path.read_text().count("resourceId(subscription().subscriptionId,")),
+                        "Subscription-scope ledger paths require explicit subscription and RG arguments.",
+                    )
                 self.assertNotIn("listkeys(", json.dumps(template).lower())
                 for nested in nested_templates(template):
                     for name, output in nested.get("outputs", {}).items():

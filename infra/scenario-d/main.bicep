@@ -15,10 +15,10 @@ var profile = '${prefix}-${environment}-d'
 var suffix = take(uniqueString(subscription().id, profile, generation), 8)
 var stem = 'd-${suffix}'
 var rgName = 'rg-${profile}-${suffix}'
-var appVnetId = resourceId(rgName, 'Microsoft.Network/virtualNetworks', 'vnet-${stem}')
-var runnerVnetId = resourceId(runnerResourceGroup, 'Microsoft.Network/virtualNetworks', runnerVnetName)
-var sreId = resourceId(rgName, 'Microsoft.App/agents', 'sre-${prefix}-${stem}')
-var actionId = resourceId(rgName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-sre-${stem}')
+var appVnetId = resourceId(subscription().subscriptionId, rgName, 'Microsoft.Network/virtualNetworks', 'vnet-${stem}')
+var runnerVnetId = resourceId(subscription().subscriptionId, runnerResourceGroup, 'Microsoft.Network/virtualNetworks', runnerVnetName)
+var sreId = resourceId(subscription().subscriptionId, rgName, 'Microsoft.App/agents', 'sre-${prefix}-${stem}')
+var actionId = resourceId(subscription().subscriptionId, rgName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-sre-${stem}')
 var monitoringContributor = '749f88d5-cbae-40b8-bcfc-e573ddc772fa'
 var tags = {
   project: 'sre-agent-demo'
@@ -51,8 +51,8 @@ output ownership object = {
   appVnetId: appVnetId
   runnerVnetId: runnerVnetId
   runnerPeeringId: '${runnerVnetId}/virtualNetworkPeerings/peer-runner-to-app-${stem}'
-  keyVaultZoneId: empty(keyVaultZoneId) ? resourceId(rgName, 'Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net') : keyVaultZoneId
-  acrZoneId: empty(acrZoneId) ? resourceId(rgName, 'Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io') : acrZoneId
+  keyVaultZoneId: empty(keyVaultZoneId) ? resourceId(subscription().subscriptionId, rgName, 'Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net') : keyVaultZoneId
+  acrZoneId: empty(acrZoneId) ? resourceId(subscription().subscriptionId, rgName, 'Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io') : acrZoneId
   sharedDnsLinks: concat(empty(keyVaultZoneId) ? [] : [{
     id: '${keyVaultZoneId}/virtualNetworkLinks/app-kv-${stem}'
     virtualNetworkId: appVnetId
@@ -64,8 +64,8 @@ output ownership object = {
   // subscription scoped. OBA permissions are resource-scoped in agents.bicep.
   auxiliaryDeployments: concat([
     { id: subscriptionResourceId('Microsoft.Resources/deployments', '${deployment().name}-roles') }
-    { id: resourceId(runnerResourceGroup, 'Microsoft.Resources/deployments', 'runner-peering-${stem}') }
-  ], empty(keyVaultZoneId) ? [] : [{ id: resourceId(split(keyVaultZoneId, '/')[4], 'Microsoft.Resources/deployments', 'dns-kv-${stem}') }], empty(acrZoneId) ? [] : [{ id: resourceId(split(acrZoneId, '/')[4], 'Microsoft.Resources/deployments', 'dns-acr-${stem}') }])
+    { id: resourceId(subscription().subscriptionId, runnerResourceGroup, 'Microsoft.Resources/deployments', 'runner-peering-${stem}') }
+  ], empty(keyVaultZoneId) ? [] : [{ id: resourceId(subscription().subscriptionId, split(keyVaultZoneId, '/')[4], 'Microsoft.Resources/deployments', 'dns-kv-${stem}') }], empty(acrZoneId) ? [] : [{ id: resourceId(subscription().subscriptionId, split(acrZoneId, '/')[4], 'Microsoft.Resources/deployments', 'dns-acr-${stem}') }])
   externalRoles: externalRoles
 }
 var externalRoles = [for identityId in [actionId, sreId]: {
