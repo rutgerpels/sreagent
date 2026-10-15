@@ -1,5 +1,13 @@
 # Scenario B: GitOps remediation by pull request
 
+**New customer tenant?** Complete [customer setup A–Z](customer-setup.md)
+first. All workflow dispatches, Code Access connections and incident/remediation
+PRs must target your own repository, never its upstream. Historical observations
+are not fresh-tenant validation.
+Examples use the new-deployment prefix `pay`. Existing stacks must keep their
+original prefix/environment and `TF_PREFIX`; the new default does not rename
+or migrate existing state.
+
 **The story you tell.** The same memory leak — but this time the agent holds
 **Reader on the demo workload**, with a separate subscription-level Monitoring
 Contributor grant. The tool policy denies direct workload changes.
@@ -111,7 +119,7 @@ SRE Agent portal that no workflow ever sees.
 | Input | Value | Note |
 | --- | --- | --- |
 | Scenario | `B` | Selects the Low / Reader / Review profile |
-| Resource name prefix | `contosopay` | Any short lowercase prefix works |
+| Resource name prefix | `pay` | New-deployment default; retain the original prefix for an existing stack |
 | Environment label | `demo` | Appears in names and the state key |
 | Azure region | `<chosen-supported-region>` | Choose a region currently available to your subscription; see [supported regions](https://learn.microsoft.com/azure/sre-agent/supported-regions) |
 | Open incident PR | `false` | Leave this off; you will arm the incident live in step 13 |
@@ -343,11 +351,11 @@ not rely on the custom agent's prompt to enforce the boundary.
 **Do.** Open the incident pull request:
 
 ```bash
-./scripts/trigger-incident-gitops.sh
+./scripts/trigger-incident-gitops.sh --repo "your-org/your-demo"
 ```
 
 ```powershell
-pwsh ./scripts/trigger-incident-gitops.ps1
+pwsh .\scripts\trigger-incident-gitops.ps1 -Repository 'your-org/your-demo'
 ```
 
 **Expect.** A branch and an open pull request setting `enable_slow_leak = true`
@@ -436,11 +444,11 @@ paperwork. A human made the decision."
 If the environment was left armed, open a reset pull request:
 
 ```bash
-./scripts/trigger-incident-gitops.sh --reset
+./scripts/trigger-incident-gitops.sh --repo "your-org/your-demo" --reset
 ```
 
 ```powershell
-pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
+pwsh .\scripts\trigger-incident-gitops.ps1 -Repository 'your-org/your-demo' -Reset
 ```
 
 **Expect.** A one-line pull request setting `enable_slow_leak = false`. Merge it
@@ -460,7 +468,7 @@ and let `apply-infra` deploy the healthy state.
 Or, for a locally deployed environment:
 
 ```bash
-./scripts/teardown.sh --scenario B --prefix contosopay --env demo
+./scripts/teardown.sh --scenario B --prefix pay --env demo
 ```
 
 **Expect.** Teardown verifies the scenario recorded in state before destroying

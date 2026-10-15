@@ -77,7 +77,7 @@ jobs:
       id-token: write
     with:
       scenario: ${{ inputs.scenario }}
-      prefix: contosopay
+      prefix: pay
       environment: ${{ needs.identity.outputs.environment }}
       location: ${{ inputs.location }}
       open_incident_pr: false
@@ -96,7 +96,7 @@ jobs:
       id-token: write
     with:
       scenario: ${{ inputs.scenario }}
-      prefix: contosopay
+      prefix: pay
       environment: ${{ needs.identity.outputs.environment }}
       force_delete_rg: false
       delete_state_storage: true

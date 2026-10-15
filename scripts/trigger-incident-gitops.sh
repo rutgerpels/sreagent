@@ -19,6 +19,7 @@
 #   ./scripts/trigger-incident-gitops.sh --base main     # override base branch
 #   ./scripts/trigger-incident-gitops.sh --branch NAME   # override branch name
 #   ./scripts/trigger-incident-gitops.sh --no-pr         # push branch, skip gh pr create
+#   Add --repo CUSTOMER/REPOSITORY (must match origin's push URL).
 # ============================================================================
 
 set -euo pipefail
@@ -32,6 +33,7 @@ RESET="false"
 BRANCH=""
 BASE="main"
 NO_PR="false"
+REPOSITORY="${GITHUB_REPOSITORY:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,7 +41,8 @@ while [[ $# -gt 0 ]]; do
         --branch)       BRANCH="$2"; shift 2 ;;
         --base)         BASE="$2"; shift 2 ;;
         --no-pr)        NO_PR="true"; shift ;;
-        -h|--help)      echo "Usage: $0 [--reset] [--branch NAME] [--base BR] [--no-pr]" >&2; exit 1 ;;
+        --repo)         REPOSITORY="$2"; shift 2 ;;
+        -h|--help)      echo "Usage: $0 --repo OWNER/REPO [--reset] [--branch NAME] [--base BR] [--no-pr]" >&2; exit 1 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -54,6 +57,18 @@ fi
 git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "${REPO_ROOT} is not a git repository." >&2; exit 1; }
 [[ -f "${TFVARS_FILE}" ]] || { echo "Source-of-truth file not found: ${TFVARS_FILE}" >&2; exit 1; }
+[[ "${REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    echo "Set --repo OWNER/REPO (or GITHUB_REPOSITORY) to your customer repository." >&2; exit 1; }
+ORIGIN_URL="$(git -C "${REPO_ROOT}" remote get-url --push --all origin)"
+case "${ORIGIN_URL}" in
+    https://github.com/*) ORIGIN_REPOSITORY="${ORIGIN_URL#https://github.com/}" ;;
+    git@github.com:*) ORIGIN_REPOSITORY="${ORIGIN_URL#git@github.com:}" ;;
+    ssh://git@github.com/*) ORIGIN_REPOSITORY="${ORIGIN_URL#ssh://git@github.com/}" ;;
+    *) echo "origin must push to a single github.com customer repository." >&2; exit 1 ;;
+esac
+ORIGIN_REPOSITORY="${ORIGIN_REPOSITORY%.git}"
+[[ "${ORIGIN_REPOSITORY,,}" == "${REPOSITORY,,}" ]] || {
+    echo "--repo must match origin's push repository; refusing to target an upstream or different repository." >&2; exit 1; }
 
 DESIRED="true"; [[ "${RESET}" == "true" ]] && DESIRED="false"
 STAMP="$(date -u +%Y%m%d%H%M%S)"
@@ -96,7 +111,8 @@ cleanup() { git -C "${REPO_ROOT}" checkout "${BASE}" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 # Portable in-place edit (GNU and BSD sed).
-tmp="$(mktemp)"
+tmp="${TFVARS_FILE}.edit-$$"
+trap 'rm -f "${tmp}"; cleanup' EXIT
 sed -E "s/^[[:space:]]*enable_slow_leak[[:space:]]*=.*/enable_slow_leak = ${DESIRED}/" "${TFVARS_FILE}" > "${tmp}"
 mv "${tmp}" "${TFVARS_FILE}"
 
@@ -115,8 +131,7 @@ git -C "${REPO_ROOT}" push -u origin "${BRANCH}"
 if [[ "${NO_PR}" == "true" ]]; then
     echo "==> Branch pushed. Open a PR from '${BRANCH}' into '${BASE}' to deploy the change."
 else
-    REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
-    PR_URL="$(gh pr create --repo "${REPO_SLUG}" --base "${BASE}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}")"
+    PR_URL="$(gh pr create --repo "${REPOSITORY}" --base "${BASE}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}")"
     echo "==> Pull request opened:"
     echo "    ${PR_URL}"
     echo "    Review + merge it to deploy the change (apply-infra workflow runs on merge)."

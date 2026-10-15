@@ -4,10 +4,17 @@ A small, reproducible checkout application with a deliberately planted fault,
 built so you can show what the **Azure SRE Agent** actually does when something
 breaks in production — and, just as importantly, what it is *not allowed* to do.
 
-**New here? Read this page top to bottom.** It covers what the agent is, what
-gets deployed, what you need, what it costs, and how to choose a scenario. Then
-pick one walkthrough and follow it start to finish. You will not need any other
-document to run the demo.
+**Running this in your own tenant? Start with the
+[customer setup guide: A–Z](docs/customer-setup.md).** It covers your own
+repository, Azure permissions and preview prerequisites, OIDC, deployment,
+agent onboarding, rehearsal and safe cleanup. Then follow your chosen scenario
+walkthrough. Nothing should target the original author's repository or Azure
+environment.
+
+This demo targets **Azure public cloud**, subject to your subscription's
+regional capacity, policy and preview availability. Historical validation notes
+are not a guarantee for a different tenant. No live customer tenant was verified
+as part of the documentation portability review.
 
 For the research and proposed shorter paired-agent demos, see the
 [Observability Agent and SRE Agent proposal](docs/agent-demo-proposal.md).
@@ -117,7 +124,7 @@ Confirm all of these. Missing any one will stop you mid-demo.
 | The Azure SRE Agent available in your tenant and region | It is in preview; check availability before scheduling a demo |
 | A GitHub repository you administer | You will set Actions variables and run workflows |
 | A GitHub OIDC deployment identity federated to that repository | Setup is in the [deployment reference](docs/deployment-reference.md#github-actions-oidc) |
-| Azure CLI, Terraform 1.9+, and Bash or PowerShell locally | Only needed for the incident trigger and a few checks |
+| Tools for your selected deployment path | See the [prerequisite matrix](docs/customer-setup.md#3-install-tools-for-your-deployment-path); local deployment also needs Docker |
 
 **Scenario C additionally needs** a self-hosted GitHub Actions runner inside the
 virtual network, and a GitHub App you create and later revoke. Budget an extra
@@ -135,31 +142,19 @@ must pre-provision the runner host and network.
 The environment bills while it exists. **Tear it down when you are finished** —
 every walkthrough ends with a teardown phase.
 
-Retail list prices, Sweden Central, USD, from the Azure Retail Prices API:
-
-| Component | Price | Applies to |
-| --- | --- | --- |
-| Container Registry, Standard | $0.67 / day | Scenarios A and B |
-| Container Registry, Premium | $1.67 / day | Scenario C — private endpoints require Premium |
-| Managed Grafana, Standard node | $0.043 / hour (~$1.03 / day) | All, **on by default** |
-| Managed Grafana, per active user | $6 / month | All, if Grafana is enabled |
-| Log Analytics ingestion | $2.99 / GB | All |
-| Container Apps | Consumption metering | All — `payment-service` holds one replica, so it never scales to zero |
-| Private endpoints | Hourly, plus data processed | Scenario C only (two) |
-
-As a rough order of magnitude that lands around **$3–5 per day for A or B** and
-**$5–8 per day for C**, excluding your self-hosted runner and any charges for
-the SRE Agent itself. Check current SRE Agent pricing separately — it is in
-preview and not included above. Your negotiated rates and region will differ.
+Budget for Container Apps, ACR, monitoring ingestion, agents and any enabled
+Grafana instance. C/D additionally require private networking and a retained
+runner foundation. Check current pricing in your own region and agreement;
+this guide does not quote a customer cost or include a measured usage estimate.
 
 Scenario A's autonomous Observability Agent investigations are also billable
 and excluded from these infrastructure estimates. Review the
 [Observability Agent billing guidance](https://learn.microsoft.com/azure/azure-monitor/aiops/observability-agent-billing)
 before enabling background runs, and delete the portal-owned agent at teardown.
 
-> **Grafana is the easiest saving.** `enable_grafana` defaults to `true` and is
-> the largest fixed line item after the registry. If you are not showing
-> dashboards, set it to `false` and drop roughly a third of the daily cost.
+> **Optional Grafana:** A/B/C default `enable_grafana` to `true`. If you do not
+> need dashboards, set it to `false` through the configuration consumed by your
+> chosen deployment path. D does not deploy Grafana by default.
 
 ---
 
@@ -168,7 +163,10 @@ before enabling background runs, and delete the portal-owned agent at teardown.
 All three use the same application, the same fault, and the same alert. They
 differ in **how much the agent is allowed to do, and through which path**.
 
-For most audiences the real choice is between two of them:
+**For a first customer run, start with B** for a single-agent GitOps story, or A
+for approved direct recovery. A's additional Observability preview requires
+separate onboarding and rehearsal. C/D add private runner, networking and DNS
+work; do not use them as the first smoke test of a new subscription.
 
 ### [Scenario A — the agent fixes it](docs/scenario-a-direct.md)
 
@@ -269,8 +267,8 @@ Do not authorize on-behalf-of Azure elevation in these GitOps scenarios.
 A human reviews and merges the proposed PR; `apply-infra.yml` deploys the fix.
 See [the permission model](https://learn.microsoft.com/azure/sre-agent/permissions).
 
-> **What is verified.** The full incident-to-pull-request loop is verified end to
-> end in Scenario C. An Azure Monitor Sev2 alert opened the thread, and the agent
+> **Historical evidence, not a fresh-tenant guarantee.** A previous operator
+> reported the full incident-to-pull-request loop in Scenario C. An Azure Monitor Sev2 alert opened the thread, and the agent
 > investigated, identified `enable_slow_leak`, and opened the remediation pull
 > request **unprompted** — no human message in the thread until eleven minutes
 > after the PR existed. Merging it ran `apply-infra`, and `payment-service`
@@ -308,8 +306,11 @@ has the detail.
 
 ## Security posture
 
-This repository is public and contains no secrets. Every scenario holds the same
-invariants: OIDC-only CI/CD, Key Vault with RBAC and purge protection, ACR with
+The intended distribution is a public, customer-neutral source tree. A
+current-tree documentation audit does **not** establish that Git history,
+GitHub variables, workflow logs or external artifacts contain no sensitive
+information. Follow the [distribution checks](docs/customer-setup.md#11-distribute-a-customer-neutral-copy).
+Every scenario is designed around the same invariants: OIDC-only CI/CD, Key Vault with RBAC and purge protection, ACR with
 admin and anonymous access disabled, managed identities for all application
 access, TLS-only ingress, and least-privilege resource-scoped role assignments.
 `checkout-api` and `payment-service` are never public.
@@ -321,11 +322,12 @@ Full list in the
 
 ## Documentation
 
-The three walkthroughs are self-contained. The rest is reference — consult it
-when something breaks, not to run the demo.
+Start with customer setup, then use the scenario walkthrough for its detailed
+configuration and talk track.
 
 | Document | What it is for |
 | --- | --- |
+| [Customer setup A–Z](docs/customer-setup.md) | Fresh repository and tenant, prerequisites, OIDC, deployment, rehearsal, troubleshooting and cleanup |
 | [Scenario A walkthrough](docs/scenario-a-direct.md) | Step-by-step, start to teardown |
 | [Scenario B walkthrough](docs/scenario-b-gitops.md) | Step-by-step, start to teardown |
 | [Scenario C walkthrough](docs/scenario-c-private-gitops.md) | Step-by-step, start to teardown |

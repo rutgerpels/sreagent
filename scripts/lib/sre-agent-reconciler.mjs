@@ -130,6 +130,18 @@ export function loadDesiredState(configDirectory, environment = process.env) {
 
   let codeAccess = { enabled: false, absent: true };
   if (manifest.codeAccess) {
+    const suppliedUrl = environment.SRE_CODE_ACCESS_REPOSITORY_URL;
+    const repository = environment.SRE_CODE_ACCESS_REPOSITORY ||
+      environment.GITHUB_REPOSITORY ||
+      suppliedUrl?.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
+      throw new Error("Code Access requires customer owner/repo in SRE_CODE_ACCESS_REPOSITORY, GITHUB_REPOSITORY or SRE_CODE_ACCESS_REPOSITORY_URL.");
+    }
+    const repositoryUrl = `https://github.com/${repository}`;
+    if (suppliedUrl && suppliedUrl.replace(/\.git$/, "").toLowerCase() !== repositoryUrl.toLowerCase()) {
+      throw new Error("Code Access repository URL must match the configured customer owner/repo on github.com.");
+    }
+    const repositoryName = repository.split("/")[1];
     const codeAccessEnabled = parseExplicitBoolean(
       environment.SRE_CODE_ACCESS_ENABLED,
       "SRE_CODE_ACCESS_ENABLED",
@@ -137,7 +149,7 @@ export function loadDesiredState(configDirectory, environment = process.env) {
     codeAccess = {
       enabled: false,
       domain: manifest.codeAccess.domain,
-      repositoryName: manifest.codeAccess.repositoryName,
+      repositoryName,
     };
     if (codeAccessEnabled) {
       const required = {
@@ -147,7 +159,7 @@ export function loadDesiredState(configDirectory, environment = process.env) {
         privateKeySecretUri: environment.SRE_CODE_ACCESS_PRIVATE_KEY_URI,
         keyVaultManagedIdentityId:
           environment.SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID,
-        repositoryUrl: environment.SRE_CODE_ACCESS_REPOSITORY_URL,
+        repositoryUrl,
       };
       const missing = Object.entries(required)
         .filter(([, value]) => !value)
@@ -160,7 +172,7 @@ export function loadDesiredState(configDirectory, environment = process.env) {
       codeAccess = {
         enabled: true,
         domain: manifest.codeAccess.domain,
-        repositoryName: manifest.codeAccess.repositoryName,
+        repositoryName,
         ...required,
       };
     }

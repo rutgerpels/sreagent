@@ -1,5 +1,14 @@
 # Plan: Scenario D - private paired-agent payment failure
 
+> **Historical design record, not deployment instructions.** This plan predates
+> the approved Bicep redesign. Use the [customer setup guide](customer-setup.md)
+> and [active D walkthrough](scenario-d-private-payments.md). The current D
+> workload is Bicep-only; A/B/C and the retained runner remain Terraform.
+> Autonomous Observability issue creation is paused/unproven. Current acceptance
+> is an on-demand investigation, saved issue, manual handoff and SRE Review-mode
+> recovery after human approval. Do not implement the superseded Terraform
+> workload or autonomous issue-creation proposals below.
+
 **Status:** Planning complete, with network and ownership decisions confirmed
 on 12 October 2026. Implementation and live feasibility checks are not authorized
 or performed; the build-time gates below remain to be satisfied.

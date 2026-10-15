@@ -1,8 +1,9 @@
 # LEGACY REFERENCE ONLY: Scenario D workload now uses infra/scenario-d Bicep.
 # Deploy/destroy via deploy.yml/destroy.yml D routes, never terraform apply.
 ###############################################################################
-# ContosoPay Scenario D - EXAMPLE variables (private "payments fail" demo).
-# Copy to `scenario-d.tfvars` (git-ignored). Placeholders only - no real IDs.
+# ContosoPay Scenario D - historical Terraform input reference only.
+# Do not copy or apply this file. Configure D_RUNNER_NETWORK_RG and
+# D_RUNNER_VNET_NAME, then dispatch deploy.yml/destroy.yml with scenario D.
 #
 # Scenario D is a SEPARATE deployment from A/B/C: own prefix, resource groups,
 # state, telemetry, alerts, identities, DNS and runner network.
@@ -16,7 +17,7 @@ scenario = "D"
 
 # Desired state is healthy. The incident is a live deviation set by
 # scripts/trigger-incident-payments.* - never commit "unavailable" here, or a
-# later terraform apply would re-arm the fault.
+# later deployment would re-arm the fault.
 payment_failure_mode = "off"
 
 # Alert evaluation. Azure Monitor rejects 1-minute rules until the queried
@@ -28,8 +29,8 @@ payment_alert_frequency_minutes = 5
 # Existing private runner network dedicated to Scenario D. A VNet can link to
 # only one private DNS zone per namespace, so do not reuse Scenario C's runner
 # VNet unless you also pass the shared zone IDs below.
-runner_vnet_resource_group          = "agentrg-d"
-runner_vnet_name                    = "agent-vnet-d"
+runner_vnet_resource_group          = "" # Legacy reference; set D_RUNNER_NETWORK_RG for Bicep.
+runner_vnet_name                    = "" # Legacy reference; set D_RUNNER_VNET_NAME for Bicep.
 runner_private_endpoint_subnet_name = "private-endpoints"
 
 # Non-overlapping with Scenario C defaults (10.100.0.0/16).

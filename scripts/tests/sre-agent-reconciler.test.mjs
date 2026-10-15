@@ -16,6 +16,7 @@ import {
 const config = resolve("agent/scenario-c");
 const disabledEnvironment = {
   SRE_CODE_ACCESS_ENABLED: "false",
+  GITHUB_REPOSITORY: "customer/demo",
 };
 
 test("loads the supported Scenario C desired state", () => {
@@ -73,11 +74,27 @@ test("renders no Code Access credential values", () => {
     SRE_CODE_ACCESS_KEY_VAULT_MANAGED_IDENTITY_ID:
       "/subscriptions/example/identities/agent",
     SRE_CODE_ACCESS_REPOSITORY_URL: "https://github.com/example/repository",
+    SRE_CODE_ACCESS_REPOSITORY: "example/repository",
   });
   const rendered = JSON.stringify(renderDesiredState(desired));
   assert.doesNotMatch(rendered, /vault\.example/);
   assert.doesNotMatch(rendered, /Iv1\.example/);
   assert.match(rendered, /Key Vault references from environment/);
+});
+
+test("Code Access binds to the customer's repository, not an upstream manifest alias", () => {
+  const desired = loadDesiredState(config, disabledEnvironment);
+  assert.equal(desired.codeAccess.repositoryName, "demo");
+  assert.throws(() => loadDesiredState(config, { SRE_CODE_ACCESS_ENABLED: "false" }), /customer owner\/repo/);
+  assert.throws(() => loadDesiredState(config, {
+    ...disabledEnvironment, SRE_CODE_ACCESS_REPOSITORY_URL: "https://github.com/other/repository",
+  }), /must match/);
+  assert.throws(() => loadDesiredState(config, {
+    ...disabledEnvironment, SRE_CODE_ACCESS_REPOSITORY_URL: "https://github.example/customer/demo",
+  }), /must match/);
+  assert.equal(loadDesiredState(config, {
+    SRE_CODE_ACCESS_ENABLED: "false", SRE_CODE_ACCESS_REPOSITORY_URL: "https://github.com/customer/another.git",
+  }).codeAccess.repositoryName, "another");
 });
 
 test("loads Scenario D without Code Access or knowledge", () => {

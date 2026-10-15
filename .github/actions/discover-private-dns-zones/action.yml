@@ -40,7 +40,7 @@ runs:
         #  - Uses if/then rather than `[[ ... ]] && continue`, whose non-zero status on a
         #    non-matching test would abort the lookup under `set -e`.
         #  - Compares resource IDs case-insensitively: Azure treats them as case-insensitive
-        #    and returns inconsistent casing (e.g. `resourceGroups/AGENTRG` vs `agentrg`),
+        #    and returns inconsistent casing (e.g. `resourceGroups/RUNNER-RG` vs `runner-rg`),
         #    so a server-side JMESPath `==` comparison silently never matches.
         discover_zone() {
           local zone_name="$1" zone_ids zone_id zone_rg linked_id

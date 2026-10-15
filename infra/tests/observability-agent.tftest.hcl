@@ -33,10 +33,12 @@ mock_provider "random" {}
 mock_provider "time" {}
 
 variables {
-  deploy_apps            = false
-  enable_grafana         = false
-  enable_sre_agents      = false
-  enable_sre_code_access = false
+  deploy_apps                = false
+  enable_grafana             = false
+  enable_sre_agents          = false
+  enable_sre_code_access     = false
+  runner_vnet_resource_group = "test-runner-rg"
+  runner_vnet_name           = "test-runner-vnet"
 }
 
 run "scenario_a_prerequisites" {

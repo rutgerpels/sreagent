@@ -18,7 +18,7 @@ on:
       prefix:
         description: "Resource name prefix"
         required: false
-        default: "contosopay"
+        default: "pay"
       environment:
         description: "Environment label"
         required: false
@@ -50,7 +50,7 @@ on:
         description: "Resource name prefix"
         type: string
         required: false
-        default: "contosopay"
+        default: "pay"
       environment:
         description: "Environment label"
         type: string
@@ -178,7 +178,7 @@ jobs:
   deploy:
     if: ${{ inputs.scenario != 'D' }}
     needs: validate-profile
-    runs-on: ${{ inputs.scenario == 'D' && fromJSON('["self-hosted","Linux","X64","azure-private-d","contosopay"]') || inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.scenario == 'C' && fromJSON(vars.PRIVATE_RUNNER_LABELS_JSON || '["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     # Empty means no environment, so production keeps requesting its branch-scoped
     # OIDC token exactly as before. Scenario D has its own environment, and with it
     # its own federated credential and environment-scoped variables.
@@ -247,14 +247,17 @@ jobs:
         if: ${{ inputs.scenario == 'C' || inputs.scenario == 'D' }}
         shell: bash
         env:
-          RUNNER_NETWORK_RG: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_NETWORK_RG || 'agentrg-d') || (vars.RUNNER_NETWORK_RG || 'agentrg') }}
-          RUNNER_VNET_NAME: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_VNET_NAME || 'agent-vnet-d') || (vars.RUNNER_VNET_NAME || 'agent-vnet') }}
+          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG }}
+          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME }}
           RUNNER_PE_SUBNET_NAME: ${{ inputs.scenario == 'D' && (vars.D_RUNNER_PE_SUBNET_NAME || 'private-endpoints') || (vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints') }}
           APP_VNET_ADDRESS_SPACE: ${{ inputs.scenario == 'D' && (vars.D_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || inputs.ephemeral && (vars.DEV_APP_VNET_ADDRESS_SPACE || '10.101.0.0/16') || (vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16') }}
           APP_PE_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || inputs.ephemeral && (vars.DEV_APP_PE_SUBNET_PREFIX || '10.101.0.0/27') || (vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27') }}
           CONTAINER_APPS_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || inputs.ephemeral && (vars.DEV_CONTAINER_APPS_SUBNET_PREFIX || '10.101.0.64/27') || (vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27') }}
           SRE_AGENT_SUBNET_PREFIX: ${{ inputs.scenario == 'D' && (vars.D_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || inputs.ephemeral && (vars.DEV_SRE_AGENT_SUBNET_PREFIX || '10.101.0.96/27') || (vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27') }}
         run: |
+          set -euo pipefail
+          : "${RUNNER_NETWORK_RG:?Set repository variable RUNNER_NETWORK_RG for the existing private runner.}"
+          : "${RUNNER_VNET_NAME:?Set repository variable RUNNER_VNET_NAME for the existing private runner.}"
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
             echo "TF_VAR_runner_vnet_name=${RUNNER_VNET_NAME}"
@@ -316,7 +319,6 @@ jobs:
           terraform_wrapper: false
 
       - name: Setup Node.js for SRE Agent reconciliation
-        if: ${{ inputs.scenario == 'C' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
@@ -345,7 +347,8 @@ jobs:
               --tags project=sre-agent-demo scenario="${DEPLOYMENT_SCENARIO}" managed_by=github-actions --output none
           fi
           STATE_ID="$(az storage account show -n "${STATE_SA}" -g "${STATE_RG}" --query id -o tsv)"
-          DEPLOYER_OBJECT_ID="$(az ad sp show --id "${ARM_CLIENT_ID}" --query id -o tsv)"
+          DEPLOYER_PRINCIPAL="$(az account get-access-token --resource https://management.azure.com --output json | node scripts/bootstrap-context.mjs principal servicePrincipal)"
+          DEPLOYER_OBJECT_ID="$(jq -er .objectId <<< "${DEPLOYER_PRINCIPAL}")"
           az role assignment create \
             --assignee-object-id "${DEPLOYER_OBJECT_ID}" \
             --assignee-principal-type ServicePrincipal \
@@ -728,6 +731,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BASE_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -745,7 +749,7 @@ jobs:
           TITLE="demo(payment-service): enable slow memory leak (enable_slow_leak=true)"
           BODY="Arms the ContosoPay Scenario ${DEPLOYMENT_SCENARIO} incident. Merging applies the leak flag through the scenario-isolated infrastructure workflow."
           COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/${BASE_BRANCH}...${BRANCH}?expand=1"
-          if url="$(gh pr create --base "${BASE_BRANCH}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}" 2>/tmp/pr.err)"; then
+          if url="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${BRANCH}" --title "${TITLE}" --body "${BODY}" 2>&1)"; then
             echo "Scenario ${DEPLOYMENT_SCENARIO} incident PR: ${url}" >> "${GITHUB_STEP_SUMMARY}"
           else
             echo "Incident branch pushed; open the PR manually: ${COMPARE}" >> "${GITHUB_STEP_SUMMARY}"

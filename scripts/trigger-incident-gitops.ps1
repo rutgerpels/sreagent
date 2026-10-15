@@ -31,6 +31,9 @@
 .PARAMETER NoPr
     Push the branch but skip `gh pr create` (open the PR manually).
 
+.PARAMETER Repository
+    Customer owner/repo, required unless GITHUB_REPOSITORY is set. Must match origin's push URL.
+
 .EXAMPLE
     pwsh ./scripts/trigger-incident-gitops.ps1
     # Opens a PR arming the leak. Review + merge it to start the incident.
@@ -51,6 +54,9 @@ param(
 
     [Parameter()]
     [string]$Base = 'main',
+
+    [Parameter()]
+    [string]$Repository = $env:GITHUB_REPOSITORY,
 
     [Parameter()]
     [switch]$NoPr
@@ -77,6 +83,18 @@ if (-not $NoPr.IsPresent -and -not (Get-Command gh -ErrorAction SilentlyContinue
 git -C $repoRoot rev-parse --is-inside-work-tree *> $null
 if ($LASTEXITCODE -ne 0) { throw "$repoRoot is not a git repository." }
 if (-not (Test-Path $tfvarsFile)) { throw "Source-of-truth file not found: $tfvarsFile" }
+if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw 'Set -Repository OWNER/REPO (or GITHUB_REPOSITORY) to your customer repository.'
+}
+$originUrls = @(git -C $repoRoot remote get-url --push --all origin)
+if ($LASTEXITCODE -ne 0 -or $originUrls.Count -ne 1 -or
+    $originUrls[0] -notmatch '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$') {
+    throw 'origin must push to a single github.com customer repository.'
+}
+$originRepository = $Matches[1] -replace '\.git$', ''
+if ($originRepository -ine $Repository) {
+    throw "-Repository must match origin's push repository; refusing to target an upstream or different repository."
+}
 
 if (-not $Branch) {
     $Branch = if ($Reset.IsPresent) { "Bug/disable-memory-leak-$stamp" } else { "Feature/trigger-memory-leak-$stamp" }
@@ -139,8 +157,7 @@ try {
         Write-Host "==> Branch pushed. Open a PR from '$Branch' into '$Base' to deploy the change." -ForegroundColor Yellow
     }
     else {
-        $repoSlug = gh repo view --json nameWithOwner -q '.nameWithOwner'
-        $prUrl = gh pr create --repo $repoSlug --base $Base --head $Branch --title $title --body $body
+        $prUrl = gh pr create --repo $Repository --base $Base --head $Branch --title $title --body $body
         if ($LASTEXITCODE -ne 0) { throw 'gh pr create failed.' }
         Write-Host '==> Pull request opened:' -ForegroundColor Green
         Write-Host "    $prUrl"

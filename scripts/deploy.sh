@@ -3,8 +3,8 @@
 # Single-command deployment for the ContosoPay / Azure SRE Agent demo.
 #
 # Flow:
-#   1. Validate prerequisites (az, terraform, docker, an az login).
-#   2. terraform init.
+#   1. Validate prerequisites (az, terraform, docker, git, jq, Node.js, an az login).
+#   2. Reconfigure the target backend without copying state; verify its profile.
 #   3. terraform apply (phase 1): platform only, no apps (images don't exist yet).
 #   4. Build + push the three app images to ACR.
 #   5. Lock each manifest and deploy Container Apps by exact digest.
@@ -12,6 +12,8 @@
 #
 # No secrets are handled here. App secrets live in Key Vault, read via managed
 # identity. Scenario C must use deploy.yml from the private runner.
+# Fresh deployments default to prefix pay. Existing deployments must keep their
+# original --prefix/--env; changing defaults does not migrate or rename them.
 # ============================================================================
 
 set -euo pipefail
@@ -19,7 +21,7 @@ set -euo pipefail
 SUBSCRIPTION=""
 IMAGE_TAG=""
 SKIP_BUILD="false"
-PREFIX="contosopay"
+PREFIX="pay"
 ENVIRONMENT="demo"
 LOCATION="swedencentral"
 SCENARIO="A"
@@ -65,6 +67,7 @@ require terraform
 require docker
 require git
 require jq
+require node
 
 IMAGE_TAG="${IMAGE_TAG:-$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
 readonly IMAGE_TAG_PATTERN='^[0-9a-f]{40}$'
@@ -124,8 +127,11 @@ if ! az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}"
         --tags project=sre-agent-demo env="${ENVIRONMENT}" managed_by=terraform --output none
 fi
 SA_ID="$(az storage account show --name "${STATE_SA}" --resource-group "${STATE_RG}" --query id -o tsv)"
-SIGNED_IN_ID="$(az ad signed-in-user show --query id -o tsv)"
-az role assignment create --assignee-object-id "${SIGNED_IN_ID}" --assignee-principal-type User \
+ACCOUNT_TYPE="$(az account show --query user.type -o tsv)"
+PRINCIPAL="$(az account get-access-token --resource https://management.azure.com --output json | node "${SCRIPT_DIR}/bootstrap-context.mjs" principal "${ACCOUNT_TYPE}")"
+SIGNED_IN_ID="$(jq -er .objectId <<< "${PRINCIPAL}")"
+PRINCIPAL_TYPE="$(jq -er .principalType <<< "${PRINCIPAL}")"
+az role assignment create --assignee-object-id "${SIGNED_IN_ID}" --assignee-principal-type "${PRINCIPAL_TYPE}" \
     --role "Storage Blob Data Contributor" --scope "${SA_ID}" --output none 2>/dev/null || true
 echo "    Waiting for role propagation..."
 created="false"
@@ -137,11 +143,14 @@ done
 [[ "${created}" == "true" ]] || { echo "Could not create state container (role propagation timed out)." >&2; exit 1; }
 
 echo "==> terraform init (remote azurerm backend)"
-terraform -chdir="${INFRA_DIR}" init -input=false -migrate-state -force-copy \
+terraform -chdir="${INFRA_DIR}" init -input=false -reconfigure \
     -backend-config="resource_group_name=${STATE_RG}" \
     -backend-config="storage_account_name=${STATE_SA}" \
     -backend-config="container_name=${STATE_CONTAINER}" \
     -backend-config="key=${STATE_KEY}"
+
+terraform -chdir="${INFRA_DIR}" show -json |
+    node "${SCRIPT_DIR}/bootstrap-context.mjs" state "${SCENARIO}" "${PREFIX}" "${ENVIRONMENT}"
 
 # Preserve the immutable application resource-group location on reruns.
 STATE_RESOURCES="$(terraform -chdir="${INFRA_DIR}" state list 2>/dev/null || true)"

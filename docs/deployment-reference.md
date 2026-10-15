@@ -5,12 +5,13 @@
 > reusable `scenario-d-bicep.yml` from the requested feature ref, with all
 > Terraform jobs skipped. Follow the [Scenario D lifecycle](scenario-d-private-payments.md#deploy-restart-and-teardown),
 > not the Terraform state/deployment commands below. A/B/C and the retained
-> `infra/runner-d` foundation remain Terraform. D teardown retains `agentrg-d`
-> and `rg-payd-tfstate` and never deallocates its own runner.
+> `infra/runner-d` foundation remain Terraform. D teardown retains the
+> customer-selected runner resource group and any shared state infrastructure,
+> and never deallocates its own runner.
 
 
 Operational detail shared by all three scenario walkthroughs. Read the
-[README](../README.md) first; come here when a walkthrough links to
+[customer setup guide](customer-setup.md) first; come here when a walkthrough links to
 a specific section.
 
 ---
@@ -109,7 +110,7 @@ profile**. It is not a set of independent toggles.
 | **A** | High access, Contributor, Autonomous | Public control endpoints; GitHub-hosted jobs or the local wrapper | Direct Azure remediation; no write connector |
 | **B** | Low access, Reader, Review | Public endpoints protected by RBAC and TLS; GitHub-hosted jobs or the local wrapper | Code Access, signed in with a user account (OAuth); no connector and no token |
 | **C** | Low access, Reader, Review; Terraform plus API reconciliation | Private ACR, Key Vault, and state endpoints; dedicated agent egress subnet; private self-hosted runner | Code Access; the agent opens the remediation pull request and a human merges it |
-| **D** | High access, Contributor, Review; Terraform plus API reconciliation | Private ACR and Key Vault endpoints in its own VNet; private self-hosted runner | None (no GitOps); direct change after human approval |
+| **D** | High access, Contributor, Review; Bicep plus API reconciliation | Private ACR and Key Vault endpoints in its own VNet; retained Terraform private runner | None (no GitOps); direct change after human approval |
 
 Reader describes workload access, not the identities' entire permission set.
 Both agent identities also hold subscription-level Monitoring Contributor for
@@ -214,17 +215,30 @@ commit SHA, locks it, and deploys the resolved manifest digest.
 
 ```bash
 az login
-./scripts/deploy.sh --scenario A --prefix contosopay --env demo
+./scripts/deploy.sh --scenario A --prefix pay --env demo
 ```
 
 ```powershell
 az login
-pwsh ./scripts/deploy.ps1 -Scenario B -Prefix contosopay -Environment demo
+pwsh .\scripts\deploy.ps1 -Scenario B -Prefix pay -Environment demo
 ```
 
 It is not a substitute for OIDC in CI. Scenario C must use the **deploy**
 workflow from the private runner, because its state, ACR, and Key Vault
 endpoints are private.
+
+The local wrapper requires Node.js 20 as well as Terraform, Azure CLI, Git and
+Docker; the Bash path also needs `jq` and standard GNU utilities. Its own
+backend role-assignment principal is derived from the authenticated ARM token,
+not a Microsoft Graph service-principal lookup.
+
+`pay` is a **fresh-deployment default only**. Existing deployments must keep
+their original prefix/environment and stored `TF_PREFIX` when applying or
+destroying. The wrapper reconfigures the checkout for the selected target
+backend, then verifies the state's scenario, prefix and environment before
+apply. It does not implicitly migrate cached state. Stop on a target mismatch;
+do not rename an old stack by accepting the new default or copy state between
+profiles to bypass validation.
 
 ---
 
@@ -245,11 +259,13 @@ Scenario C runs destroy on the private runner. For a locally deployed A or B
 environment:
 
 ```bash
-./scripts/teardown.sh --scenario A --prefix contosopay --env demo
+./scripts/teardown.sh --scenario A --prefix pay --env demo
 ```
 
 Teardown verifies the scenario recorded in state before destroying anything.
 Never destroy by guessed resource-name patterns.
+The example uses the new-deployment prefix; substitute the original exact
+prefix/environment for an existing stack.
 
 For capacity failures, retain the isolated state until the exact application
 resource group's removal is verified, including resources left outside state

@@ -64,7 +64,6 @@
     }
   ],
   "codeAccess": {
-    "domain": "github.com",
-    "repositoryName": "sreagent"
+    "domain": "github.com"
   }
 }

@@ -1,5 +1,12 @@
 # Scenario A: autonomous investigation, approved direct remediation
 
+**New customer tenant?** Complete [customer setup A–Z](customer-setup.md)
+first. Use your own repository, identity and deployment outputs throughout.
+Timing and historical observations are rehearsal guidance, not portable guarantees.
+Examples use the new-deployment prefix `pay`. For an existing stack, keep its
+original prefix/environment and `TF_PREFIX` for every trigger, apply and destroy;
+do not accept a new default to rename or migrate it.
+
 **The story you tell.** A payment service starts leaking memory. Azure Monitor
 fires an alert. The Azure Copilot Observability Agent automatically creates an
 Azure Monitor issue from that individual alert and starts an investigation.
@@ -126,7 +133,7 @@ a credentials JSON secret — deployment authenticates with OIDC only.
 | Input | Value | Note |
 | --- | --- | --- |
 | Scenario | `A` | Selects the High / Contributor / Autonomous profile |
-| Resource name prefix | `contosopay` | Any short lowercase prefix works |
+| Resource name prefix | `pay` | New-deployment default; retain the original prefix for an existing stack |
 | Environment label | `demo` | Appears in names and the state key |
 | Azure region | `<chosen-supported-region>` | Choose a region currently available to your subscription; see [supported regions](https://learn.microsoft.com/azure/sre-agent/supported-regions) |
 | Open incident PR | `false` | Scenario A arms the incident directly, not by PR |
@@ -160,7 +167,7 @@ Only after the deploy run has succeeded and you have read its summary.
 **Do.** Under **Actions → Variables**, add these three variables **in this
 order**:
 
-1. `TF_PREFIX` = the prefix you deployed (for example `contosopay`)
+1. `TF_PREFIX` = the prefix you deployed (for a new default deployment, `pay`)
 2. `TF_ENVIRONMENT` = the environment you deployed (for example `demo`)
 3. `DEPLOYMENT_SCENARIO` = `A` — **set this one last**
 
@@ -318,7 +325,7 @@ az login
 export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 export ARM_USE_AZUREAD=true
 
-PREFIX=contosopay
+PREFIX=pay
 SCENARIO=A
 ENVIRONMENT=demo
 STATE_SA="sttf$(printf '%s\0%s\0%s' "${ARM_SUBSCRIPTION_ID}" "${PREFIX}" "${SCENARIO}" | sha256sum | cut -c1-16)"
@@ -340,7 +347,7 @@ az login
 $env:ARM_SUBSCRIPTION_ID = (az account show --query id -o tsv)
 $env:ARM_USE_AZUREAD = 'true'
 
-$prefix = 'contosopay'; $scenario = 'A'; $environment = 'demo'
+$prefix = 'pay'; $scenario = 'A'; $environment = 'demo'
 $sha = [System.Security.Cryptography.SHA256]::Create()
 $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($env:ARM_SUBSCRIPTION_ID)$([char]0)$prefix$([char]0)$scenario"))
 $stateSa = 'sttf' + ([BitConverter]::ToString($bytes) -replace '-', '').ToLower().Substring(0, 16)
@@ -617,7 +624,7 @@ resources or the whole subscription's role assignments.
 Or, for a locally deployed environment:
 
 ```bash
-./scripts/teardown.sh --scenario A --prefix contosopay --env demo
+./scripts/teardown.sh --scenario A --prefix pay --env demo
 ```
 
 **Expect.** Teardown verifies that the selected state actually records Scenario

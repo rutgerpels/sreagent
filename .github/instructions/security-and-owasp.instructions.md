@@ -409,7 +409,7 @@ Require current password before account deletion, email change, or other sensiti
 
 ```typescript
 // BAD
-const API_KEY = 'sk_live_abc123def456';
+const API_KEY = '<hardcoded-api-key>';
 
 // GOOD
 const API_KEY = process.env.API_KEY;
@@ -1055,4 +1055,3 @@ Set-Cookie: session=value; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=36
 - [ ] No sensitive data in logs (passwords, tokens, PII)
 - [ ] Structured logging with correlation IDs
 - [ ] Alerts configured for anomalous patterns
-
