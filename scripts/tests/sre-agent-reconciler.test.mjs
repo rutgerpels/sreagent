@@ -81,7 +81,7 @@ test("renders no Code Access credential values", () => {
 });
 
 test("loads Scenario D without Code Access or knowledge", () => {
-  const desired = loadDesiredState(resolve("agent/scenario-d"), {});
+  const desired = loadDesiredState(resolve("agent/scenario-d"), { SRE_PAYMENT_FAILURE_ALERT_NAME: "alert-payment-failures-d-abcdefgh" });
   assert.equal(desired.managedTag, "contosopay-scenario-d");
   assert.equal(desired.codeAccess.absent, true);
   assert.equal(desired.codeAccess.enabled, false);
@@ -94,7 +94,7 @@ test("loads Scenario D without Code Access or knowledge", () => {
 });
 
 test("Scenario D permits writes only through the approval prompt", () => {
-  const { permissions } = loadDesiredState(resolve("agent/scenario-d"), {});
+  const { permissions } = loadDesiredState(resolve("agent/scenario-d"), { SRE_PAYMENT_FAILURE_ALERT_NAME: "alert-payment-failures-d-abcdefgh" });
   const rendered = JSON.stringify(permissions);
   assert.match(rendered, /RunAzCliWriteCommands/);
   assert.equal(permissions.allow.includes("RunAzCliWriteCommands"), false);

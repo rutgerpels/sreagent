@@ -1,5 +1,14 @@
 # Deployment and state reference
 
+> **Scenario D exception:** the user-approved D workload is Bicep-only in
+> `infra/scenario-d`. Existing `deploy.yml` and `destroy.yml` D selections call
+> reusable `scenario-d-bicep.yml` from the requested feature ref, with all
+> Terraform jobs skipped. Follow the [Scenario D lifecycle](scenario-d-private-payments.md#deploy-restart-and-teardown),
+> not the Terraform state/deployment commands below. A/B/C and the retained
+> `infra/runner-d` foundation remain Terraform. D teardown retains `agentrg-d`
+> and `rg-payd-tfstate` and never deallocates its own runner.
+
+
 Operational detail shared by all three scenario walkthroughs. Read the
 [README](../README.md) first; come here when a walkthrough links to
 a specific section.

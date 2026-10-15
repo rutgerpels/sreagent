@@ -33,13 +33,21 @@ class ScenarioDWorkflowTests(unittest.TestCase):
                 self.assertNotRegex(text, r"SCENARIO_PATTERN='\^\(A\|B\|C\|D\)\$'")
 
     def test_deploy_starts_fault_disarmed(self):
-        self.assertRegex(read("deploy.yml"), r"TF_VAR_payment_failure_mode=off")
+        apps = (WORKFLOWS.parents[1] / "infra" / "scenario-d" / "apps.bicep").read_text(encoding="utf-8")
+        self.assertIn("PAYMENT_FAILURE_MODE', value: 'off'", apps)
+        self.assertIn("ENABLE_SLOW_LEAK', value: 'false'", apps)
 
-    def test_deploy_reconciles_d_agent_with_scenario_d_config(self):
-        text = read("deploy.yml")
-        self.assertIn("agent/scenario-d", text)
-        self.assertIn("agent/scenario-c", text)
-        self.assertGreaterEqual(text.count("inputs.scenario == 'C' || inputs.scenario == 'D'"), 3)
+    def test_d_routes_to_reusable_bicep_and_terraform_jobs_are_gated_out(self):
+        for name, job in (("deploy.yml", "deploy"), ("destroy.yml", "destroy")):
+            text = read(name)
+            self.assertIn("uses: ./.github/workflows/scenario-d-bicep.yml", text)
+            self.assertRegex(text, rf"  {job}:\s+if: \$\{{\{{ inputs.scenario != 'D' \}}\}}")
+        lifecycle = (WORKFLOWS.parents[1] / "scripts" / "lib" / "scenario-d-lifecycle.mjs").read_text(encoding="utf-8")
+        self.assertIn("'agent/scenario-d'", lifecycle)
+        self.assertNotIn("terraform", lifecycle.lower())
+        # A/B/C still use the original validated Terraform path and C reconciler.
+        self.assertIn("needs: validate-profile", read("deploy.yml"))
+        self.assertIn("agent/scenario-c", read("deploy.yml"))
 
     def test_d_destroy_rejects_ephemeral_mode(self):
         self.assertRegex(read("destroy.yml"), r"(?is)D.{0,200}ephemeral|ephemeral.{0,200}D")

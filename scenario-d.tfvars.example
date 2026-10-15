@@ -1,3 +1,5 @@
+# LEGACY REFERENCE ONLY: Scenario D workload now uses infra/scenario-d Bicep.
+# Deploy/destroy via deploy.yml/destroy.yml D routes, never terraform apply.
 ###############################################################################
 # ContosoPay Scenario D - EXAMPLE variables (private "payments fail" demo).
 # Copy to `scenario-d.tfvars` (git-ignored). Placeholders only - no real IDs.

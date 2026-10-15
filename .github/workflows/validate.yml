@@ -39,5 +39,26 @@ jobs:
       - name: Check SRE Agent reconciler
         run: node --test scripts/tests/sre-agent-reconciler.test.mjs
 
+      - name: Build services for dependency tracing checks
+        run: |
+          npm ci --prefix src/frontend
+          npm run build --prefix src/frontend
+          npm ci --prefix src/checkout-api
+          npm run build --prefix src/checkout-api
+
+      - name: Check native fetch dependency tracing
+        run: node --test scripts/tests/fetch-telemetry.test.mjs
+
+      - name: Check Scenario D lifecycle offline
+        run: |
+          python3 scripts/tests/scenario-d-workflows.test.py
+          node --test scripts/tests/scenario-d-lifecycle.test.mjs
+
+      - name: Build and lint Scenario D Bicep (no Azure login)
+        run: |
+          set -euo pipefail
+          az bicep install --version v0.48.1
+          python3 scripts/tests/scenario-d-bicep.test.py --cli az
+
       - name: Check whitespace
         run: git diff --check HEAD^ HEAD

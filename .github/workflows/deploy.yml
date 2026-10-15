@@ -10,6 +10,11 @@ on:
         type: choice
         required: true
         options: [A, B, C, D]
+      scenario_d_generation:
+        description: 'Scenario D Bicep lifecycle generation (not Terraform state)'
+        type: string
+        required: false
+        default: bicep1
       prefix:
         description: "Resource name prefix"
         required: false
@@ -36,6 +41,11 @@ on:
         description: "Deployment scenario"
         type: string
         required: true
+      scenario_d_generation:
+        description: 'Scenario D Bicep lifecycle generation (not Terraform state)'
+        type: string
+        required: false
+        default: bicep1
       prefix:
         description: "Resource name prefix"
         type: string
@@ -78,7 +88,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  scenario-d-bicep:
+    if: ${{ inputs.scenario == 'D' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/scenario-d-bicep.yml
+    with:
+      action: deploy
+      prefix: ${{ inputs.prefix }}
+      environment: ${{ inputs.environment }}
+      generation: ${{ inputs.scenario_d_generation }}
+      reject_legacy_flags: ${{ inputs.ephemeral || inputs.open_incident_pr }}
+      workload_location: ${{ inputs.location }}
+
   validate-profile:
+    if: ${{ inputs.scenario != 'D' }}
     name: Validate deployment profile
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -151,6 +176,7 @@ jobs:
           fi
 
   deploy:
+    if: ${{ inputs.scenario != 'D' }}
     needs: validate-profile
     runs-on: ${{ inputs.scenario == 'D' && fromJSON('["self-hosted","Linux","X64","azure-private-d","contosopay"]') || inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     # Empty means no environment, so production keeps requesting its branch-scoped

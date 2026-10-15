@@ -21,6 +21,7 @@ function parseArguments(argumentsList) {
     if (name === "subscription") options.subscription = value;
     else if (name === "resource-group") options.resourceGroup = value;
     else if (name === "agent") options.agentName = value;
+    else if (name === "payment-failure-alert-name") options.paymentFailureAlertName = value;
     else if (name === "config") options.config = resolve(value);
     else if (name === "mode" && ["apply", "verify", "render"].includes(value)) options.mode = value;
     else throw new Error(`Unsupported option: ${argument} ${value}`);
@@ -39,7 +40,10 @@ function parseArguments(argumentsList) {
 
 try {
   const options = parseArguments(process.argv.slice(2));
-  const desired = loadDesiredState(options.config);
+  const desired = loadDesiredState(options.config, {
+    ...process.env,
+    ...(options.paymentFailureAlertName ? { SRE_PAYMENT_FAILURE_ALERT_NAME: options.paymentFailureAlertName } : {}),
+  });
   if (options.mode === "render") {
     process.stdout.write(`${JSON.stringify(renderDesiredState(desired), null, 2)}\n`);
   } else {

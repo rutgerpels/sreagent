@@ -10,6 +10,16 @@ on:
         type: choice
         required: true
         options: [A, B, C, D]
+      scenario_d_generation:
+        description: 'Scenario D Bicep lifecycle generation (not Terraform state)'
+        type: string
+        required: false
+        default: bicep1
+      scenario_d_confirm_destroy:
+        description: 'D: exact ownership deployment name; required for Bicep destroy'
+        type: string
+        required: false
+        default: ''
       prefix:
         description: "Resource name prefix"
         required: false
@@ -36,6 +46,16 @@ on:
         description: "Deployment scenario"
         type: string
         required: true
+      scenario_d_generation:
+        description: 'Scenario D Bicep lifecycle generation (not Terraform state)'
+        type: string
+        required: false
+        default: bicep1
+      scenario_d_confirm_destroy:
+        description: 'D: exact ownership deployment name; required for Bicep destroy'
+        type: string
+        required: false
+        default: ''
       prefix:
         description: "Resource name prefix"
         type: string
@@ -75,7 +95,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  scenario-d-bicep:
+    if: ${{ inputs.scenario == 'D' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/scenario-d-bicep.yml
+    with:
+      action: destroy
+      prefix: ${{ inputs.prefix }}
+      environment: ${{ inputs.environment }}
+      generation: ${{ inputs.scenario_d_generation }}
+      reject_legacy_flags: ${{ inputs.ephemeral || inputs.force_delete_rg || inputs.delete_state_storage }}
+      confirm_destroy: ${{ inputs.scenario_d_confirm_destroy }}
+
   destroy:
+    if: ${{ inputs.scenario != 'D' }}
     runs-on: ${{ inputs.scenario == 'D' && fromJSON('["self-hosted","Linux","X64","azure-private-d","contosopay"]') || (inputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest') }}
     environment: ${{ inputs.scenario == 'D' && 'scenario-d' || inputs.environment_name }}
     timeout-minutes: 60

@@ -166,12 +166,29 @@ export function loadDesiredState(configDirectory, environment = process.env) {
     }
   }
 
+  // D must never reconcile an enabled subscription-wide Sev2 filter. Bind the
+  // supported titleContains field to the exact deployed payment alert name;
+  // missing/invalid runtime scope fails closed before any data-plane write.
+  const incidentFilters = (manifest.incidentFilters ?? []).map((filter) => {
+    const { titleContainsEnvironmentVariable, ...item } = filter;
+    if (!titleContainsEnvironmentVariable) return item;
+    if (manifest.managedTag !== "contosopay-scenario-d" ||
+        titleContainsEnvironmentVariable !== "SRE_PAYMENT_FAILURE_ALERT_NAME") {
+      throw new Error("Unsupported incident-filter scope binding.");
+    }
+    const alertName = environment[titleContainsEnvironmentVariable];
+    if (!/^alert-payment-failures-d-[a-z0-9]{8}$/.test(alertName ?? "")) {
+      throw new Error("SRE_PAYMENT_FAILURE_ALERT_NAME must be the exact deployed Scenario D payment-failure alert name.");
+    }
+    return { ...item, properties: { ...item.properties, titleContains: alertName } };
+  });
+
   return {
     managedTag: manifest.managedTag ?? MANAGED_TAG,
     expectedAgent: manifest.expectedAgent,
     permissions: permissions.permissions,
     subagents,
-    incidentFilters: manifest.incidentFilters ?? [],
+    incidentFilters,
     scheduledTasks: manifest.scheduledTasks ?? [],
     knowledge,
     codeAccess,

@@ -17,7 +17,7 @@ it is not a replacement for the runnable walkthroughs below.
 The selected follow-up is documented in the
 [Scenario D private payment-failure plan](docs/scenario-d-private-payments-plan.md):
 a separate deployment with both agents, policy-aware RBAC and its own private
-PaaS networking. **Plan only; not a runnable fourth scenario yet.**
+PaaS networking. **Scenario D now has a dedicated Bicep lifecycle; see the [active walkthrough](docs/scenario-d-private-payments.md). New live validation is pending.**
 
 ---
 
@@ -53,7 +53,8 @@ Three Node.js/TypeScript services on Azure Container Apps:
 
 Around them: Azure Container Registry, Key Vault, Application Insights, Log
 Analytics, Azure Monitor alerting, and optional Azure Managed Grafana. Terraform
-owns the demo infrastructure. GitHub Actions authenticates with OpenID Connect —
+owns A/B/C and the retained private-runner foundation; Bicep owns the
+separate Scenario D workload. GitHub Actions authenticates with OpenID Connect —
 there are no stored Azure credentials.
 
 **Scenario A additionally pairs the Azure Copilot Observability Agent with SRE
@@ -217,14 +218,21 @@ of the same demo.
 
 ### [Scenario D — payments fail, checkout fails with them](docs/scenario-d-private-payments.md)
 
-*Show the two agents side by side.* **Built, not yet live-verified.**
+*Show the two agents side by side.* **Bicep redesign implemented; new live dry-run pending.**
 
 A separate private-network deployment where the payment processor becomes
 unavailable and every checkout fails with it. The Observability Agent
-investigates the symptoms in parallel; the SRE Agent, in Review mode, proposes
+investigates on demand, and the operator saves an issue; the SRE Agent, in Review mode, proposes
 the flag-off fix once the operator hands it the Observability evidence. A
 human approves. D runs alongside A/B/C without touching them, and its
-10-minute target is a rehearsal goal that has not been measured.
+10-minute target is a rehearsal goal that has not been measured. D uses
+`infra/scenario-d` Bicep through the existing manual `deploy.yml` / `destroy.yml`
+D routes (reusable `scenario-d-bicep.yml`), never Terraform for the workload.
+Only the retained runner foundation remains Terraform. Autonomous Observability
+issue creation is paused; SRE automatic diagnosis remains enabled in Review mode
+for only the exact deployed payment-failure alert. The paired dry-run still uses
+an on-demand Observability investigation and manual evidence handoff; recovery
+requires human approval.
 
 ### Side by side
 
@@ -280,12 +288,14 @@ See [the permission model](https://learn.microsoft.com/azure/sre-agent/permissio
 
 ---
 
-## One scenario at a time
+## One active A/B/C scenario at a time
 
 Terraform takes a single `scenario` value (`A`, `B`, or `C`) and derives the
 entire profile — networking, agent permissions, runner, and remediation path —
 from it. Resource names, the state storage account, and the state blob key all
-include the scenario, so each profile is fully isolated.
+include the scenario, so each profile is fully isolated. Scenario D is an
+independent manual Bicep side deployment with its own Azure ownership ledger;
+it does not change A/B/C activation variables or migrate their state.
 
 **In-place conversion between scenarios is unsupported** and is rejected by
 every deployment path. To switch: destroy the active profile, delete the

@@ -44,18 +44,9 @@
         "handlingAgent": "payment-recovery",
         "agentMode": "Review",
         "maxAutomatedInvestigationAttempts": 3
-      }
+      },
+      "titleContainsEnvironmentVariable": "SRE_PAYMENT_FAILURE_ALERT_NAME"
     }
   ],
-  "scheduledTasks": [
-    {
-      "name": "daily-contosopay-payment-health",
-      "properties": {
-        "description": "Daily payment-path health summary for the Scenario D resource group",
-        "cronExpression": "0 8 * * *",
-        "agentPrompt": "Summarize the last 24 hours of Azure Monitor incidents, fired alerts, Container Apps health, and failed /pay and /checkout requests for the managed ContosoPay Scenario D resource group. Flag anything requiring human attention. Use read-only tools only.",
-        "agentMode": "Review"
-      }
-    }
-  ]
+  "scheduledTasks": []
 }

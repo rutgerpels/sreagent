@@ -51,7 +51,7 @@ done
 
 readonly SCENARIO_PATTERN='^(A|B)$'
 [[ "${SCENARIO}" =~ ${SCENARIO_PATTERN} ]] || {
-    echo "Local deployment supports Scenario A or B only. Run deploy.yml on the private runner for Scenario C." >&2
+    echo "Local deployment supports Scenario A or B only. Run deploy.yml on the private runner for Scenario C; Scenario D uses the Bicep route in deploy.yml/scenario-d-bicep.yml." >&2
     exit 1
 }
 
