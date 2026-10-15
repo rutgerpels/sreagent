@@ -10,6 +10,8 @@
 import { ManagedIdentityCredential } from '@azure/identity';
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
 import { metrics } from '@opentelemetry/api';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 
 const serviceName = process.env.SERVICE_NAME ?? 'checkout-api';
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
@@ -29,6 +31,10 @@ if (connectionString) {
         ? { credential: new ManagedIdentityCredential({ clientId: telemetryIdentityClientId }) }
         : {}),
     },
+  });
+  // Native fetch uses Undici, not the HTTP module instrumented by the distro.
+  registerInstrumentations({
+    instrumentations: [new UndiciInstrumentation({ requireParentforSpans: true })],
   });
   // eslint-disable-next-line no-console
   console.log(`[telemetry] Azure Monitor enabled for ${serviceName}`);
