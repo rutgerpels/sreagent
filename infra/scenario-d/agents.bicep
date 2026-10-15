@@ -22,7 +22,7 @@ resource sre 'Microsoft.App/agents@2025-05-01-preview' = {
     incidentManagementConfiguration: { type: 'AzMonitor', connectionName: 'azure-monitor' }
     knowledgeGraphConfiguration: { identity: foundations.actionIdentityId, managedResources: [resourceGroup().id] }
     // No secret-bearing connection string in ARM properties or deployment outputs.
-    monthlyAgentUnitLimit: 100
+    monthlyAgentUnitLimit: 500
     upgradeChannel: 'Stable'
     experimentalSettings: { EnableHttpTriggers: true, EnableV2AgentLoop: true, EnableWorkspaceTools: true }
     vnetConfiguration: { subnetResourceId: '${ownership.appVnetId}/subnets/sre-agent' }

@@ -680,7 +680,7 @@ The already-dispatchable workflows route D to reusable
 `scenario-d-bicep.yml`, so the initial run needs no merge to `main`:
 
 ```powershell
-gh workflow run deploy.yml --ref feature/scenario-d-private-payments `
+gh workflow run deploy.yml --ref rutgerpels-scenario-d-bicep-redesign `
   -f scenario=D -f prefix=payd -f environment=demo -f location=swedencentral `
   -f scenario_d_generation=bicep1 -f open_incident_pr=false
 ```
@@ -719,7 +719,9 @@ are runner-wide.
    external HTTPS frontend only and internal backends. Verify real
    `POST /api/checkout` with `amount=42,currency=EUR`, HTTP success and a
    confirmed order containing an approved payment (not merely `/health`).
-5. Deploy paused OBA + High/Contributor/Review SRE; exact documented SRE
+5. Deploy paused OBA + High/Contributor/Review SRE with an explicit monthly
+   agent-unit limit of 500 (the live service rejects nonzero limits below 500);
+   exact documented SRE
    Monitoring Contributor subscription exceptions for action/system identities;
    connectors + five-minute failure alerts. Reuse the reconciler to install
    payment-recovery and approval-only write policy. Enable only the D payment
@@ -728,6 +730,17 @@ are runner-wide.
    fails closed; no unrelated Sev2 subscription pickup. No scheduled tasks are
    configured. Verify reconciliation and real checkout again. Deployment never
    triggers the incident; OBA remains disabled.
+
+The replacement delivery branch supersedes the earlier Scenario D PR without
+closing it automatically. It preserves the original private-payments baseline
+and native-fetch dependency tracing fixes.
+
+Subscription-level ownership templates pass both the subscription and resource
+group explicitly to `resourceId`; see Microsoft's
+[Resource functions for Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/bicep-functions-resource#resourceid).
+Ownership validation compares the exact ordered resource paths and cardinality,
+not Azure CLI's added `resourceGroup` presentation metadata. Neither correction
+permits taking over a foreign resource or deleting the retained runner.
 
 Native preview resources avoid Terraform's unsupported OBA read/destroy path.
 Pinned AVM modules cover identities, VNet, ACR, KV, private endpoints and apps.
@@ -758,7 +771,7 @@ by soft deletion. Ordinary incremental Bicep does not delete omitted resources.
 ### Explicit complete teardown
 
 ```powershell
-gh workflow run destroy.yml --ref feature/scenario-d-private-payments `
+gh workflow run destroy.yml --ref rutgerpels-scenario-d-bicep-redesign `
   -f scenario=D -f prefix=payd -f environment=demo `
   -f scenario_d_generation=bicep1 `
   -f scenario_d_confirm_destroy=scenario-d-payd-demo-d-bicep1 `

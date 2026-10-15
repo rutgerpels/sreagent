@@ -37,6 +37,11 @@ class ScenarioDBicepTests(unittest.TestCase):
                 result = subprocess.run(command, capture_output=True, text=True, timeout=180, cwd=ROOT)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 template = json.loads(result.stdout)
+                if path.name == "agents.bicep":
+                    agents = [resource for resource in template["resources"]
+                              if resource["type"] == "Microsoft.App/agents"]
+                    self.assertEqual(len(agents), 1)
+                    self.assertEqual(agents[0]["properties"]["monthlyAgentUnitLimit"], 500)
                 if path.name == "main.bicep":
                     compiled = json.dumps(template)
                     self.assertNotIn("subscriptionResourceId(variables('rgName')", compiled)
