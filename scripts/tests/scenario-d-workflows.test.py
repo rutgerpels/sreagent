@@ -17,7 +17,7 @@ class ScenarioDWorkflowTests(unittest.TestCase):
                 text = read(name)
                 self.assertIn("options: [A, B, C, D]", text)
                 self.assertIn("SCENARIO_PATTERN='^(A|B|C|D)$'", text)
-                self.assertIn("azure-private-d", text)
+                self.assertIn("uses: ./.github/workflows/scenario-d-bicep.yml", text)
                 self.assertIn("scenario-d", text)
 
     def test_repository_active_scenario_never_includes_d(self):

@@ -1,11 +1,18 @@
 # Scenario D — payments fail, checkout fails with them
 
-> **Current setup: Scenario D uses Bicep; live redesign validation is pending.**
+> **Current setup: Scenario D uses Bicep; full live rehearsal is pending.**
 > The approved target is manual Observability investigation → save issue →
 > manual handoff → SRE Review-mode recovery after human approval. Autonomous
 > issue creation remains **PAUSED / UNPROVEN**. Historical 2026-10-13 results
 > below describe the deleted legacy Terraform/portal deployment, not the new
-> Bicep environment. No successful new live rehearsal is claimed here.
+> Bicep environment. A separate anonymized historical healthy Bicep checkpoint
+> appears below; no completed paired-agent rehearsal or customer-tenant
+> validation is claimed here.
+
+Start with [customer setup A–Z](customer-setup.md), then complete
+[one-time operator setup](#one-time-operator-setup) and
+[deployment](#deployment-in-your-own-repository) before running Part 0.
+Historical names, feature branches and run links are not prerequisites.
 
 Scenario D pairs the Azure Copilot Observability Agent with the Azure SRE Agent
 on a private-network deployment, separate from Scenarios A, B and C. This page
@@ -44,20 +51,21 @@ is a temporary live deviation.
 
 ## Environment reference
 
-Replace the names below if the deployment suffix changed. The suffix is deterministic for subscription + profile + lifecycle generation.
-Use the deployment outputs, not names from a historical rehearsal.
+The suffix is deterministic for subscription + profile + lifecycle generation.
+Use your ownership/deployment outputs, not names from a historical rehearsal.
+`<prefix>` and `<environment>` mean the exact values you chose at deployment.
 
 | Item | Value |
 | --- | --- |
 | Subscription | Operator-selected demo subscription; never commit its ID or identifying name |
 | Region | `swedencentral` |
-| Resource group | `rg-payd-demo-d-<suffix>` |
+| Resource group | Ownership output `resourceGroupName` (`rg-<prefix>-<environment>-d-<suffix>`) |
 | Frontend (public) | `ca-frontend-d-<suffix>` |
 | Checkout API (internal) | `ca-checkout-d-<suffix>` |
 | Payment service (internal) | `ca-payment-d-<suffix>` |
 | Alerts | `alert-payment-failures-d-<suffix>`, `alert-checkout-failures-d-<suffix>` |
-| SRE Agent | `sre-payd-d-<suffix>` (High access, Contributor, Review mode) |
-| Runner | `vm-payd-runner` in `agentrg-d` (private runner, retained Terraform foundation; outside workload cleanup) |
+| SRE Agent | `sre-<prefix>-d-<suffix>` (High access, Contributor, Review mode) |
+| Runner | Your retained `infra/runner-d` outputs `vm_name`, `resource_group_name`, `vnet_name`; outside workload cleanup |
 
 ## Part 0 — Preflight (before the clock)
 
@@ -67,7 +75,10 @@ Use the deployment outputs, not names from a historical rehearsal.
    az account list --output table
    $id = Read-Host -Prompt "Subscription ID for the demo"
    az account set -s $id
-   $owner = 'scenario-d-payd-demo-d-bicep1'
+   $prefix = Read-Host -Prompt "Exact deployed D prefix"
+   $environment = Read-Host -Prompt "Exact deployed D environment"
+   $generation = Read-Host -Prompt "Exact deployed D generation"
+   $owner = "scenario-d-$prefix-$environment-d-$generation"
    $o = (az deployment sub show -n $owner --query properties.outputs.ownership.value -o json | ConvertFrom-Json)
    $rg = $o.resourceGroupName
    $suffix = $o.stem.Substring(2)
@@ -97,7 +108,7 @@ Use the deployment outputs, not names from a historical rehearsal.
    Sign out and back in, then wait a few minutes for the role to propagate.
 5. **Make sure the SRE Agent is running, then open its thread.** If the agent
    is Stopped, start it before the demo clock; no redeployment is needed.
-   Open <https://sre.azure.com>, select `sre-payd-d-<suffix>`, and confirm
+   Open <https://sre.azure.com>, select the SRE Agent from your deployment outputs, and confirm
    Review mode. Start a new thread for this run so the evidence stays clean.
 6. **Inspect the Bicep-provisioned Observability resource.** In the portal,
    **Observability Agents** contains `oba-d-<suffix>` in West Europe, attached
@@ -184,7 +195,10 @@ empty `$fe` fails with "Frontend URL must use https."
 az account list --output table
 $id = Read-Host -Prompt "Subscription ID for the demo"
 az account set -s $id
-$owner = 'scenario-d-payd-demo-d-bicep1'
+$prefix = Read-Host -Prompt "Exact deployed D prefix"
+$environment = Read-Host -Prompt "Exact deployed D environment"
+$generation = Read-Host -Prompt "Exact deployed D generation"
+$owner = "scenario-d-$prefix-$environment-d-$generation"
 $o = az deployment sub show -n $owner --query properties.outputs.ownership.value -o json | ConvertFrom-Json
 $rg = $o.resourceGroupName
 $suffix = $o.stem.Substring(2)
@@ -202,7 +216,7 @@ after 2700 seconds (45 minutes); if it stops before you arm the fault, the
 alerts never fire, so restart it first. Wait about 2 minutes, then show the
 healthy baseline:
 
-- **Where:** Azure portal, resource group `rg-payd-demo-d-<suffix>`, Application
+- **Where:** Azure portal, your ownership output resource group `$rg`, Application
   Insights `appi-d-<suffix>`, **Investigate, Failures** (or **Live metrics**).
 - **Which app:** the role `checkout-api` (container app `ca-checkout-d-<suffix>`).
   Set the **Roles** filter to `checkout-api`. It is the service the traffic
@@ -225,7 +239,10 @@ first one is running the traffic), so set the variables again.
 az account list --output table
 $id = Read-Host -Prompt "Subscription ID for the demo"
 az account set -s $id
-$owner = 'scenario-d-payd-demo-d-bicep1'
+$prefix = Read-Host -Prompt "Exact deployed D prefix"
+$environment = Read-Host -Prompt "Exact deployed D environment"
+$generation = Read-Host -Prompt "Exact deployed D generation"
+$owner = "scenario-d-$prefix-$environment-d-$generation"
 $o = az deployment sub show -n $owner --query properties.outputs.ownership.value -o json | ConvertFrom-Json
 $rg = $o.resourceGroupName
 $suffix = $o.stem.Substring(2)
@@ -378,7 +395,7 @@ the incident. Do not run Terraform against the D workload.
 | No payment alert after 6 minutes | Is traffic running? The alert needs 3 or more failed `/pay` calls in the window. Check `PAYMENT_FAILURE_MODE` really is `unavailable`. |
 | Payment alert fired but SRE Agent did nothing | Verify the enabled Review-mode filter has `titleContains` equal to this deployment's exact payment-alert name. Checkout/unrelated Sev2 alerts intentionally do not match. If pickup is delayed, use the manual handoff; never broaden the filter to all subscription incidents. |
 | No Observability Agent issue | Follow [Observability diagnostics](#observability-diagnostics). If using an on-demand investigation, label it manual; if skipping Observability, continue as an SRE-only run without claiming a paired handoff. |
-| SRE thread shows no tool output | The SRE data plane cannot be read programmatically from here (403). Use <https://sre.azure.com> only. |
+| SRE thread shows no tool output | Check your exact agent-scoped data-plane role and sign-in identity. A historical 403 from another operator is not evidence your API access is unavailable. Inspect the thread at <https://sre.azure.com>. |
 | Frontend returns errors before the trigger | Wait for the latest revision to be ready; re-run Part 0. |
 
 ## Observability Agent onboarding
@@ -668,26 +685,31 @@ Sources checked:
 
 ## Deploy, restart and teardown
 
-### Deployment from the feature branch
+### Deployment in your own repository
 
 D is **Bicep-only**. A/B/C still use Terraform, and `infra/runner-d` remains
-Terraform-managed and retained. There is no Terraform state migration: the old
-D app RG was deleted, and the old purge-protected vault may remain soft-deleted
-until its retention expires. A fresh deterministic Bicep generation avoids
-that vault name. Grafana is not provisioned by default.
+Terraform-managed and retained. There is no Terraform state migration. If you
+previously ran the legacy D workload, verify its complete cleanup first; a
+purge-protected vault may remain soft-deleted until retention expires. Use a
+fresh generation only after complete cleanup. Grafana is not provisioned by default.
 
-The already-dispatchable workflows route D to reusable
-`scenario-d-bicep.yml`, so the initial run needs no merge to `main`:
+In your own repository, place the reviewed workflows on `main` first.
+`deploy.yml` routes D to reusable `scenario-d-bicep.yml`:
 
 ```powershell
-gh workflow run deploy.yml --ref rutgerpels-scenario-d-bicep-redesign `
-  -f scenario=D -f prefix=payd -f environment=demo -f location=swedencentral `
-  -f scenario_d_generation=bicep1 -f open_incident_pr=false
+$repo = 'your-org/your-demo'
+$prefix = 'contosod'
+$environment = 'demo'
+$generation = 'bicep1'
+$owner = "scenario-d-$prefix-$environment-d-$generation"
+gh workflow run deploy.yml --repo $repo --ref main `
+  -f scenario=D -f "prefix=$prefix" -f "environment=$environment" -f location=swedencentral `
+  -f "scenario_d_generation=$generation" -f open_incident_pr=false
 ```
 
 After the new workflow is on the default branch it can also be dispatched
-itself with `action=deploy`, `prefix=payd`, `environment=demo`,
-`generation=bicep1`. Optional shared-zone IDs must already be linked to the
+itself with `action=deploy` and the same chosen prefix, environment and
+generation. Optional shared-zone IDs must already be linked to the
 retained runner; otherwise the script discovers and reuses those associations.
 No shared zone or pre-existing runner DNS link is taken over.
 
@@ -741,10 +763,6 @@ valid. This refresh uses GitHub's existing `id-token: write` permission and
 Missing refresh credentials, failed authentication, or an identity change
 stops reconciliation.
 
-The replacement delivery branch supersedes the earlier Scenario D PR without
-closing it automatically. It preserves the original private-payments baseline
-and native-fetch dependency tracing fixes.
-
 Subscription-level ownership templates pass both the subscription and resource
 group explicitly to `resourceId`; see Microsoft's
 [Resource functions for Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/bicep-functions-resource#resourceid).
@@ -758,43 +776,29 @@ Native LAW/AI/environment declarations avoid the pinned AVM interfaces that
 output telemetry credentials or unconditionally call workspace `listKeys`.
 There are no Log Analytics shared-key settings and local auth stays disabled.
 
-### Verified healthy Bicep checkpoint (2026-10-15)
+### Historical healthy Bicep checkpoint (2026-10-15)
 
-[Final baseline run 38705654027](https://github.com/rutgerpels/sreagent/actions/runs/38705654027)
-completed successfully from replacement-branch commit
-`d84aaf87cedc9ffa2581202c3f9415cd1cf6fd9c`. These are observed results, not a
-claim that the incident or full paired-agent recovery has been demonstrated.
-The coordinating session independently repeated the HTTP, configuration and
-distributed-trace checks after the earlier successful
-[run 38703802396](https://github.com/rutgerpels/sreagent/actions/runs/38703802396).
-Final-run verification repeated the same gates with a fresh trace containing
-all five spans, HTTP 200 results and correct parent links. Subsequent
-readiness-documentation-only commits do not change the deployed SHA above.
+A previous operator recorded a successful healthy Bicep baseline. Source
+repository/run links, live resource names, endpoints, commit IDs and image
+digests are intentionally omitted from this customer-neutral copy. That record
+does not validate your tenant, current service availability, teardown, or the
+full paired-agent incident/recovery flow.
 
-| Surface | Verified result |
+Repeat these checks on **your** deployment and retain the evidence privately:
+
+| Surface | Customer acceptance check |
 | --- | --- |
-| Durable owner / app RG | `scenario-d-payd-demo-d-bicep1` / `rg-payd-demo-d-tzbvjafe`; foundation, apps, agents and connectors/alerts deployments succeeded. |
-| Public frontend | [ContosoPay](https://ca-frontend-d-tzbvjafe.graystone-6bda44e3.swedencentral.azurecontainerapps.io): `/` and `/health` returned HTTP 200. |
-| Real checkout | `POST /api/checkout`, amount 42 EUR, returned HTTP 200 with a confirmed order and approved payment. |
-| App readiness / ingress | All three apps were Running, with Healthy active revisions matching their latest-ready revisions and digest-pinned images. Only frontend had external ingress; insecure ingress was disabled throughout. |
-| Healthy payment flags | `PAYMENT_FAILURE_MODE=off`, `ENABLE_SLOW_LEAK=false`. No incident was triggered. |
-| Telemetry | One correlated checkout trace contained all three successful request spans and both successful dependency spans, with correct parent links. A separate coordinating-session trace reproduced the full chain. |
-| Private foundation | `acrpayddtzbvjafe` was Premium, admin-disabled, non-zone-redundant and public-network-disabled. `kv-d-tzbvjafe` was public-network-disabled, deny-by-default, RBAC-authorized and purge-protected. Runner DNS resolved both private endpoints to the app VNet. |
-| SRE | `sre-payd-d-tzbvjafe` was Running in Sweden Central, High access, Review mode, with all three connectors provisioned successfully and an explicit monthly limit of 500. |
-| Alert / filter | Both failure alerts were enabled, Sev2, with `PT5M` evaluation/window. The enabled SRE filter used only `alert-payment-failures-d-tzbvjafe`, handling agent `payment-recovery`, in Review mode. |
-| Approval / scheduling | Persisted global policy put `RunAzCliWriteCommands` in `ask`, not `allow`; the scheduled-task collection was empty. |
-| Observability | `oba-d-tzbvjafe` and `amw-observability-d-tzbvjafe` were in West Europe, bound to each other. OBA remained `enabled=false`, with its App Insights target `isAutonomous=false`. |
-| Operator access | The signed-in operator received SRE Agent Administrator at this exact new SRE resource only and successfully read its authenticated data-plane configuration. This explicit operator grant is inside the owned app RG; deleting that RG removes it. No operator identity is committed. |
-
-The final active/ready app revisions were all `--0000003`. The actual deployed
-digests matched the private runner's pushed-image digests, and all three OCI
-revision labels matched the final run's full source SHA:
-
-| Image repository | Deployed digest |
-| --- | --- |
-| `frontend` | `sha256:800ac83472a91e800e8999cb048fcd606e3244ed8e0fd1369bbe7dccf792bb8d` |
-| `checkout-api` | `sha256:d01d4a86cac7af7f0d6311a91c5849b02df0997c946c4f5503cc5f638230be50` |
-| `payment-service` | `sha256:ea45c20bb0488e5c0936090bbe549e3c37683a721230fd8d333bf7c91cdf3379` |
+| Ownership | Ledger identifies your exact app RG and prefix/environment/generation |
+| Frontend and checkout | `/` and `/health` succeed; a real `POST /api/checkout` returns a confirmed order and approved payment |
+| Revisions and ingress | All apps ready, exact digest-pinned images, only frontend external, HTTPS only |
+| Fault flags | `PAYMENT_FAILURE_MODE=off`, `ENABLE_SLOW_LEAK=false` |
+| Telemetry | One checkout trace contains all three successful request spans and both successful dependency spans with correct parent links |
+| Private foundation | Premium ACR admin/public access disabled; Key Vault private, RBAC and purge-protected; runner resolves the correct private endpoints |
+| SRE | Running, High/Contributor/Review, connectors ready, explicit supported budget |
+| Alert filter | Review mode and `titleContains` match only the deployed payment-failure alert |
+| Approval/schedule | Azure writes ask for approval; no scheduled tasks |
+| Observability | Workspace/agent bound correctly; autonomous operations remain disabled |
+| Operator | Your signed-in account can access the new SRE data plane through an agent-scoped role |
 
 Earlier attempts exposed and corrected subscription-scope resource-ID
 construction, CLI-added ledger metadata, the service's minimum nonzero monthly
@@ -808,14 +812,16 @@ resource groups.
 Observability on demand, explicitly save the issue to this AMW, carry the
 evidence into SRE, and approve the proposed recovery. Autonomous OBA operations,
 the full paired-agent incident/recovery flow and a ten-minute recovery target
-remain unproven. PR #86 stays open until the coordinating owner decides its
-disposition. Keep the apps and SRE running for that dry-run; do not test teardown
-against this live checkpoint.
+remain unproven. Keep your healthy deployment available for an authorized
+dry-run; perform teardown only after that exercise is complete.
 
 ### Discover outputs (safe to print)
 
 ```powershell
-$owner = 'scenario-d-payd-demo-d-bicep1'
+$prefix = Read-Host -Prompt "Exact deployed D prefix"
+$environment = Read-Host -Prompt "Exact deployed D environment"
+$generation = Read-Host -Prompt "Exact deployed D generation"
+$owner = "scenario-d-$prefix-$environment-d-$generation"
 $o = az deployment sub show -n $owner --query properties.outputs.ownership.value -o json | ConvertFrom-Json
 $rg = $o.resourceGroupName
 az deployment group show -g $rg -n scenario-d-apps --query properties.outputs.frontendUrl.value -o tsv
@@ -835,16 +841,21 @@ by soft deletion. Ordinary incremental Bicep does not delete omitted resources.
 ### Explicit complete teardown
 
 ```powershell
-gh workflow run destroy.yml --ref rutgerpels-scenario-d-bicep-redesign `
-  -f scenario=D -f prefix=payd -f environment=demo `
-  -f scenario_d_generation=bicep1 `
-  -f scenario_d_confirm_destroy=scenario-d-payd-demo-d-bicep1 `
+$repo = 'your-org/your-demo'
+$prefix = Read-Host -Prompt "Exact deployed D prefix"
+$environment = Read-Host -Prompt "Exact deployed D environment"
+$generation = Read-Host -Prompt "Exact deployed D generation"
+$owner = "scenario-d-$prefix-$environment-d-$generation"
+gh workflow run destroy.yml --repo $repo --ref main `
+  -f scenario=D -f "prefix=$prefix" -f "environment=$environment" `
+  -f "scenario_d_generation=$generation" `
+  -f "scenario_d_confirm_destroy=$owner" `
   -f force_delete_rg=false -f delete_state_storage=false
 ```
 
-Direct new-workflow inputs are `action=destroy`, `prefix=payd`,
-`environment=demo`, `generation=bicep1`,
-`confirm_destroy=scenario-d-payd-demo-d-bicep1`. D rejects legacy Terraform
+Direct workflow inputs are `action=destroy`, your deployed prefix,
+environment and generation, and `confirm_destroy` equal to your exact `$owner`
+ledger name. D rejects legacy Terraform
 force/state-deletion, ephemeral and incident-PR flags.
 
 The script checks account subscription/tenant, exact ownership output paths
@@ -861,16 +872,25 @@ all retained runner resources are never deleted. No global workspace setting
 is changed, so there is no global association to undo.
 
 The lifecycle **never deallocates its own execution VM**. After the job is
-complete, the operator may separately deallocate `vm-payd-runner` in
-`agentrg-d`. Do not delete its disk, VNet, NAT or Terraform backend.
+complete, the operator may separately deallocate the VM identified by your
+retained runner outputs. Do not delete its disk, VNet, NAT or Terraform backend.
 
 ### One-time operator setup
 
-- Retain/start the existing runner `vm-payd-runner` in `agentrg-d`. Its VNet is
-  `10.102.0.0/16` (`runner=10.102.0.0/27`,
-  `private-endpoints=10.102.0.32/27`). The workload VNet is non-overlapping
-  `10.101.0.0/16`; private endpoint, Container Apps and SRE subnets remain
+- Provision/register your own retained runner using
+  `scripts/deploy-runner-d.ps1 -SubscriptionName '<your subscription>' -Repository 'your-org/your-demo'`
+  with customer-selected resource-group/VM names, as shown in
+  [customer setup](customer-setup.md#additional-cd-runner-bootstrap).
+  Set `D_RUNNER_NETWORK_RG` and `D_RUNNER_VNET_NAME` explicitly from its
+  Terraform outputs. Never depend on an existing author's runner.
+  The example runner VNet uses `10.102.0.0/16` (`runner=10.102.0.0/27`,
+  `private-endpoints=10.102.0.32/27`). The workload VNet uses
+  `10.101.0.0/16`; private endpoint, Container Apps and SRE subnets use
   `10.101.0.0/27`, `10.101.0.64/27`, `10.101.0.96/27`.
+  Validate the complete customer address plan is nonoverlapping before create.
+- Register the standard runner labels shown above, or configure
+  `D_PRIVATE_RUNNER_LABELS_JSON` with an explicit JSON label array matching your
+  private runner. Do not select a runner with no access to the private network.
 - Configure `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` as
   environment/repository variables and use the `scenario-d` OIDC federation.
   No client secret or real IDs belong in source.
@@ -903,7 +923,7 @@ Fill this in while you rehearse. Target: alert to recovery in 10 minutes or less
 ## Not verified yet
 
 - Autonomous Observability Agent pickup time and issue quality.
-- New Bicep live deployment/teardown and manual paired-agent proposal/recovery times.
+- Fresh-customer Bicep deployment/teardown and manual paired-agent proposal/recovery times.
 - Autonomous issue creation: the workspace-role comparison did not restore
   it; the current root cause is not established.
 - Three consecutive clean paired rehearsals.

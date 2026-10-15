@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Orchestrates the full deploy:
-      1. Validates prerequisites (az, terraform, docker, an az login).
-      2. terraform init.
+      1. Validates prerequisites (az, terraform, docker, git, Node.js, an az login).
+      2. Reconfigures the target backend without copying state and verifies its profile.
       3. terraform apply (phase 1) creating ACR/Key Vault/identities/observability/
          Container Apps environment WITHOUT the apps (images do not exist yet).
       4. Builds and pushes the three app images to ACR.
@@ -23,6 +23,10 @@
 .PARAMETER ImageTag
     Optional immutable image tag override. Defaults to the repository HEAD and
     must be a full lowercase 40-character Git commit SHA.
+
+.PARAMETER Prefix
+    Fresh-deployment default is pay. Existing deployments must supply their
+    original prefix and environment; defaults do not migrate or rename state.
 
 .PARAMETER SkipBuild
     Reuse images already in ACR (skip docker build/push). Useful for re-runs.
@@ -53,7 +57,7 @@ param(
     [string]$ImageTag,
 
     [Parameter()]
-    [string]$Prefix = 'contosopay',
+    [string]$Prefix = 'pay',
 
     [Parameter()]
     [string]$Environment = 'demo',
@@ -116,7 +120,7 @@ function Get-BackendConfig {
 
 # Idempotently create the LRS state storage (no account keys: AAD data-plane auth).
 function Initialize-StateStorage {
-    param([object]$Backend, [string]$Location, [string]$PrincipalId, [hashtable]$Tags)
+    param([object]$Backend, [string]$Location, [string]$PrincipalId, [string]$PrincipalType, [hashtable]$Tags)
     Write-Host "==> Ensuring remote state storage ($($Backend.StorageAccount))" -ForegroundColor Cyan
     $tagArgs = ($Tags.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     # The state resource group's location is immutable and independent of the app
@@ -139,7 +143,7 @@ function Initialize-StateStorage {
     }
     $saId = az storage account show --name $Backend.StorageAccount --resource-group $Backend.ResourceGroup --query id --output tsv
     # AAD data-plane access for the deployer (no storage keys). Idempotent.
-    az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type User `
+    az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type $PrincipalType `
         --role 'Storage Blob Data Contributor' --scope $saId --output none 2>$null
     Write-Host '    Waiting for role propagation...'
     $created = $false
@@ -156,6 +160,7 @@ Assert-Command az
 Assert-Command terraform
 Assert-Command docker
 Assert-Command git
+Assert-Command node
 
 if (-not $ImageTag) {
     $ImageTag = git -C $repoRoot rev-parse HEAD
@@ -200,19 +205,30 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker daemon is not reachable. Start Docker Desktop and retry.'
 }
 
-$signedInId = az ad signed-in-user show --query id --output tsv
+$armToken = az account get-access-token --resource https://management.azure.com --output json
+if ($LASTEXITCODE -ne 0) { throw 'Could not acquire the authenticated ARM access token.' }
+$principalJson = $armToken | node (Join-Path $PSScriptRoot 'bootstrap-context.mjs') principal $account.user.type
+if ($LASTEXITCODE -ne 0) { throw 'Could not identify the authenticated ARM principal.' }
+$principal = $principalJson | ConvertFrom-Json
+$armToken = $null
 $backend = Get-BackendConfig -SubscriptionId $account.id -Prefix $Prefix -Environment $Environment -Scenario $Scenario
 $tags = @{ project = 'sre-agent-demo'; env = $Environment; scenario = $Scenario; managed_by = 'terraform' }
-Initialize-StateStorage -Backend $backend -Location $Location -PrincipalId $signedInId -Tags $tags
+Initialize-StateStorage -Backend $backend -Location $Location -PrincipalId $principal.objectId -PrincipalType $principal.principalType -Tags $tags
 
 Write-Host '==> terraform init (remote azurerm backend)' -ForegroundColor Cyan
 Invoke-Checked -Name 'terraform init' {
-    terraform -chdir="$infraDir" init -input=false -migrate-state -force-copy `
+    terraform -chdir="$infraDir" init -input=false -reconfigure `
         -backend-config="resource_group_name=$($backend.ResourceGroup)" `
         -backend-config="storage_account_name=$($backend.StorageAccount)" `
         -backend-config="container_name=$($backend.Container)" `
         -backend-config="key=$($backend.Key)"
 }
+
+Write-Host '==> Validating selected state scenario/prefix/environment' -ForegroundColor Cyan
+$selectedState = terraform -chdir="$infraDir" show -json
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the selected Terraform state.' }
+$selectedState | node (Join-Path $PSScriptRoot 'bootstrap-context.mjs') state $Scenario $Prefix $Environment
+if ($LASTEXITCODE -ne 0) { throw 'Selected Terraform state does not match the requested deployment profile.' }
 
 # Reject state created for another or legacy profile.
 $stateResources = terraform -chdir="$infraDir" state list 2>$null
@@ -281,7 +297,6 @@ foreach ($svc in $services) {
         Invoke-Checked -Name "docker build $svc" {
             docker build `
                 --label "org.opencontainers.image.revision=$ImageTag" `
-                --label "org.opencontainers.image.source=https://github.com/rutgerpels/sreagent" `
                 -t $imageSha $context
         }
         Invoke-Checked -Name "docker push $svc" { docker push $imageSha }

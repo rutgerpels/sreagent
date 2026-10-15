@@ -52,7 +52,7 @@ After the change, confirm all of these and report them:
 
 ## Durable follow-up
 
-Terraform desired state is already `off`. The fault was a live deviation, so
+Bicep desired state is already `off`. The fault was a live deviation, so
 no code change is needed. Recommend a review of who can change live Container
 App settings.
 

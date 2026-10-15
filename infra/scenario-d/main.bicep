@@ -1,14 +1,16 @@
 targetScope = 'subscription'
 @minLength(2)
 @maxLength(8)
-param prefix string = 'payd'
+param prefix string = 'pay'
 param environment string = 'demo'
 @description('Change only after complete destroy. A new generation avoids soft-deleted vault names.')
 param generation string = 'bicep1'
 param workloadLocation string = 'swedencentral'
 param observabilityLocation string = 'westeurope'
-param runnerResourceGroup string = 'agentrg-d'
-param runnerVnetName string = 'agent-vnet-d'
+@minLength(1)
+param runnerResourceGroup string
+@minLength(1)
+param runnerVnetName string
 param keyVaultZoneId string = ''
 param acrZoneId string = ''
 var profile = '${prefix}-${environment}-d'

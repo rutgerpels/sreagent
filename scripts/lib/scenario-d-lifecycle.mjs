@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -23,18 +22,21 @@ export function armGuid(...parts) {
 }
 export function optionsFromEnv(env) {
   const options = {
-    action: env.D_ACTION ?? 'deploy', prefix: env.D_PREFIX ?? 'payd',
+    action: env.D_ACTION ?? 'deploy', prefix: env.D_PREFIX ?? 'pay',
     environment: env.D_ENVIRONMENT ?? 'demo', generation: env.D_GENERATION ?? 'bicep1',
     subscriptionId: env.AZURE_SUBSCRIPTION_ID, tenantId: env.AZURE_TENANT_ID,
     workloadLocation: env.D_WORKLOAD_LOCATION ?? 'swedencentral',
     observabilityLocation: env.D_OBSERVABILITY_LOCATION ?? 'westeurope',
     keyVaultZoneId: env.D_KEY_VAULT_ZONE_ID ?? '', acrZoneId: env.D_ACR_ZONE_ID ?? '',
+    runnerResourceGroup: env.D_RUNNER_NETWORK_RG, runnerVnetName: env.D_RUNNER_VNET_NAME,
     confirmation: env.D_CONFIRM_DESTROY ?? '', sha: env.GITHUB_SHA,
   };
   requireThat(['deploy', 'destroy'].includes(options.action), 'Action must be deploy or destroy.');
   requireThat(/^[a-z][a-z0-9]{1,7}$/.test(options.prefix), 'Prefix must be 2-8 lowercase alphanumeric characters.');
   for (const key of ['environment', 'generation']) requireThat(/^[a-z][a-z0-9-]{0,15}$/.test(options[key]), `Invalid ${key}.`);
   for (const key of ['subscriptionId', 'tenantId']) requireThat(/^[0-9a-f-]{36}$/i.test(options[key] ?? ''), `Missing/invalid ${key}.`);
+  requireThat(/^[\w().-]{1,90}(?<!\.)$/.test(options.runnerResourceGroup ?? ''), 'Set D_RUNNER_NETWORK_RG to the retained runner resource group.');
+  requireThat(/^[a-z0-9][a-z0-9_.-]{0,63}$/i.test(options.runnerVnetName ?? ''), 'Set D_RUNNER_VNET_NAME to the retained runner VNet name.');
   requireThat(options.workloadLocation === 'swedencentral' && options.observabilityLocation === 'westeurope', 'Approved D region profile is Sweden Central workloads/SRE and West Europe OBA+AMW.');
   options.profile = `${options.prefix}-${options.environment}-d`;
   options.deploymentName = `scenario-d-${options.profile}-${options.generation}`;
@@ -52,7 +54,8 @@ export function validateOwnership(o, options) {
   const rg = `${sub}/resourceGroups/${o.resourceGroupName}`;
   requireThat(same(o.resourceGroupId, rg) && same(o.appVnetId, `${rg}/providers/Microsoft.Network/virtualNetworks/vnet-${o.stem}`), 'Unexpected owned resource paths.');
   requireThat(o.infrastructureResourceGroupName === `rg-${options.profile}-infra-${suffix}`, 'Unexpected infrastructure RG.');
-  const runner = `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Network/virtualNetworks/agent-vnet-d`;
+  const runner = `${sub}/resourceGroups/${options.runnerResourceGroup}/providers/Microsoft.Network/virtualNetworks/${options.runnerVnetName}`;
+  requireThat(!same(o.resourceGroupName, options.runnerResourceGroup) && !same(o.infrastructureResourceGroupName, options.runnerResourceGroup), 'Workload must not own the retained runner resource group.');
   requireThat(same(o.runnerVnetId, runner) && same(o.runnerPeeringId, `${runner}/virtualNetworkPeerings/peer-runner-to-app-${o.stem}`), 'Unexpected retained runner/peering path.');
   requireThat(o.tags?.scenario === 'D' && o.tags?.managed_by === 'bicep' && o.tags?.lifecycle_owner === o.deploymentName && o.tags?.lifecycle_generation === o.generation, 'Ownership tags mismatch.');
   requireThat(o.workloadLocation === options.workloadLocation && o.observabilityLocation === options.observabilityLocation, 'Ownership location mismatch.');
@@ -75,7 +78,7 @@ export function validateOwnership(o, options) {
       same(link.virtualNetworkId, expectedLinks[i].virtualNetworkId)), 'Shared DNS link ownership mismatch.');
   const expectedDeployments = [
     { id: `${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}-roles` },
-    { id: `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Resources/deployments/runner-peering-${o.stem}` },
+    { id: `${sub}/resourceGroups/${options.runnerResourceGroup}/providers/Microsoft.Resources/deployments/runner-peering-${o.stem}` },
     ...expectedLinks.map(l => ({ id: `${sub}/resourceGroups/${l.id.split('/')[4]}/providers/Microsoft.Resources/deployments/dns-${l.id.includes('/app-kv-') ? 'kv' : 'acr'}-${o.stem}` })),
   ];
   requireThat(Array.isArray(o.auxiliaryDeployments) && o.auxiliaryDeployments.length === expectedDeployments.length &&
@@ -155,7 +158,7 @@ export function createIO(executeCommand) {
     },
   };
 }
-async function withTemp(callback) { const dir = mkdtempSync(join(tmpdir(), 'scenario-d-')); try { return await callback(dir); } finally { rmSync(dir, { recursive: true, force: true }); } }
+async function withTemp(callback) { const dir = mkdtempSync(resolve('.scenario-d-')); try { return await callback(dir); } finally { rmSync(dir, { recursive: true, force: true }); } }
 export async function retry(io, description, action, attempts = 20, milliseconds = 15000) {
   for (let i = 1; i <= attempts; i++) {
     try { return await action(); } catch (e) {
@@ -272,7 +275,8 @@ export async function deploy(io, options, existing) {
   requireThat(io.execute('git', ['rev-parse', 'HEAD']) === options.sha, 'Checkout HEAD does not match immutable image SHA.');
   requireThat(io.execute('git', ['status', '--porcelain']).length === 0, 'Dirty checkout cannot be published under a commit SHA.');
   const sub = `/subscriptions/${options.subscriptionId}`;
-  const runnerId = `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Network/virtualNetworks/agent-vnet-d`;
+  const runnerId = `${sub}/resourceGroups/${options.runnerResourceGroup}/providers/Microsoft.Network/virtualNetworks/${options.runnerVnetName}`;
+  requireThat(await io.get(runnerId, API.network), 'Configured retained runner VNet does not exist in the selected subscription.');
   const kvZone = await findZone(io, options, runnerId, 'privatelink.vaultcore.azure.net', options.keyVaultZoneId);
   const acrZone = await findZone(io, options, runnerId, 'privatelink.azurecr.io', options.acrZoneId);
   let o;
@@ -284,10 +288,11 @@ export async function deploy(io, options, existing) {
     await validateResumeDns(io, o, 'acrZoneId', 'acr', acrZone);
   } else {
     const groups = io.az(['group', 'list']);
-    requireThat(!groups.some(g => (g.tags?.scenario === 'D' && g.name !== 'agentrg-d') || g.name.startsWith(`rg-${options.profile}-`)), 'Another Scenario D workload exists; finish its owner lifecycle first.');
+    requireThat(!groups.some(g => !same(g.name, options.runnerResourceGroup) && (g.tags?.scenario === 'D' || g.name.startsWith(`rg-${options.profile}-`))), 'Another Scenario D workload exists; finish its owner lifecycle first.');
     const outputs = await io.deploy('subscription', options.deploymentName, 'infra/scenario-d/main.bicep', {
       prefix: options.prefix, environment: options.environment, generation: options.generation,
       workloadLocation: options.workloadLocation, observabilityLocation: options.observabilityLocation,
+      runnerResourceGroup: options.runnerResourceGroup, runnerVnetName: options.runnerVnetName,
       keyVaultZoneId: kvZone, acrZoneId: acrZone,
     }, options.workloadLocation);
     o = validateOwnership(outputValue(outputs, 'ownership'), options);
@@ -349,7 +354,7 @@ export async function run(options, io = createIO()) {
   if (options.action === 'destroy') {
     if (!existing) {
       // No ledger is not success if this profile still has a tagged workload.
-      requireThat(!io.az(['group', 'list']).some(g => g.tags?.lifecycle_owner === options.deploymentName || g.name.startsWith(`rg-${options.profile}-`)), 'Owned RG exists without durable ledger. Stop for manual review.');
+      requireThat(!io.az(['group', 'list']).some(g => g.tags?.lifecycle_owner === options.deploymentName || (!same(g.name, options.runnerResourceGroup) && g.name.startsWith(`rg-${options.profile}-`))), 'Owned RG exists without durable ledger. Stop for manual review.');
       console.log('Ownership ledger absent; no owned workload RG remains. No mutation performed.'); return;
     }
     const o = validateOwnership(outputValue(existing.properties.outputs, 'ownership'), options);

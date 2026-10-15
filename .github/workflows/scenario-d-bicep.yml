@@ -11,7 +11,7 @@ on:
       prefix:
         description: 'D-only prefix (2-8 lowercase characters)'
         type: string
-        default: payd
+        default: pay
       environment:
         description: 'D environment label'
         type: string
@@ -21,7 +21,7 @@ on:
         type: string
         default: bicep1
       confirm_destroy:
-        description: 'Destroy: exact ownership deployment name, e.g. scenario-d-payd-demo-d-bicep1'
+        description: 'Destroy: exact ownership deployment name, e.g. scenario-d-pay-demo-d-bicep1'
         type: string
         default: ''
       key_vault_zone_id:
@@ -39,7 +39,7 @@ on:
         required: true
       prefix:
         type: string
-        default: payd
+        default: pay
       environment:
         type: string
         default: demo
@@ -70,12 +70,12 @@ permissions:
 # One global lock includes calls from legacy dispatch; no per-prefix overlap.
 # Do not use the caller's concurrency group (a recursive lock would deadlock).
 concurrency:
-  group: scenario-d-private-runner-agentrg-d-agent-vnet-d
+  group: scenario-d-private-runner
   cancel-in-progress: false
 
 jobs:
   lifecycle:
-    runs-on: [self-hosted, Linux, X64, azure-private-d, contosopay]
+    runs-on: ${{ fromJSON(vars.D_PRIVATE_RUNNER_LABELS_JSON || '["self-hosted","Linux","X64","azure-private-d","contosopay"]') }}
     environment: scenario-d
     timeout-minutes: 120
     env:
@@ -92,6 +92,8 @@ jobs:
       D_OBSERVABILITY_LOCATION: westeurope
       D_KEY_VAULT_ZONE_ID: ${{ inputs.key_vault_zone_id }}
       D_ACR_ZONE_ID: ${{ inputs.acr_zone_id }}
+      D_RUNNER_NETWORK_RG: ${{ vars.D_RUNNER_NETWORK_RG }}
+      D_RUNNER_VNET_NAME: ${{ vars.D_RUNNER_VNET_NAME }}
       SRE_AGENT_MODEL_PROVIDER: ${{ vars.SRE_AGENT_MODEL_PROVIDER || 'MicrosoftFoundry' }}
       SRE_AGENT_MODEL_NAME: ${{ vars.SRE_AGENT_MODEL_NAME || 'Automatic' }}
     steps:

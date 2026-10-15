@@ -1,5 +1,13 @@
 # Scenario C: private-network enterprise GitOps
 
+**New customer tenant?** Complete [customer setup A–Z](customer-setup.md)
+first. Use your own repository and explicitly configured runner network.
+Statements about live verification below describe historical operator
+observations, not validation of your tenant or current preview availability.
+Examples use the new-deployment prefix `pay`. Existing stacks must retain their
+original prefix/environment and `TF_PREFIX`; changing the default is not a
+state migration or an instruction to redeploy.
+
 **The story you tell.** Everything Scenario B shows, but under enterprise
 network constraints: private endpoints for state, container registry, and Key
 Vault; a self-hosted runner inside your network; a bring-your-own GitHub App
@@ -124,6 +132,13 @@ the fault throughout the demo.
 self-hosted, Linux, X64, azure-private, contosopay
 ```
 
+Alternatively set `PRIVATE_RUNNER_LABELS_JSON` to a JSON array of your own
+private runner's labels, for example
+`["self-hosted","Linux","X64","customer-private"]`. The selected runner must
+reach the configured private network; changing labels does not provide routing
+or DNS. Set `RUNNER_NETWORK_RG` and `RUNNER_VNET_NAME` to your existing network,
+not historical default names.
+
 The runner needs:
 
 - Bash, Git, Azure CLI, Docker, `unzip`, `jq`, `curl`, `getent`, and the usual
@@ -149,7 +164,8 @@ private host. Stop or deallocate a dedicated VM when idle, and remove the runner
 registration and host when no longer needed. Do not delete a shared VNet.
 
 **Expect.** The runner appears **Idle** in **Settings → Actions → Runners** with
-all five labels. If any label is missing, the deploy job will queue forever.
+all standard labels, or all labels in your configured override. Missing labels
+leave the deploy job queued.
 
 ### Step 3. Choose the Code Access path
 
@@ -166,7 +182,7 @@ in step 5.
 | Configured by | Repository variables and one secret, reconciled from code | Portal, by hand, **after** the deploy | — |
 | Deploy runs needed | One | One | One |
 | Steps | 4 and 5, then deploy | Step 8, after deploying | Skip 4; leave the variables unset |
-| Agent write verified? | **Yes — verified live** | **Yes — verified live** | n/a |
+| Historical agent write observation (repeat in your tenant) | Previously exercised | Previously exercised | n/a |
 | Survives a later deploy? | Yes, it is reconciled | **No — see the warning in step 8** | n/a |
 | Pull request author | The App's bot account | The signed-in user | n/a |
 
@@ -316,7 +332,7 @@ recreates the managed environment. Never convert partial state in place.
 | Input | Value | Note |
 | --- | --- | --- |
 | Scenario | `C` | Selects the private-network profile |
-| Resource name prefix | `contosopay` | Any short lowercase prefix works |
+| Resource name prefix | `pay` | New-deployment default; retain the original prefix for an existing stack |
 | Environment label | `demo` | Appears in names and the state key |
 | Azure region | `<chosen-supported-region>` | Choose for this run using the region guidance above |
 | Open incident PR | `false` | Leave this off; you arm the incident live in step 12 |
@@ -538,11 +554,11 @@ authentication boundary.
 **Do.**
 
 ```bash
-./scripts/trigger-incident-gitops.sh
+./scripts/trigger-incident-gitops.sh --repo "your-org/your-demo"
 ```
 
 ```powershell
-pwsh ./scripts/trigger-incident-gitops.ps1
+pwsh .\scripts\trigger-incident-gitops.ps1 -Repository 'your-org/your-demo'
 ```
 
 **Expect.** A one-line pull request setting `enable_slow_leak = true`. Show the
@@ -609,11 +625,11 @@ afterwards. The commit is authored by `Azure SRE Agent <noreply@microsoft.com>`
 open the reset pull request yourself:
 
 ```bash
-./scripts/trigger-incident-gitops.sh --reset
+./scripts/trigger-incident-gitops.sh --repo "your-org/your-demo" --reset
 ```
 
 ```powershell
-pwsh ./scripts/trigger-incident-gitops.ps1 -Reset
+pwsh .\scripts\trigger-incident-gitops.ps1 -Repository 'your-org/your-demo' -Reset
 ```
 
 **Do not** use `az containerapp update` to fix this. It would create drift from

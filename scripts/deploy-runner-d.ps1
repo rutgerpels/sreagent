@@ -16,7 +16,13 @@
     Display name of the target subscription. The ID is resolved at run time and never persisted.
 
 .PARAMETER Repository
-    GitHub repository (owner/name) the runner registers with.
+    Required customer GitHub repository (owner/name) the runner registers with.
+
+.PARAMETER VnetName
+    Name of the runner VNet to create. Set D_RUNNER_VNET_NAME to this value.
+
+.PARAMETER ResourceGroupName
+    Resource group to create for the retained foundation. Set D_RUNNER_NETWORK_RG to this value.
 
 .PARAMETER SkipTerraform
     Skip the Terraform apply and only (re)register the runner on an existing VM.
@@ -29,14 +35,18 @@ param(
     [Parameter(Mandatory)]
     [string]$SubscriptionName,
 
-    [Parameter()]
-    [string]$Repository = 'rutgerpels/sreagent',
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
+    [string]$Repository,
 
     [Parameter()]
     [string]$Location = 'swedencentral',
 
     [Parameter()]
     [string]$ResourceGroupName = 'agentrg-d',
+
+    [Parameter()]
+    [string]$VnetName = 'agent-vnet-d',
 
     [Parameter()]
     [string]$VmName = 'vm-payd-runner',
@@ -87,7 +97,7 @@ if ($Destroy) {
 if (-not $SkipTerraform) {
     # The VM is only managed through run-command, so the SSH key is throwaway: generate it,
     # hand Terraform the public half and discard the private half.
-    $keyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("runner-d-key-" + [guid]::NewGuid())
+    $keyDir = Join-Path $repoRoot (".runner-d-key-" + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $keyDir | Out-Null
     try {
         $keyPath = Join-Path $keyDir 'id'
@@ -99,6 +109,7 @@ if (-not $SkipTerraform) {
             "-chdir=$terraformDir", 'apply', '-auto-approve', '-input=false',
             '-var', "location=$Location",
             '-var', "resource_group_name=$ResourceGroupName",
+            '-var', "vnet_name=$VnetName",
             '-var', "vm_name=$VmName",
             '-var', "admin_ssh_public_key=$publicKey")
     }
@@ -124,3 +135,6 @@ Write-Host $result
 
 Write-Host 'Runner status on GitHub:'
 gh api "repos/$Repository/actions/runners" --jq ".runners[] | select(.name==`"$VmName`") | {name, status, labels: [.labels[].name]}"
+Write-Host 'Configure these repository Actions variables before deploying the D workload:'
+Write-Host "D_RUNNER_NETWORK_RG=$ResourceGroupName"
+Write-Host "D_RUNNER_VNET_NAME=$VnetName"

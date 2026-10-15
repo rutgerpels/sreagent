@@ -17,7 +17,7 @@ on:
       prefix:
         description: "Resource name prefix"
         required: false
-        default: "contosopay"
+        default: "pay"
       environment:
         description: "Environment label"
         required: false
@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deployment-${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO || 'unconfigured' }}-${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'contosopay' }}-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
+  group: deployment-${{ github.event_name == 'workflow_dispatch' && inputs.scenario || vars.DEPLOYMENT_SCENARIO || 'unconfigured' }}-${{ github.event_name == 'workflow_dispatch' && inputs.prefix || vars.TF_PREFIX || 'pay' }}-${{ github.event_name == 'workflow_dispatch' && inputs.environment || vars.TF_ENVIRONMENT || 'demo' }}
   cancel-in-progress: false
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
   build-and-deploy:
     needs: select-profile
     if: ${{ needs.select-profile.outputs.proceed == 'true' }}
-    runs-on: ${{ needs.select-profile.outputs.scenario == 'C' && fromJSON('["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
+    runs-on: ${{ needs.select-profile.outputs.scenario == 'C' && fromJSON(vars.PRIVATE_RUNNER_LABELS_JSON || '["self-hosted","Linux","X64","azure-private","contosopay"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -158,14 +158,17 @@ jobs:
         if: ${{ needs.select-profile.outputs.scenario == 'C' }}
         shell: bash
         env:
-          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG || 'agentrg' }}
-          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME || 'agent-vnet' }}
+          RUNNER_NETWORK_RG: ${{ vars.RUNNER_NETWORK_RG }}
+          RUNNER_VNET_NAME: ${{ vars.RUNNER_VNET_NAME }}
           RUNNER_PE_SUBNET_NAME: ${{ vars.RUNNER_PE_SUBNET_NAME || 'private-endpoints' }}
           APP_VNET_ADDRESS_SPACE: ${{ vars.APP_VNET_ADDRESS_SPACE || '10.100.0.0/16' }}
           APP_PE_SUBNET_PREFIX: ${{ vars.APP_PE_SUBNET_PREFIX || '10.100.0.0/27' }}
           CONTAINER_APPS_SUBNET_PREFIX: ${{ vars.CONTAINER_APPS_SUBNET_PREFIX || '10.100.0.64/27' }}
           SRE_AGENT_SUBNET_PREFIX: ${{ vars.SRE_AGENT_SUBNET_PREFIX || '10.100.0.96/27' }}
         run: |
+          set -euo pipefail
+          : "${RUNNER_NETWORK_RG:?Set repository variable RUNNER_NETWORK_RG for the existing private runner.}"
+          : "${RUNNER_VNET_NAME:?Set repository variable RUNNER_VNET_NAME for the existing private runner.}"
           {
             echo "TF_VAR_runner_vnet_resource_group=${RUNNER_NETWORK_RG}"
             echo "TF_VAR_runner_vnet_name=${RUNNER_VNET_NAME}"

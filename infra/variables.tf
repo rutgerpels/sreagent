@@ -6,7 +6,7 @@
 variable "prefix" {
   description = "Short, non-identifying, alphanumeric prefix for resource names."
   type        = string
-  default     = "contosopay"
+  default     = "pay"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9]{1,16}$", var.prefix))
@@ -76,15 +76,25 @@ variable "payment_alert_frequency_minutes" {
 }
 
 variable "runner_vnet_resource_group" {
-  description = "Resource group containing the self-hosted runner VNet."
+  description = "Scenario C: required resource group containing the existing self-hosted runner VNet. A/B ignore this input."
   type        = string
-  default     = "agentrg"
+  default     = ""
+
+  validation {
+    condition     = var.scenario != "C" || length(trimspace(var.runner_vnet_resource_group)) > 0
+    error_message = "Scenario C requires runner_vnet_resource_group for your existing private runner."
+  }
 }
 
 variable "runner_vnet_name" {
-  description = "Existing VNet used by the self-hosted GitHub Actions runner."
+  description = "Scenario C: required existing VNet used by the self-hosted GitHub Actions runner. A/B ignore this input."
   type        = string
-  default     = "agent-vnet"
+  default     = ""
+
+  validation {
+    condition     = var.scenario != "C" || length(trimspace(var.runner_vnet_name)) > 0
+    error_message = "Scenario C requires runner_vnet_name for your existing private runner."
+  }
 }
 
 variable "runner_private_endpoint_subnet_name" {

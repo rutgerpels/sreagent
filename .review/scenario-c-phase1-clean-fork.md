@@ -1,17 +1,18 @@
 # Scenario C clean-fork evidence and review disposition
 
-This records the bounded review of [upstream PR #75](https://github.com/rutgerpels/sreagent/pull/75),
-not a claim that its entire proposed improvement set has been implemented.
-The original fork tested deployment from commit `aed247f`; upstream's reviewed
-base was `df8cd30`. Review and offline hardening were performed on 2026-10-09.
+This is an anonymized historical review record, not a customer setup checklist
+or a claim that its entire proposed improvement set has been implemented.
+Source repository, author, commit and workflow-run identifiers have been
+removed from the distributable copy. Review and offline hardening were
+performed on 2026-10-09. No new tenant was exercised by this documentation audit.
 
 ## Evidence from 2026-09-23
 
 | Evidence | Classification | Scope |
 | --- | --- | --- |
-| [Fork deploy run 35848837654](https://github.com/PelsGit/sreagent/actions/runs/35848837654) | Observed workflow result | Validation and deploy succeeded; incident-arming job was skipped |
-| [Fork destroy run 35845637290](https://github.com/PelsGit/sreagent/actions/runs/35845637290) | Observed workflow result | Destroy succeeded before the subsequent clean deployment |
-| Regional capacity failures, HTTP 200 frontend, imported App key, and operator access | Operator-reported in PR #75 | These claims were not independently reproduced during the offline review |
+| Historical fork deploy | Previously observed workflow result | Validation and deploy succeeded; incident-arming job was skipped |
+| Historical fork destroy | Previously observed workflow result | Destroy succeeded before the subsequent clean deployment |
+| Regional capacity failures, HTTP 200 frontend, imported App key, and operator access | Operator-reported in the original review | These claims were not independently reproduced during the offline review |
 | Literal app-link zone names allowed links to run before managed zones | Inferred from Terraform graph; consistent with reported failure | Corrected by referencing the managed zone in the managed branch |
 | Agent-authored remediation PR, alert correlation, and memory recovery in this fork | Not tested by the cited bootstrap runs | Requires a separate incident-phase exercise |
 | Existing enterprise Blob DNS zone in another resource group | Not tested | The test runner network had no foreign Blob zone |
@@ -63,10 +64,11 @@ that stop resource creation.
 
 These are requirements for later hardening, not behavior delivered here:
 
-Tracked in [fail-fast configuration](https://github.com/rutgerpels/sreagent/issues/76),
-[Blob DNS ownership](https://github.com/rutgerpels/sreagent/issues/77), and
-[incident and identity verification](https://github.com/rutgerpels/sreagent/issues/78).
-Their priorities and estimates require product-owner review.
+The original review grouped follow-ups as fail-fast configuration, Blob DNS
+ownership, and incident/identity verification. Check the current implementation
+before opening equivalent work in your own repository; historical issue links
+are deliberately not operational dependencies. Priorities and estimates require
+product-owner review.
 
 - Remove generic runner-network fallbacks consistently across deploy, apply,
   application deployment, and normal destroy, without breaking recovery.

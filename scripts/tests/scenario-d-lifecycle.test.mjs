@@ -7,14 +7,14 @@ import { resolve } from 'node:path';
 
 const subId = '00000000-0000-0000-0000-000000000001';
 const tenantId = '00000000-0000-0000-0000-000000000002';
-const env = { AZURE_SUBSCRIPTION_ID: subId, AZURE_TENANT_ID: tenantId, GITHUB_SHA: 'a'.repeat(40) };
+const env = { AZURE_SUBSCRIPTION_ID: subId, AZURE_TENANT_ID: tenantId, GITHUB_SHA: 'a'.repeat(40), D_PREFIX: 'payd', D_RUNNER_NETWORK_RG: 'customer-runner-rg', D_RUNNER_VNET_NAME: 'customer-runner-vnet' };
 const options = optionsFromEnv(env);
 const sub = `/subscriptions/${subId}`;
 function ownership(shared = false) {
   const stem = 'd-abcdefgh'; const profile = 'payd-demo-d'; const rgName = `rg-${profile}-abcdefgh`;
   const rg = `${sub}/resourceGroups/${rgName}`;
   const appVnetId = `${rg}/providers/Microsoft.Network/virtualNetworks/vnet-${stem}`;
-  const runner = `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Network/virtualNetworks/agent-vnet-d`;
+  const runner = `${sub}/resourceGroups/${env.D_RUNNER_NETWORK_RG}/providers/Microsoft.Network/virtualNetworks/${env.D_RUNNER_VNET_NAME}`;
   const keyVaultZoneId = `${sub}/resourceGroups/${shared ? 'shared-dns' : rgName}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net`;
   const acrZoneId = `${sub}/resourceGroups/${shared ? 'shared-dns' : rgName}/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io`;
   const role = '749f88d5-cbae-40b8-bcfc-e573ddc772fa';
@@ -32,13 +32,14 @@ function ownership(shared = false) {
     sharedDnsLinks: shared ? [keyVaultZoneId, acrZoneId].map((id, i) => ({ id: `${id}/virtualNetworkLinks/app-${i ? 'acr' : 'kv'}-${stem}`, virtualNetworkId: appVnetId })) : [],
     auxiliaryDeployments: [
       { id: `${sub}/providers/Microsoft.Resources/deployments/${options.deploymentName}-roles` },
-      { id: `${sub}/resourceGroups/agentrg-d/providers/Microsoft.Resources/deployments/runner-peering-${stem}` },
+      { id: `${sub}/resourceGroups/${env.D_RUNNER_NETWORK_RG}/providers/Microsoft.Resources/deployments/runner-peering-${stem}` },
       ...(shared ? ['kv','acr'].map(kind => ({ id: `${sub}/resourceGroups/shared-dns/providers/Microsoft.Resources/deployments/dns-${kind}-${stem}` })) : []),
     ],
   };
 }
 function mock(o = ownership(true)) {
   const state = new Map(); const events = [];
+  state.set(o.runnerVnetId, {});
   state.set(o.resourceGroupId, { tags: o.tags });
   state.set(`${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}`, {});
   o.externalRoles.forEach((r, i) => {
@@ -73,6 +74,27 @@ test('request validation enforces explicit immutable D profile and destroy confi
     assert.throws(() => optionsFromEnv({ ...env, ...change }));
   }
   assert.equal(optionsFromEnv({ ...env, D_ACTION: 'destroy', D_CONFIRM_DESTROY: options.deploymentName }).action, 'destroy');
+});
+test('customer runner inputs are mandatory and ownership cannot retarget another retained foundation', () => {
+  for (const key of ['D_RUNNER_NETWORK_RG', 'D_RUNNER_VNET_NAME']) {
+    assert.throws(() => optionsFromEnv({ ...env, [key]: '' }), new RegExp(key));
+  }
+  assert.equal(validateOwnership(ownership(), options).runnerVnetId.includes('/customer-runner-vnet'), true);
+  assert.throws(() => validateOwnership(ownership(), { ...options, runnerResourceGroup: 'another-customer' }), /retained runner/);
+  const owner = ownership();
+  assert.throws(() => validateOwnership(owner, { ...options, runnerResourceGroup: owner.resourceGroupName }), /must not own the retained runner/);
+});
+test('retained runner RG may share the workload prefix without becoming workload ownership', async () => {
+  const selected = optionsFromEnv({ ...env, D_RUNNER_NETWORK_RG: 'rg-payd-demo-d-runner',
+    D_ACTION: 'destroy', D_CONFIRM_DESTROY: options.deploymentName });
+  const io = mock(); io.get = async () => null;
+  io.az = args => args[0] === 'account' ? { id: subId, tenantId } :
+    [{ name: selected.runnerResourceGroup, tags: { scenario: 'D' } }];
+  await run(selected, io);
+  io.az = args => args[0] === 'account' ? { id: subId, tenantId } :
+    [{ name: selected.runnerResourceGroup }, { name: `rg-${selected.profile}-abcdefgh` }];
+  await assert.rejects(run(selected, io), /Owned RG exists without durable ledger/);
+  assert(!io.events.some(event => event[0] === 'delete'));
 });
 test('ARM guid uses deterministic UUIDv5 stable ownership, not identity lifetime', () => {
   assert.match(armGuid('scope', 'identity', 'role'), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
@@ -112,7 +134,7 @@ test('long GitHub deploy refreshes the same OIDC principal before acquiring the 
 });
 test('durable ownership allows only exact D grants, retained runner peering and app links', () => {
   validateOwnership(ownership(), options); validateOwnership(ownership(true), options);
-  for (const mutate of [o => o.subscriptionId = tenantId, o => o.resourceGroupName = 'agentrg-d', o => o.runnerPeeringId += '-other', o => o.externalRoles[0].id = o.externalRoles[1].id, o => o.sharedDnsLinks[0].id = o.keyVaultZoneId, o => o.auxiliaryDeployments[0].id = o.resourceGroupId]) {
+  for (const mutate of [o => o.subscriptionId = tenantId, o => o.resourceGroupName = options.runnerResourceGroup, o => o.runnerPeeringId += '-other', o => o.externalRoles[0].id = o.externalRoles[1].id, o => o.sharedDnsLinks[0].id = o.keyVaultZoneId, o => o.auxiliaryDeployments[0].id = o.resourceGroupId]) {
     const o = ownership(true); mutate(o); assert.throws(() => validateOwnership(o, options));
   }
 });
@@ -140,7 +162,7 @@ test('destroy reads fresh principals before deletion, persists snapshot and dele
   assert(io.events.findIndex(e => e[0] === 'snapshot') < firstDelete);
   const deletes = io.events.filter(e => e[0] === 'delete').map(e => e[1]);
   assert.equal(deletes.at(-1), `${sub}/providers/Microsoft.Resources/deployments/${o.deploymentName}`);
-  for (const forbidden of [o.runnerVnetId, o.keyVaultZoneId, o.acrZoneId, `${sub}/resourceGroups/agentrg-d`, `${sub}/resourceGroups/rg-payd-tfstate`]) assert(!deletes.includes(forbidden));
+  for (const forbidden of [o.runnerVnetId, o.keyVaultZoneId, o.acrZoneId, `${sub}/resourceGroups/${options.runnerResourceGroup}`, `${sub}/resourceGroups/rg-payd-tfstate`]) assert(!deletes.includes(forbidden));
   assert.equal(io.snapshot.principals[o.externalRoles[0].id], 'principal-0');
 });
 test('destroy fails closed on changed RG, role principal, peering or DNS-link ownership', async () => {
@@ -231,7 +253,7 @@ test('healthy staged deploy publishes digests before apps, grants before connect
     if (args[0] === 'keyvault') { secretFile = args[args.indexOf('--file')+1]; assert(existsSync(secretFile)); assert.equal(readFileSync(secretFile,'utf8'),'ephemeral-connection'); return {}; }
     throw new Error(`Unexpected ${args}`);
   };
-  io.get = async id => id === f.appInsightsId ? {properties:{DisableLocalAuth:true,ConnectionString:'ephemeral-connection'}} : null;
+  io.get = async id => id === f.appInsightsId ? {properties:{DisableLocalAuth:true,ConnectionString:'ephemeral-connection'}} : id === o.runnerVnetId ? {} : null;
   io.deploy = async (scope,name,file,params) => {
     stages.push(name);
     if (file.endsWith('/main.bicep')) return {ownership:{value:o}};
@@ -428,6 +450,6 @@ test('resume reused external zones requires strict still-existing runner associa
 });
 test('all D profiles share a global retained-runner concurrency boundary', () => {
   const workflow = readFileSync('.github/workflows/scenario-d-bicep.yml','utf8');
-  assert.match(workflow,/group: scenario-d-private-runner-agentrg-d-agent-vnet-d/);
+  assert.match(workflow,/group: scenario-d-private-runner\s/);
   assert(!workflow.includes('group: scenario-d-bicep-${{ inputs.prefix }}'));
 });

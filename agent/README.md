@@ -75,3 +75,12 @@ See [`../docs/scenario-b-gitops.md`](../docs/scenario-b-gitops.md) and
 [`../docs/scenario-c-private-gitops.md`](../docs/scenario-c-private-gitops.md)
 for the click-by-click apply steps and the supported `accessLevel` / run-mode
 settings.
+
+## Customer-owned repository
+
+Start with the [customer setup guide](../docs/customer-setup.md) before applying
+these artifacts in another tenant. The Scenario C manifest does not bind Code
+Access to the original demo repository. The reconciler resolves the customer
+repository from `SRE_CODE_ACCESS_REPOSITORY`, `GITHUB_REPOSITORY`, or the configured
+repository URL; use your own `owner/repository` and onboard Code Access for that
+repository before rehearsing a GitOps incident.

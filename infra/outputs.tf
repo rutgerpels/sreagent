@@ -2,6 +2,15 @@
 # Outputs. Never output secret values. Public surfaces are documented below.
 ###############################################################################
 
+output "deployment_profile" {
+  description = "Immutable customer deployment identity used to validate selected remote state."
+  value = {
+    scenario    = var.scenario
+    prefix      = var.prefix
+    environment = var.environment
+  }
+}
+
 output "scenario" {
   description = "Selected immutable deployment scenario."
   value       = var.scenario

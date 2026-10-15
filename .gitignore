@@ -52,3 +52,5 @@ Thumbs.db
 # --- Local clone / scratch artifacts (not part of the project) ---
 /sreagent/
 .newtag.txt
+/.scenario-d-*/
+/.runner-d-key-*/
