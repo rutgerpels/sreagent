@@ -760,12 +760,16 @@ There are no Log Analytics shared-key settings and local auth stays disabled.
 
 ### Verified healthy Bicep checkpoint (2026-10-15)
 
-[Deployment run 38703802396](https://github.com/rutgerpels/sreagent/actions/runs/38703802396)
+[Final baseline run 38705654027](https://github.com/rutgerpels/sreagent/actions/runs/38705654027)
 completed successfully from replacement-branch commit
-`0599771af87345ed54204ba0e07fa48073313437`. These are observed results, not a
+`d84aaf87cedc9ffa2581202c3f9415cd1cf6fd9c`. These are observed results, not a
 claim that the incident or full paired-agent recovery has been demonstrated.
 The coordinating session independently repeated the HTTP, configuration and
-distributed-trace checks after that run.
+distributed-trace checks after the earlier successful
+[run 38703802396](https://github.com/rutgerpels/sreagent/actions/runs/38703802396).
+Final-run verification repeated the same gates with a fresh trace containing
+all five spans, HTTP 200 results and correct parent links. Subsequent
+readiness-documentation-only commits do not change the deployed SHA above.
 
 | Surface | Verified result |
 | --- | --- |
@@ -781,6 +785,16 @@ distributed-trace checks after that run.
 | Approval / scheduling | Persisted global policy put `RunAzCliWriteCommands` in `ask`, not `allow`; the scheduled-task collection was empty. |
 | Observability | `oba-d-tzbvjafe` and `amw-observability-d-tzbvjafe` were in West Europe, bound to each other. OBA remained `enabled=false`, with its App Insights target `isAutonomous=false`. |
 | Operator access | The signed-in operator received SRE Agent Administrator at this exact new SRE resource only and successfully read its authenticated data-plane configuration. This explicit operator grant is inside the owned app RG; deleting that RG removes it. No operator identity is committed. |
+
+The final active/ready app revisions were all `--0000003`. The actual deployed
+digests matched the private runner's pushed-image digests, and all three OCI
+revision labels matched the final run's full source SHA:
+
+| Image repository | Deployed digest |
+| --- | --- |
+| `frontend` | `sha256:800ac83472a91e800e8999cb048fcd606e3244ed8e0fd1369bbe7dccf792bb8d` |
+| `checkout-api` | `sha256:d01d4a86cac7af7f0d6311a91c5849b02df0997c946c4f5503cc5f638230be50` |
+| `payment-service` | `sha256:ea45c20bb0488e5c0936090bbe549e3c37683a721230fd8d333bf7c91cdf3379` |
 
 Earlier attempts exposed and corrected subscription-scope resource-ID
 construction, CLI-added ledger metadata, the service's minimum nonzero monthly
